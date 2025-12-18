@@ -24,14 +24,26 @@
 .DS_Store
 *.pem
 
-# debug
+# env files
+.env*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# debug and logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+prisma_push_error.txt
 
-# env files (can opt-in for committing if needed)
-.env*
+# local ide settings
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # vercel
 .vercel
@@ -39,3 +51,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/app/generated/prisma

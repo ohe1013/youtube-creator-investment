@@ -1,0 +1,188 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// YouTube Creator/Channel
+model Creator {
+  id               String   @id @default(cuid())
+  youtubeChannelId String   @unique
+  name             String
+  thumbnailUrl     String?
+  category         String?
+  country          String?
+  
+  // Current metrics
+  currentSubs      Int      @default(0)
+  currentViews     Int      @default(0)
+  currentVideos    Int      @default(0)
+  
+  // Calculated fields
+  currentScore     Float    @default(0)
+  currentPrice     Float    @default(100)
+  
+  // Operational flags
+  isActive         Boolean  @default(true)
+  visibility       Visibility @default(PUBLIC)
+  
+  lastSyncedAt     DateTime @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  // Relations
+  stats            CreatorStat[]
+  positions        Position[]
+  trades           Trade[]
+  
+  @@index([youtubeChannelId])
+  @@index([category])
+  @@index([visibility, isActive])
+}
+
+enum Visibility {
+  PUBLIC
+  HIDDEN
+}
+
+// Historical snapshots
+model CreatorStat {
+  id               String   @id @default(cuid())
+  creatorId        String
+  date             DateTime
+  period           Period   @default(DAILY)
+  
+  subs             Int
+  views            Int
+  videos           Int
+  
+  // Calculated deltas
+  dailySubsChange  Int      @default(0)
+  dailyViewsChange Int      @default(0)
+  
+  createdAt        DateTime @default(now())
+  
+  creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  @@unique([creatorId, date, period])
+  @@index([creatorId, date])
+}
+
+enum Period {
+  HOURLY
+  DAILY
+}
+
+// User accounts
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(USER)
+  
+  // Game balance
+  initialBudget Float     @default(100000)
+  balance       Float     @default(100000)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  positions     Position[]
+  trades        Trade[]
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// User holdings
+model Position {
+  id        String   @id @default(cuid())
+  userId    String
+  creatorId String
+  
+  quantity  Float
+  avgPrice  Float
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creator   Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, creatorId])
+  @@index([userId])
+}
+
+// Transaction history
+model Trade {
+  id        String    @id @default(cuid())
+  userId    String
+  creatorId String
+  
+  type      TradeType
+  quantity  Float
+  price     Float
+  
+  createdAt DateTime  @default(now())
+  
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creator   Creator   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, createdAt])
+  @@index([creatorId])
+}
+
+enum TradeType {
+  BUY
+  SELL
+}
+
+// NextAuth models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
