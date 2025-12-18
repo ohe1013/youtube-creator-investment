@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { tradeSchema } from "@/lib/validation";
 import { tradeLimiter } from "@/lib/rate-limit";
+import { calculateNewPrice } from "@/lib/market";
 
 export async function POST(request: NextRequest) {
   try {
     // Check authentication
     const session = await getServerSession(authOptions);
 
-    if (!session?.user?.id) {
+    if (!session?.user || !('id' in session.user)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userId = session.user.id;
+    const userId = (session.user as any).id as string;
 
     // Rate limiting
     const rateLimitResult = tradeLimiter.check(userId);
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
 
     if (!validationResult.success) {
       return NextResponse.json(
-        { error: "Invalid request", details: validationResult.error.errors },
+        { error: "Invalid request", details: (validationResult.error as any).issues },
         { status: 400 }
       );
     }
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
     const { creatorId, quantity } = validationResult.data;
 
     // Execute buy transaction
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx: any) => {
       // Get user
       const user = await tx.user.findUnique({
         where: { id: userId },
@@ -53,7 +54,12 @@ export async function POST(request: NextRequest) {
       // Get creator and current price
       const creator = await tx.creator.findUnique({
         where: { id: creatorId },
-        select: { currentPrice: true, name: true, isActive: true },
+        select: { 
+          currentPrice: true, 
+          name: true, 
+          isActive: true,
+          liquidity: true
+        },
       });
 
       if (!creator) {
@@ -64,13 +70,21 @@ export async function POST(request: NextRequest) {
         throw new Error("This creator is no longer available for trading");
       }
 
-      // Calculate total cost
+      // Calculate total cost (using current price)
       const totalCost = quantity * creator.currentPrice;
 
       // Check balance
       if (user.balance < totalCost) {
         throw new Error("Insufficient balance");
       }
+
+      // Calculate new price based on Price Impact
+      const newPrice = calculateNewPrice(
+        creator.currentPrice,
+        totalCost,
+        'BUY',
+        creator.liquidity
+      );
 
       // Create trade record
       const trade = await tx.trade.create({
@@ -79,7 +93,7 @@ export async function POST(request: NextRequest) {
           creatorId,
           type: "BUY",
           quantity,
-          price: creator.currentPrice,
+          price: creator.currentPrice, // Price at which it was executed
         },
       });
 
@@ -133,11 +147,20 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Update Creator currentPrice
+      await tx.creator.update({
+        where: { id: creatorId },
+        data: {
+          currentPrice: newPrice,
+        },
+      });
+
       return {
         trade,
         totalCost,
         newBalance: user.balance - totalCost,
         creatorName: creator.name,
+        newPrice,
       };
     });
 

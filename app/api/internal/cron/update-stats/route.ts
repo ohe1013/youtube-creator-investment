@@ -69,8 +69,9 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        // Update score and price
-        await updateCreatorScoreAndPrice(creator.id);
+        // Note: Automatic price updates based on metrics are disabled as per new requirements.
+        // Price is now determined ONLY by trading (Price Impact model).
+        // await updateCreatorScoreAndPrice(creator.id);
 
         results.success++;
       } catch (error) {

@@ -27,7 +27,16 @@ model Creator {
   
   // Calculated fields
   currentScore     Float    @default(0)
+  initialPrice     Float    @default(100)
   currentPrice     Float    @default(100)
+  
+  // Supply policy
+  totalSupply      Float    @default(1000000)
+  circulatingSupply Float   @default(200000)
+  reserveSupply    Float    @default(800000)
+  
+  // Market dynamics
+  liquidity        Float    @default(10000)
   
   // Operational flags
   isActive         Boolean  @default(true)
@@ -92,6 +101,7 @@ model User {
   // Game balance
   initialBudget Float     @default(100000)
   balance       Float     @default(100000)
+  isBot         Boolean   @default(false)
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

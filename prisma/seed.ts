@@ -1,11 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import * as dotenv from "dotenv";
 import { getChannelStats, searchChannels } from "../lib/youtube";
-import {
-  calculateGrowthScore,
-  calculatePrice,
-  updateCreatorScoreAndPrice,
-} from "../lib/scoring";
+import { calculateP0, MARKET_CONFIG } from "../lib/market";
 
 dotenv.config();
 
@@ -75,18 +71,31 @@ async function main() {
             continue;
           }
 
+          // Calculate Initial Price (P0)
+          const p0 = calculateP0({
+            subs: stats.subs,
+            totalViews: stats.views,
+            recentViews: stats.views / 2, // Dummy value for seed
+            recentShortsViews: stats.views / 4, // Dummy value for seed
+          });
+
           // Add to database
           const creator = await prisma.creator.create({
             data: {
               youtubeChannelId: stats.channelId,
               name: stats.name,
               thumbnailUrl: stats.thumbnailUrl,
-              category: query.replace("한국 ", "").split(" ")[0], // Simple category extraction
+              category: query.replace("한국 ", "").split(" ")[0],
               currentSubs: stats.subs,
               currentViews: stats.views,
               currentVideos: stats.videos,
-              currentScore: 0, // Initial score
-              currentPrice: 100, // Initial price
+              currentScore: 0,
+              initialPrice: p0,
+              currentPrice: p0,
+              totalSupply: MARKET_CONFIG.DEFAULT_TOTAL_SUPPLY,
+              circulatingSupply: MARKET_CONFIG.DEFAULT_CIRCULATING_SUPPLY,
+              reserveSupply: MARKET_CONFIG.DEFAULT_TOTAL_SUPPLY - MARKET_CONFIG.DEFAULT_CIRCULATING_SUPPLY,
+              liquidity: 100000,
               isActive: true,
               visibility: "PUBLIC",
             },
@@ -106,10 +115,9 @@ async function main() {
 
           addedCount++;
           console.log(
-            `✅ [${addedCount}/${targetCount}] Added: ${creator.name} (${stats.subs} subs)`
+            `✅ [${addedCount}/${targetCount}] Added: ${creator.name} (P0: ${p0}, ${stats.subs} subs)`
           );
 
-          // Brief sleep to be nice to API
           await new Promise((resolve) => setTimeout(resolve, 100));
         } catch (innerError: any) {
           if (innerError.code === "P2002") {
@@ -122,12 +130,6 @@ async function main() {
     } catch (error) {
       console.error(`Error processing category "${query}":`, error);
     }
-  }
-
-  console.log("🚀 Calculating initial scores and prices...");
-  const allCreators = await prisma.creator.findMany();
-  for (const c of allCreators) {
-    await updateCreatorScoreAndPrice(c.id);
   }
 
   console.log(`✨ Seed finished! Added ${addedCount} new creators.`);
