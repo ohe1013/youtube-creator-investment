@@ -1,12 +1,30 @@
 @import "tailwindcss";
 
 :root {
+  /* Brand Colors */
+  --brand-blue: #003597;
+  --brand-red: #dd3c44;
+
+  /* Light Mode (Upbit Refined) */
+  --background: #f0f2f5;
+  --foreground: #333333;
+  --primary: #fcd535;
+  --up: #d24f45;
+  --down: #1261c4;
+  --card: #ffffff;
+  --muted: #64748b;
+  --border: #e2e8f0;
+}
+
+.dark {
+  /* Dark Mode */
   --background: #0b0e11;
   --foreground: #eaecef;
-  --primary: #fcd535; /* Binance yellow-ish */
-  --up: #0ecb81; /* Green */
-  --down: #f6465d; /* Red */
+  --primary: #fcd535;
+  --up: #0ecb81;
+  --down: #f6465d;
   --card: #1e2329;
+  --muted: #848e9c;
   --border: #2b3139;
 }
 
@@ -16,7 +34,10 @@
   --color-up: var(--up);
   --color-down: var(--down);
   --color-card: var(--card);
+  --color-muted: var(--muted);
   --color-border-exchange: var(--border);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-red: var(--brand-red);
 }
 
 body {
@@ -28,4 +49,13 @@ body {
 
 .mono {
   font-family: "JetBrains Mono", "Roboto Mono", monospace;
+}
+
+/* Scrollbar Hide Utility */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
 }

@@ -93,26 +93,24 @@ export default function CreatorsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0e11] text-[#eaecef]">
+    <div className="min-h-screen bg-background text-foreground">
       <div className="container mx-auto px-4 py-6">
         {/* Market Header */}
-        <div className="flex flex-col md:flex-row justify-between items-end mb-8 gap-4 border-b border-[#2b3139] pb-6">
+        <div className="flex flex-col md:flex-row justify-between items-end mb-8 gap-4 border-b border-border-exchange pb-6">
           <div>
-            <h1 className="text-2xl font-bold text-white mb-1">Market</h1>
-            <p className="text-sm text-[#848e9c]">
+            <h1 className="text-2xl font-bold mb-1">Market</h1>
+            <p className="text-sm text-muted">
               Discover and invest in the next top YouTube stars
             </p>
           </div>
           <div className="flex gap-6 text-sm">
             <div className="flex flex-col">
-              <span className="text-[#848e9c]">Total Creators</span>
-              <span className="font-bold text-white mono">
-                {pagination?.total || 0}
-              </span>
+              <span className="text-muted">Total Creators</span>
+              <span className="font-bold mono">{pagination?.total || 0}</span>
             </div>
             <div className="flex flex-col">
-              <span className="text-[#848e9c]">Market Cap</span>
-              <span className="font-bold text-[#0ecb81] mono">2,410,200 P</span>
+              <span className="text-muted">Market Cap</span>
+              <span className="font-bold text-up mono">2,410,200 P</span>
             </div>
           </div>
         </div>
@@ -124,10 +122,10 @@ export default function CreatorsPage() {
               <button
                 key={cat}
                 onClick={() => updateFilters({ category: cat })}
-                className={`whitespace-nowrap px-4 py-1.5 rounded text-xs font-bold transition-all ${
+                className={`whitespace-nowrap px-4 py-1.5 rounded text-xs font-bold transition-all border ${
                   category === cat
-                    ? "bg-[#2b3139] text-[#fcd535] border border-[#fcd535]/30"
-                    : "text-[#848e9c] hover:bg-[#1e2329]"
+                    ? "bg-primary text-background border-primary shadow-sm"
+                    : "text-muted hover:bg-card border-transparent"
                 }`}
               >
                 {cat}
@@ -135,30 +133,26 @@ export default function CreatorsPage() {
             ))}
           </div>
 
-          <div className="flex-1 bg-[#161a1e] rounded-lg border border-[#2b3139] overflow-hidden">
+          <div className="flex-1 bg-card rounded border border-border-exchange overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-[#2b3139] text-[#848e9c] text-xs uppercase tracking-wider text-mono">
-                    <th className="px-6 py-4 font-medium">Channel</th>
-                    <th className="px-4 py-4 font-medium">Category</th>
-                    <th className="px-4 py-4 font-medium text-right">
-                      Subscribers
-                    </th>
-                    <th className="px-4 py-4 font-medium text-right">Score</th>
-                    <th className="px-4 py-4 font-medium text-right">
-                      Last Price
-                    </th>
-                    <th className="px-6 py-4 font-medium text-right">Action</th>
+                  <tr className="border-b border-border-exchange text-muted text-[10px] uppercase tracking-wider font-bold">
+                    <th className="px-6 py-4">Channel</th>
+                    <th className="px-4 py-4">Category</th>
+                    <th className="px-4 py-4 text-right">Subscribers</th>
+                    <th className="px-4 py-4 text-right">Score</th>
+                    <th className="px-4 py-4 text-right">Last Price</th>
+                    <th className="px-6 py-4 text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#21262c]">
+                <tbody className="divide-y divide-border-exchange">
                   {loading ? (
                     [...Array(10)].map((_, i) => (
                       <tr key={i} className="animate-pulse">
                         <td
                           colSpan={6}
-                          className="px-6 py-4 h-12 bg-white/5"
+                          className="px-6 py-4 h-12 bg-foreground/5"
                         ></td>
                       </tr>
                     ))
@@ -166,7 +160,7 @@ export default function CreatorsPage() {
                     <tr>
                       <td
                         colSpan={6}
-                        className="px-6 py-20 text-center text-[#848e9c]"
+                        className="px-6 py-20 text-center text-muted"
                       >
                         No creators found matching your filters.
                       </td>
@@ -175,7 +169,7 @@ export default function CreatorsPage() {
                     creators.map((creator) => (
                       <tr
                         key={creator.id}
-                        className="hover:bg-[#1e2329] transition-colors group cursor-pointer"
+                        className="hover:bg-foreground/5 transition-colors group cursor-pointer"
                         onClick={() => router.push(`/creators/${creator.id}`)}
                       >
                         <td className="px-6 py-4">
@@ -183,29 +177,29 @@ export default function CreatorsPage() {
                             <img
                               src={creator.thumbnailUrl || "/placeholder.png"}
                               alt=""
-                              className="w-8 h-8 rounded-full border border-[#2b3139]"
+                              className="w-8 h-8 rounded-full border border-border-exchange"
                             />
-                            <span className="font-bold text-white group-hover:text-[#fcd535] transition-colors truncate max-w-[150px]">
+                            <span className="font-bold group-hover:text-primary transition-colors truncate max-w-[150px]">
                               {creator.name}
                             </span>
                           </div>
                         </td>
                         <td className="px-4 py-4">
-                          <span className="text-[10px] px-2 py-0.5 bg-[#2b3139] text-[#848e9c] rounded-sm uppercase tracking-tighter">
+                          <span className="text-[10px] px-2 py-0.5 bg-background text-muted border border-border-exchange rounded-sm uppercase tracking-tighter">
                             {creator.category}
                           </span>
                         </td>
-                        <td className="px-4 py-4 text-right mono font-medium">
+                        <td className="px-4 py-4 text-right mono text-xs">
                           {creator.currentSubs.toLocaleString()}
                         </td>
-                        <td className="px-4 py-4 text-right mono text-[#0ecb81] bg-[#0ecb81]/5">
+                        <td className="px-4 py-4 text-right mono text-up font-bold text-xs">
                           {creator.currentScore.toFixed(1)}
                         </td>
-                        <td className="px-4 py-4 text-right mono text-white font-bold">
+                        <td className="px-4 py-4 text-right mono font-bold text-xs">
                           {creator.currentPrice.toLocaleString()} P
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <button className="bg-[#2b3139] hover:bg-[#0ecb81] hover:text-black text-[#eaecef] px-3 py-1 rounded text-xs font-bold transition-all">
+                          <button className="bg-card hover:bg-primary hover:text-background text-foreground border border-border-exchange px-3 py-1 rounded text-xs font-bold transition-all">
                             Trade
                           </button>
                         </td>
@@ -218,8 +212,8 @@ export default function CreatorsPage() {
 
             {/* Market Pagination */}
             {pagination && pagination.totalPages > 1 && (
-              <div className="px-6 py-4 border-t border-[#2b3139] flex justify-between items-center text-xs">
-                <span className="text-[#848e9c]">
+              <div className="px-6 py-4 border-t border-border-exchange bg-background/50 flex justify-between items-center text-xs">
+                <span className="text-muted">
                   Showing page {page} of {pagination.totalPages}
                 </span>
                 <div className="flex gap-2">
@@ -229,7 +223,7 @@ export default function CreatorsPage() {
                       updateFilters({ page: page - 1 });
                     }}
                     disabled={page === 1}
-                    className="p-1.5 rounded bg-[#2b3139] disabled:opacity-30 hover:bg-[#343a41]"
+                    className="p-1.5 rounded bg-card border border-border-exchange disabled:opacity-30 hover:bg-foreground/5 transition-colors"
                   >
                     ←
                   </button>
@@ -239,7 +233,7 @@ export default function CreatorsPage() {
                       updateFilters({ page: page + 1 });
                     }}
                     disabled={page === pagination.totalPages}
-                    className="p-1.5 rounded bg-[#2b3139] disabled:opacity-30 hover:bg-[#343a41]"
+                    className="p-1.5 rounded bg-card border border-border-exchange disabled:opacity-30 hover:bg-foreground/5 transition-colors"
                   >
                     →
                   </button>

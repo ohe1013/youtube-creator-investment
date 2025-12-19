@@ -1,11 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import { useLanguage } from "@/lib/LanguageContext";
 
 interface MarketListProps {
   creators: Array<{
     id: string;
     name: string;
+    nameKo?: string | null;
     currentPrice: number;
     change24h?: number;
     volume24h?: number;
@@ -14,46 +17,75 @@ interface MarketListProps {
 }
 
 export function MarketList({ creators, selectedId }: MarketListProps) {
+  const [displayCount, setDisplayCount] = useState(20);
+  const { t, locale } = useLanguage();
+
+  const visibleCreators = creators.slice(0, displayCount);
+
   return (
-    <div className="w-[300px] flex flex-col bg-[#12161c]">
-      <div className="h-12 border-b border-[#2b3139] flex items-center px-4">
-        <input 
-          type="text" 
-          placeholder="Search..."
-          className="w-full bg-[#1e2329] border-none rounded px-3 py-1.5 text-xs text-white focus:ring-1 ring-[#fcd535]"
+    <div className="w-full flex flex-col h-full text-foreground">
+      <div className="h-12 border-b border-border-exchange flex items-center px-4">
+        <input
+          type="text"
+          placeholder={`${t("common.search")}...`}
+          className="w-full bg-card border border-border-exchange rounded px-3 py-1.5 text-xs focus:ring-1 ring-primary outline-none transition-all"
         />
       </div>
-      
-      <div className="flex text-[10px] text-[#848e9c] px-4 py-2 bg-[#161a1e]">
-         <span className="flex-1">Name</span>
-         <span className="w-16 text-right">Price</span>
-         <span className="w-14 text-right">Chg%</span>
+
+      <div className="flex text-[10px] text-muted px-4 py-2 bg-card/50 border-b border-border-exchange font-bold tracking-tight">
+        <span className="flex-1 uppercase">NAME</span>
+        <span className="w-16 text-right uppercase">PRICE</span>
+        <span className="w-14 text-right uppercase">CHG%</span>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {creators.map((c) => {
-           const isSelected = c.id === selectedId;
-           const changeColor = (c.change24h || 0) >= 0 ? "text-[#c84a31]" : "text-[#1261c4]";
-           
-           return (
-             <Link 
-               key={c.id} 
-               href={`/?ticker=${c.id}`}
-               className={`flex items-center px-4 py-2 hover:bg-[#2b3139] cursor-pointer transition-colors ${isSelected ? 'bg-[#2b3139]' : ''}`}
-             >
-                <div className="flex-1 flex flex-col">
-                   <span className="text-xs font-bold text-white text-ellipsis overflow-hidden whitespace-nowrap">{c.name}</span>
-                   <span className="text-[10px] text-[#5d6673]">{c.volume24h ? `Vol ${c.volume24h}` : ''}</span>
-                </div>
-                <div className="w-16 text-right text-xs font-mono text-white">
-                   {c.currentPrice.toLocaleString()}
-                </div>
-                <div className={`w-14 text-right text-xs font-bold ${changeColor}`}>
-                   {(c.change24h || 0).toFixed(1)}%
-                </div>
-             </Link>
-           );
+      <div className="flex-1 overflow-y-auto scrollbar-hide">
+        {visibleCreators.map((c) => {
+          const isSelected = c.id === selectedId;
+          const changeColor = (c.change24h || 0) >= 0 ? "text-up" : "text-down";
+          const displayName = locale === "ko" ? c.nameKo || c.name : c.name;
+
+          return (
+            <Link
+              key={c.id}
+              href={`/?ticker=${c.id}`}
+              className={`flex items-center px-4 py-3 hover:bg-card cursor-pointer transition-colors border-l-2 ${
+                isSelected ? "bg-card border-primary" : "border-transparent"
+              }`}
+            >
+              <div className="flex-1 flex flex-col min-w-0 mr-2">
+                <span
+                  className={`text-xs font-bold truncate ${
+                    isSelected ? "text-primary" : "text-foreground"
+                  }`}
+                >
+                  {displayName}
+                </span>
+                <span className="text-[10px] text-muted">
+                  {c.volume24h
+                    ? `Vol ${c.volume24h.toLocaleString()}`
+                    : "Vol 0"}
+                </span>
+              </div>
+              <div className="w-16 text-right text-xs font-mono font-bold shrink-0">
+                {c.currentPrice.toLocaleString()}
+              </div>
+              <div
+                className={`w-14 text-right text-xs font-bold shrink-0 ${changeColor}`}
+              >
+                {(c.change24h || 0) >= 0 ? "+" : ""}
+                {(c.change24h || 0).toFixed(1)}%
+              </div>
+            </Link>
+          );
         })}
+        {displayCount < creators.length && (
+          <button
+            onClick={() => setDisplayCount((prev) => prev + 20)}
+            className="w-full py-2 text-[10px] text-muted hover:bg-card border-t border-border-exchange transition-colors font-bold"
+          >
+            Show More
+          </button>
+        )}
       </div>
     </div>
   );
