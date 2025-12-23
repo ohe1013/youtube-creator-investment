@@ -65,6 +65,8 @@ export async function POST(request: NextRequest) {
             currentSubs: stats.subs,
             currentViews: stats.views,
             currentVideos: stats.videos,
+            name: stats.name,
+            nameKo: stats.nameKo,
             lastSyncedAt: new Date(),
           },
         });

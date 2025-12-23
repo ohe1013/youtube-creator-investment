@@ -1,3 +1,4 @@
+// prisma/seed.ts (예: 위치는 프로젝트에 맞게)
 import { PrismaClient } from "@prisma/client";
 import * as dotenv from "dotenv";
 import { getChannelStats, searchChannels } from "../lib/youtube";
@@ -61,12 +62,7 @@ const SEARCH_TARGETS = [
   },
   {
     category: "Kids",
-    queries: [
-      "Boram check challenge",
-      "ToyPudding",
-      "CreamHeroes",
-      "Korea Kids",
-    ],
+    queries: ["Boram check challenge", "ToyPudding", "CreamHeroes", "Korea Kids"],
   },
 
   // --- Gaming ---
@@ -151,7 +147,7 @@ async function main() {
   console.log(`Current creators in database: ${existingCount}`);
 
   let addedCount = 0;
-  const targetCount = 350; // Aim high
+  const targetCount = 350;
   const processedIds = new Set<string>();
 
   for (const group of SEARCH_TARGETS) {
@@ -163,9 +159,10 @@ async function main() {
 
       let channelIds: string[] = [];
       console.log(`  🔍 Searching: ${query}...`);
+
       try {
         channelIds = await searchChannels(query, {
-          maxResults: 15, // Smaller batch per query to diversify
+          maxResults: 15,
           order: "viewCount",
         });
 
@@ -175,51 +172,58 @@ async function main() {
           processedIds.add(channelId);
 
           try {
-            // Get stats
             const stats = await getChannelStats(channelId);
             if (!stats) continue;
 
-            // Filter by subscriber count (e.g. at least 100k for "Top" feel, max 100M)
-            // User asked for "based on subscriber count", so we should prioritize high subs.
-            // searchChannels 'viewCount' is a proxy for popularity.
-            if (stats.subs < 10000) {
-              // Skip very small channels
-              continue;
-            }
+            // 구독자 너무 작은 채널 제외
+            if (stats.subs < 10000) continue;
 
-            // Calculate Initial Price (P0)
             const p0 = calculateP0({
               subs: stats.subs,
               totalViews: stats.views,
-              recentViews: stats.views / 200, // Appx recent (stat not avail via this API call)
+              recentViews: stats.views / 200,
               recentShortsViews: 0,
             });
 
-            // Add to database
+            // ✅ thumbnailUrl: 없으면 null 저장
+            const thumbnailUrl =
+              stats.thumbnailUrl && stats.thumbnailUrl.trim().length > 0
+                ? stats.thumbnailUrl
+                : null;
+
             const creator = await prisma.creator.create({
               data: {
                 youtubeChannelId: stats.channelId,
+
+                // ✅ 원본 title
                 name: stats.name,
-                thumbnailUrl: stats.thumbnailUrl,
-                category: category, // Use the structured category
+                // ✅ 한글 포함일 때만 들어오고, 아니면 null
+                nameKo: stats.nameKo ?? null,
+
+                thumbnailUrl,
+                category,
+                country: stats.country ?? null,
+
                 currentSubs: stats.subs,
                 currentViews: stats.views,
                 currentVideos: stats.videos,
                 currentScore: 0,
+
                 initialPrice: p0,
                 currentPrice: p0,
+
                 totalSupply: MARKET_CONFIG.DEFAULT_TOTAL_SUPPLY,
                 circulatingSupply: MARKET_CONFIG.DEFAULT_CIRCULATING_SUPPLY,
                 reserveSupply:
                   MARKET_CONFIG.DEFAULT_TOTAL_SUPPLY -
                   MARKET_CONFIG.DEFAULT_CIRCULATING_SUPPLY,
                 liquidity: 100000,
+
                 isActive: true,
                 visibility: "PUBLIC",
               },
             });
 
-            // Add initial stat snapshot
             await prisma.creatorStat.create({
               data: {
                 creatorId: creator.id,
@@ -238,9 +242,9 @@ async function main() {
               } (P0: ${p0}, ${stats.subs.toLocaleString()} subs)`
             );
 
-            await new Promise((resolve) => setTimeout(resolve, 50)); // Tiny delay
+            await new Promise((resolve) => setTimeout(resolve, 50));
           } catch (innerError: any) {
-            // Ignore duplicates silently
+            // duplicates / transient errors 무시
           }
         }
       } catch (error) {
@@ -264,51 +268,50 @@ async function main() {
             recentShortsViews: 0,
           });
 
-          await prisma.creator.create({
+          const created = await prisma.creator.create({
             data: {
               youtubeChannelId: mockId,
-              name: query, // Use the query as the name
-              thumbnailUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                query
-              )}&background=random`,
-              category: category,
+
+              // mock은 원본이 query
+              name: query,
+              nameKo: null,
+
+              thumbnailUrl: null, // ✅ mock은 null (UI에서 폴백 아이콘/아바타 처리 추천)
+              category,
+              country: null,
+
               currentSubs: baseSubs,
               currentViews: baseViews,
               currentVideos: Math.floor(Math.random() * 1000),
-              // image removed
+
               initialPrice: p0,
               currentPrice: p0,
+
               totalSupply: MARKET_CONFIG.DEFAULT_TOTAL_SUPPLY,
               circulatingSupply: MARKET_CONFIG.DEFAULT_CIRCULATING_SUPPLY,
               reserveSupply:
                 MARKET_CONFIG.DEFAULT_TOTAL_SUPPLY -
                 MARKET_CONFIG.DEFAULT_CIRCULATING_SUPPLY,
               liquidity: 100000,
+
               isActive: true,
               visibility: "PUBLIC",
             },
           });
 
-          // Initial Stat
-          const created = await prisma.creator.findUnique({
-            where: { youtubeChannelId: mockId },
+          await prisma.creatorStat.create({
+            data: {
+              creatorId: created.id,
+              date: new Date(),
+              period: "DAILY",
+              subs: baseSubs,
+              views: baseViews,
+              videos: 100,
+            },
           });
-          if (created) {
-            await prisma.creatorStat.create({
-              data: {
-                creatorId: created.id,
-                date: new Date(),
-                period: "DAILY",
-                subs: baseSubs,
-                views: baseViews,
-                videos: 100,
-              },
-            });
-            addedCount++;
-            console.log(
-              `✅ [${addedCount}/${targetCount}] Added MOCK: ${query}`
-            );
-          }
+
+          addedCount++;
+          console.log(`✅ [${addedCount}/${targetCount}] Added MOCK: ${query}`);
         } catch (e) {
           console.log(`Failed to create mock for ${query}`, e);
         }
