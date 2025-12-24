@@ -87,8 +87,9 @@ export function MarketChart({ data }: MarketChartProps) {
         borderColor: GRID_COLOR,
         scaleMargins: {
           top: 0.1,
-          bottom: showVolume ? 0.25 : 0.05, // More space if volume hidden
+          bottom: 0.1, // Reduced margin to minimize empty space at bottom
         },
+
         autoScale: true,
       },
       timeScale: {

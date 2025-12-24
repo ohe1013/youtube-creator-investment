@@ -21,17 +21,21 @@ export function OrderForm({
   onSell,
 }: OrderFormProps) {
   const [tab, setTab] = useState<"BUY" | "SELL">("BUY");
+  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
   const [amount, setAmount] = useState<string>("");
+  const [limitPrice, setLimitPrice] = useState<string>(currentPrice.toString());
   const [loading, setLoading] = useState(false);
   const { t } = useLanguage();
 
-  const price = currentPrice;
+  const price =
+    orderType === "MARKET" ? currentPrice : parseFloat(limitPrice) || 0;
   const quantity = parseFloat(amount) || 0;
   const total = quantity * price;
 
   return (
     <div className="w-full h-full flex flex-col text-foreground">
-      <div className="flex border-b border-border-exchange">
+      {/* Buy/Sell Tabs */}
+      <div className="flex border-b border-border-exchange bg-card/50">
         <button
           onClick={() => setTab("BUY")}
           className={`flex-1 py-3 font-bold text-sm transition-colors ${
@@ -54,7 +58,8 @@ export function OrderForm({
         </button>
       </div>
 
-      <div className="p-4 flex flex-col gap-4 flex-1 overflow-auto">
+      <div className="p-4 flex flex-col gap-4 flex-1">
+        {/* Balance Info */}
         <div className="flex justify-between text-xs text-muted">
           <span>{t("common.balance")}</span>
           <span className="font-mono text-foreground font-bold">
@@ -64,30 +69,70 @@ export function OrderForm({
           </span>
         </div>
 
+        {/* Order Type Toggle */}
         <div className="flex flex-col gap-2">
-          <label className="text-xs text-muted">Order Type</label>
-          <div className="bg-card px-3 py-2 rounded text-sm font-bold opacity-70 border border-border-exchange">
-            Market Price
+          <label className="text-[10px] text-muted font-bold uppercase tracking-wider">
+            {t("common.orderType")}
+          </label>
+          <div className="grid grid-cols-2 gap-1 p-1 bg-card rounded border border-border-exchange">
+            <button
+              onClick={() => setOrderType("LIMIT")}
+              className={`py-1.5 text-xs font-bold rounded transition-all ${
+                orderType === "LIMIT"
+                  ? "bg-primary text-white shadow-sm"
+                  : "text-muted hover:text-foreground"
+              }`}
+            >
+              {t("common.limitPrice")}
+            </button>
+            <button
+              onClick={() => setOrderType("MARKET")}
+              className={`py-1.5 text-xs font-bold rounded transition-all ${
+                orderType === "MARKET"
+                  ? "bg-primary text-white shadow-sm"
+                  : "text-muted hover:text-foreground"
+              }`}
+            >
+              {t("common.marketPrice")}
+            </button>
           </div>
         </div>
 
+        {/* Price Input */}
         <div className="flex flex-col gap-2">
-          <label className="text-xs text-muted">{t("common.price")}</label>
-          <div className="bg-card px-3 py-2 rounded text-sm font-mono flex justify-between border border-border-exchange">
-            <span>{price.toLocaleString()}</span>
-            <span className="text-muted">P</span>
+          <label className="text-[10px] text-muted font-bold uppercase tracking-wider">
+            {t("common.price")}
+          </label>
+          <div className="relative">
+            <input
+              type="number"
+              value={orderType === "MARKET" ? currentPrice : limitPrice}
+              onChange={(e) => setLimitPrice(e.target.value)}
+              disabled={orderType === "MARKET"}
+              className={`w-full bg-card border border-border-exchange rounded px-3 py-2 font-mono text-sm outline-none transition-colors text-foreground ${
+                orderType === "MARKET"
+                  ? "opacity-50 cursor-not-allowed"
+                  : "focus:border-primary"
+              }`}
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted font-bold">
+              P
+            </span>
           </div>
         </div>
 
+        {/* Quantity Input */}
         <div className="flex flex-col gap-2">
-          <label className="text-xs text-muted">{t("common.quantity")}</label>
+          <label className="text-[10px] text-muted font-bold uppercase tracking-wider">
+            {t("common.quantity")}
+          </label>
           <div className="relative">
             <input
               type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="0"
-              className="w-full bg-card border border-border-exchange rounded px-3 py-2 font-mono focus:border-primary outline-none transition-colors text-foreground"
+              className="w-full bg-card border border-border-exchange rounded px-3 py-2 font-mono text-sm focus:border-primary outline-none transition-colors text-foreground"
             />
           </div>
         </div>

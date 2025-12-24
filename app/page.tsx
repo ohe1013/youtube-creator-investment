@@ -21,14 +21,17 @@ export default async function MarketPage({
     where: { isActive: true },
     select: {
       id: true,
+      youtubeChannelId: true,
       name: true,
-      nameKo: true,
       currentPrice: true,
-      liquidity: true,
       currentSubs: true,
       currentViews: true,
-      // For now, mock 24h stats or fetch from stats table if aggregated
-      // We will compute simple stats or just show current price
+      thumbnailUrl: true,
+      currentScore: true,
+      circulatingSupply: true,
+      currentVideos: true,
+      category: true,
+      liquidity: true,
     },
     orderBy: { currentSubs: "desc" }, // simple ranking
     take: 50,
@@ -103,7 +106,7 @@ export default async function MarketPage({
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground flex flex-col">
+    <main className="h-[calc(100vh-56px)] bg-background text-foreground flex flex-col overflow-hidden">
       <MarketDashboard
         selectedCreator={selectedCreator}
         stats={{

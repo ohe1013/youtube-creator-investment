@@ -2,27 +2,33 @@
 
 :root {
   /* Brand Colors */
-  --brand-blue: #003597;
-  --brand-red: #dd3c44;
+  --brand-blue: #2563eb;
+  --brand-red: #dc2626;
 
-  /* Light Mode (Upbit Refined) */
-  --background: #f0f2f5;
-  --foreground: #333333;
-  --primary: #fcd535;
-  --up: #d24f45;
-  --down: #1261c4;
+  /* Light Mode (High Contrast, Standardized Blue=Up/Red=Down) */
+  --background: #f1f5f9; /* Slate 100 - Better contrast with white cards */
+  --foreground: #0f172a; /* Slate 900 */
+  --primary: #2563eb; /* Blue 600 */
+
+  /* Market Colors: Blue = Up/Buy, Red = Down/Sell */
+  --up: #2563eb; /* Blue 600 */
+  --down: #dc2626; /* Red 600 */
+
   --card: #ffffff;
-  --muted: #64748b;
-  --border: #e2e8f0;
+  --muted: #475569; /* Slate 600 */
+  --border: #cbd5e1; /* Slate 300 */
 }
 
 .dark {
   /* Dark Mode */
   --background: #0b0e11;
   --foreground: #eaecef;
-  --primary: #fcd535;
-  --up: #0ecb81;
-  --down: #f6465d;
+  --primary: #fcd535; /* Keep Yellow for Dark Mode Brand */
+
+  /* Market Colors: Blue = Up/Buy, Red = Down/Sell */
+  --up: #3b82f6; /* Blue 500 */
+  --down: #ef4444; /* Red 500 */
+
   --card: #1e2329;
   --muted: #848e9c;
   --border: #2b3139;

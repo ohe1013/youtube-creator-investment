@@ -62,7 +62,12 @@ const SEARCH_TARGETS = [
   },
   {
     category: "Kids",
-    queries: ["Boram check challenge", "ToyPudding", "CreamHeroes", "Korea Kids"],
+    queries: [
+      "Boram check challenge",
+      "ToyPudding",
+      "CreamHeroes",
+      "Korea Kids",
+    ],
   },
 
   // --- Gaming ---
@@ -197,8 +202,6 @@ async function main() {
 
                 // ✅ 원본 title
                 name: stats.name,
-                // ✅ 한글 포함일 때만 들어오고, 아니면 null
-                nameKo: stats.nameKo ?? null,
 
                 thumbnailUrl,
                 category,
@@ -274,7 +277,6 @@ async function main() {
 
               // mock은 원본이 query
               name: query,
-              nameKo: null,
 
               thumbnailUrl: null, // ✅ mock은 null (UI에서 폴백 아이콘/아바타 처리 추천)
               category,

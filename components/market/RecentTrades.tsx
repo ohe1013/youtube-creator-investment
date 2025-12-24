@@ -28,7 +28,7 @@ export function RecentTrades({ trades }: RecentTradesProps) {
         <span className="flex-1 text-right">{t("common.quantity")}</span>
         <span className="flex-1 text-right">Time</span>
       </div>
-      <div className="flex-1 overflow-y-auto scrollbar-hide">
+      <div className="flex-1 overflow-hidden">
         {visibleTrades.map((t) => (
           <div
             key={t.id}

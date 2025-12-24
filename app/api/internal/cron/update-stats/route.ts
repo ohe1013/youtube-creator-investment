@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
             currentViews: stats.views,
             currentVideos: stats.videos,
             name: stats.name,
-            nameKo: stats.nameKo,
+            thumbnailUrl: stats.thumbnailUrl,
             lastSyncedAt: new Date(),
           },
         });

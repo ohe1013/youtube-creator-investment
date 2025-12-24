@@ -15,9 +15,9 @@ model Creator {
   thumbnailUrl      String?
   category          String?
   country           String?
-  currentSubs       Int           @default(0)
-  currentViews      Int           @default(0)
-  currentVideos     Int           @default(0)
+  currentSubs       Float         @default(0)
+  currentViews      Float         @default(0)
+  currentVideos     Float         @default(0)
   currentScore      Float         @default(0)
   currentPrice      Float         @default(100)
   isActive          Boolean       @default(true)
@@ -30,12 +30,19 @@ model Creator {
   liquidity         Float         @default(10000)
   reserveSupply     Float         @default(800000)
   totalSupply       Float         @default(1000000)
-  nameKo            String?
   stats             CreatorStat[]
   positions         Position[]
   trades            Trade[]
+  videos            Video[]
+
+  // Aggregated Content Stats (Managed by Cron)
+  avgLikes          Float         @default(0)
+  avgComments       Float         @default(0)
+  engagementRate    Float         @default(0)
+  viewsPerSubs      Float         @default(0)
 
   @@index([youtubeChannelId])
+
   @@index([category])
   @@index([visibility, isActive])
 }
@@ -45,17 +52,49 @@ model CreatorStat {
   creatorId        String
   date             DateTime
   period           Period   @default(DAILY)
-  subs             Int
-  views            Int
-  videos           Int
-  dailySubsChange  Int      @default(0)
-  dailyViewsChange Int      @default(0)
+  subs             Float
+  views            Float
+  videos           Float
+  dailySubsChange  Float      @default(0)
+  dailyViewsChange Float      @default(0)
+  
+  // Engagement History
+  avgLikes         Float      @default(0)
+  avgComments      Float      @default(0)
+  totalLikes       Float      @default(0)
+  totalComments    Float      @default(0)
+
   createdAt        DateTime @default(now())
+
   creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
 
   @@unique([creatorId, date, period])
   @@index([creatorId, date])
 }
+
+model Video {
+  id               String   @id // YouTube Video ID
+  creatorId        String
+  title            String
+  thumbnailUrl     String?
+  publishedAt      DateTime
+  duration         String   // ISO 8601 (e.g., PT1M5S)
+  type             VideoType @default(LONG)
+  
+  // Latest Stats
+  viewCount        Float    @default(0)
+  likeCount        Float    @default(0)
+  commentCount     Float    @default(0)
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@index([creatorId, publishedAt])
+  @@index([type])
+}
+
 
 model User {
   id            String     @id @default(cuid())
@@ -143,6 +182,12 @@ enum Visibility {
   PUBLIC
   HIDDEN
 }
+
+enum VideoType {
+  LONG
+  SHORTS
+}
+
 
 enum Period {
   HOURLY

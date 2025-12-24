@@ -5,6 +5,7 @@ import { MarketHeader } from "./MarketHeader";
 import { MarketChart } from "./MarketChart";
 import { OrderForm } from "./OrderForm";
 import { RecentTrades } from "./RecentTrades";
+import { OrderBook } from "./OrderBook";
 import { MarketList } from "./MarketList";
 import { CreatorInfo } from "./CreatorInfo";
 import { useLanguage } from "@/lib/LanguageContext";
@@ -35,10 +36,12 @@ export function MarketDashboard({
 
   // Desktop/Inner Chart Tab State: 'CHART' | 'INFO'
   const [chartTab, setChartTab] = useState<"CHART" | "INFO">("CHART");
+  // Secondary Data Area Tab: 'ORDERBOOK' | 'TRADES'
+  const [dataTab, setDataTab] = useState<"ORDERBOOK" | "TRADES">("ORDERBOOK");
   const { t } = useLanguage();
 
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden max-w-[1600px] mx-auto w-full bg-background text-foreground">
+    <div className="flex-1 flex flex-col h-full overflow-hidden max-w-[1600px] mx-auto w-full bg-background text-foreground">
       {/* Header - Always Visible */}
       <MarketHeader
         creator={selectedCreator}
@@ -68,20 +71,20 @@ export function MarketDashboard({
       <div className="flex-1 flex flex-col md:flex-row min-h-0 relative md:p-3 md:gap-3 bg-background">
         {/* --- LEFT SIDE (Desktop) / DYNAMIC (Mobile) --- */}
         <div
-          className={`flex-1 flex flex-col min-w-0 md:gap-3 ${
+          className={`flex-1 flex flex-col min-w-0 md:gap-3 overflow-y-auto scrollbar-hide ${
             mobileTab === "LIST" ? "hidden" : "flex"
           }`}
         >
           {/* Chart Section Card */}
           <div
-            className={`flex-col relative bg-card border border-border-exchange rounded shadow-sm overflow-hidden ${
+            className={`flex-col relative bg-card border border-border-exchange rounded shadow-sm overflow-hidden flex-shrink-0 ${
               mobileTab === "CHART"
-                ? "flex flex-1"
-                : "hidden md:flex flex-1 min-h-0"
+                ? "flex h-[500px]"
+                : "hidden md:flex h-[500px]"
             }`}
           >
             {/* Chart Content Area */}
-            <div className="flex-1 flex flex-col min-h-[350px] md:min-h-0 md:h-[55%]">
+            <div className="flex-1 flex flex-col h-full">
               {chartTab === "CHART" ? (
                 <MarketChart data={chartData} />
               ) : (
@@ -92,19 +95,55 @@ export function MarketDashboard({
 
           {/* Order & Trades Section (Shared Row) */}
           <div
-            className={`flex-col md:flex-row md:h-[45%] md:gap-3 ${
+            className={`flex-col md:flex-row md:gap-3 flex-shrink-0 ${
               mobileTab === "ORDER" || mobileTab === "TRADES"
-                ? "flex flex-1"
+                ? "flex"
                 : "hidden md:flex"
             }`}
           >
-            {/* Recent Trades Card */}
+            {/* OrderBook & Recent Trades Card */}
             <div
-              className={`flex-1 flex flex-col bg-card border border-border-exchange rounded shadow-sm overflow-hidden ${
+              className={`flex-1 flex flex-col bg-card border border-border-exchange rounded shadow-sm overflow-hidden min-h-[400px] ${
                 mobileTab === "TRADES" || "hidden md:flex"
               }`}
             >
-              <RecentTrades trades={trades} />
+              {/* Internal Tabs */}
+              <div className="flex h-10 border-b border-border-exchange bg-card/50 flex-shrink-0">
+                <button
+                  onClick={() => setDataTab("ORDERBOOK")}
+                  className={`flex-1 text-[10px] font-bold uppercase tracking-wider transition-all relative ${
+                    dataTab === "ORDERBOOK"
+                      ? "text-primary bg-primary/5"
+                      : "text-muted hover:text-foreground hover:bg-card"
+                  }`}
+                >
+                  {t("common.orderBook")}
+                  {dataTab === "ORDERBOOK" && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-primary" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setDataTab("TRADES")}
+                  className={`flex-1 text-[10px] font-bold uppercase tracking-wider transition-all relative ${
+                    dataTab === "TRADES"
+                      ? "text-primary bg-primary/5"
+                      : "text-muted hover:text-foreground hover:bg-card"
+                  }`}
+                >
+                  {t("common.recentTrades")}
+                  {dataTab === "TRADES" && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-primary" />
+                  )}
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-hidden flex flex-col">
+                {dataTab === "ORDERBOOK" ? (
+                  <OrderBook currentPrice={selectedCreator.currentPrice} />
+                ) : (
+                  <RecentTrades trades={trades} />
+                )}
+              </div>
             </div>
 
             {/* Order Form Card */}

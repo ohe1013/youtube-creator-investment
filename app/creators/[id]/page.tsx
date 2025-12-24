@@ -3,9 +3,32 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { CreatorInfo } from "@/components/market/CreatorInfo";
+
+interface CreatorStat {
+  date: string;
+  subs: number;
+  views: number;
+  videos: number;
+  dailySubsChange: number;
+  dailyViewsChange: number;
+}
+
+interface Video {
+  id: string;
+  title: string;
+  thumbnailUrl: string;
+  publishedAt: string;
+  viewCount: number;
+  likeCount: number;
+  commentCount: number;
+  duration: string;
+  type: "LONG" | "SHORTS";
+}
 
 interface Creator {
   id: string;
+  youtubeChannelId: string;
   name: string;
   thumbnailUrl: string | null;
   category: string | null;
@@ -14,26 +37,46 @@ interface Creator {
   currentVideos: number;
   currentScore: number;
   currentPrice: number;
+  circulatingSupply: number;
+  liquidity: number;
+  avgLikes: number;
+  avgComments: number;
+  engagementRate: number;
+  viewsPerSubs: number;
 }
 
 export default function CreatorDetailPage() {
   const { id } = useParams();
   const [creator, setCreator] = useState<Creator | null>(null);
+  const [stats, setStats] = useState<CreatorStat[]>([]);
+  const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
 
-    fetch(`/api/creators/${id}`)
-      .then((res) => {
+    Promise.all([
+      fetch(`/api/creators/${id}`).then((res) => {
         if (!res.ok) throw new Error("Creator not found");
         return res.json();
-      })
-      .then((data) => {
-        setCreator(data.creator);
+      }),
+      fetch(`/api/creators/${id}?stats=true&days=90`).then((res) => {
+        if (!res.ok) return { stats: [] };
+        return res.json();
+      }),
+      fetch(`/api/creators/${id}?videos=true`).then((res) => {
+        if (!res.ok) return { videos: [] };
+        return res.json();
+      }),
+    ])
+      .then(([creatorData, statsData, videosData]) => {
+        setCreator(creatorData.creator);
+        setStats(statsData.stats || []);
+        setVideos(videosData.videos || []);
         setLoading(false);
       })
+
       .catch((err) => {
         setError(err.message);
         setLoading(false);
@@ -113,92 +156,14 @@ export default function CreatorDetailPage() {
       </div>
 
       <div className="flex flex-col lg:flex-row h-[calc(100vh-104px)]">
-        {/* Left: Chart and Info */}
-        <div className="flex-1 flex flex-col border-r border-border-exchange">
-          {/* Chart Area */}
-          <div className="flex-1 bg-card relative">
-            <div className="absolute top-4 left-4 z-10 flex gap-2">
-              <button className="px-2 py-1 bg-border-exchange text-primary text-[10px] rounded font-bold">
-                Time
-              </button>
-              <button className="px-2 py-1 text-muted text-[10px]">15m</button>
-              <button className="px-2 py-1 text-muted text-[10px]">1h</button>
-              <button className="px-2 py-1 text-muted text-[10px]">4h</button>
-              <button className="px-2 py-1 text-muted text-[10px]">1D</button>
-              <button className="px-2 py-1 text-muted text-[10px]">
-                Indicators
-              </button>
-            </div>
-
-            <div className="w-full h-full flex items-center justify-center opacity-20">
-              <div className="text-center">
-                <div className="text-6xl mb-4 text-foreground">📈</div>
-                <p className="text-xl font-bold mono text-foreground">
-                  ADVANCED CHART LOADING...
-                </p>
-                <p className="text-sm text-muted">
-                  Real-time growth visualization
-                </p>
-              </div>
-            </div>
-
-            {/* Watermark-like info */}
-            <div className="absolute bottom-6 left-6 pointer-events-none opacity-5">
-              <h2 className="text-8xl font-black italic">{creator.name}</h2>
-            </div>
-          </div>
-
-          {/* Bottom Tabs: Stats/Info */}
-          <div className="h-48 border-t border-border-exchange bg-background">
-            <div className="flex border-b border-border-exchange">
-              <button className="px-6 py-2 text-xs font-bold text-primary border-b-2 border-primary">
-                Market Stats
-              </button>
-              <button className="px-6 py-2 text-xs font-bold text-muted hover:text-foreground">
-                Channel Info
-              </button>
-            </div>
-            <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-6">
-              <div>
-                <div className="text-[10px] text-muted uppercase mb-1">
-                  Growth Score
-                </div>
-                <div className="text-lg font-bold text-up mono">
-                  {creator.currentScore.toFixed(1)}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] text-muted uppercase mb-1">
-                  Subscribers
-                </div>
-                <div className="text-lg font-bold mono">
-                  {creator.currentSubs.toLocaleString()}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] text-muted uppercase mb-1">
-                  Total Views
-                </div>
-                <div className="text-lg font-bold mono">
-                  {creator.currentViews.toLocaleString()}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] text-muted uppercase mb-1">
-                  Video Count
-                </div>
-                <div className="text-lg font-bold mono">
-                  {creator.currentVideos.toLocaleString()}
-                </div>
-              </div>
-            </div>
-          </div>
+        /* Left: Chart and Info - Replaced with CreatorInfo */
+        <div className="flex-1 border-r border-border-exchange overflow-hidden flex flex-col">
+          <CreatorInfo creator={creator} stats={stats} videos={videos} />
         </div>
-
         {/* Right: Order Book and Trade Panel */}
-        <div className="w-full lg:w-80 flex flex-col bg-background">
+        <div className="w-full lg:w-80 flex flex-col bg-background h-full border-t lg:border-t-0 border-border-exchange">
           {/* Simple Order Book Simul */}
-          <div className="flex-1 p-4 border-b border-border-exchange">
+          <div className="flex-1 p-4 border-b border-border-exchange overflow-y-auto">
             <div className="text-xs font-bold text-muted mb-4">Order Book</div>
             <div className="space-y-1">
               {[...Array(5)].map((_, i) => (

@@ -5,7 +5,9 @@ import { useLanguage } from "@/lib/LanguageContext";
 
 interface MarketHeaderProps {
   creator: {
+    id: string;
     name: string;
+    thumbnailUrl?: string | null;
     currentPrice: number;
     currentSubs: number;
     currentViews: number;
@@ -34,18 +36,25 @@ export function MarketHeader({
       <div className="h-24 bg-background border-b border-border-exchange" />
     );
 
-  const displayName =
-    locale === "ko" ? creator.nameKo || creator.name : creator.name;
+  const displayName = creator.name;
 
   const changeColor = (stats?.change24h || 0) >= 0 ? "text-up" : "text-down";
   const changeSign = (stats?.change24h || 0) >= 0 ? "+" : "";
 
   return (
-    <div className="h-24 bg-background border-b border-border-exchange flex items-center px-6 justify-between text-foreground">
+    <div className="h-24 bg-card border-b border-border-exchange flex items-center px-6 justify-between text-foreground">
       <div className="flex items-center gap-4">
-        <div className="w-10 h-10 rounded-full bg-card border border-border-exchange flex items-center justify-center text-foreground font-bold text-lg">
-          {displayName.substring(0, 1)}
-        </div>
+        {creator.thumbnailUrl ? (
+          <img
+            src={creator.thumbnailUrl}
+            alt={displayName}
+            className="w-10 h-10 rounded-full border border-border-exchange object-cover"
+          />
+        ) : (
+          <div className="w-10 h-10 rounded-full bg-card border border-border-exchange flex items-center justify-center text-foreground font-bold text-lg">
+            {displayName.substring(0, 1)}
+          </div>
+        )}
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2">
             {displayName}
