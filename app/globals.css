@@ -52,6 +52,9 @@ body {
   font-family: "Inter", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+button {
+  cursor: pointer;
+}
 
 .mono {
   font-family: "JetBrains Mono", "Roboto Mono", monospace;
@@ -64,4 +67,10 @@ body {
 .scrollbar-hide {
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 3px;
+}
+.scrollbar-thin {
+  scrollbar-width: thin;
 }

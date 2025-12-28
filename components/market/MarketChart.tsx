@@ -30,6 +30,8 @@ export function MarketChart({ data }: MarketChartProps) {
   const chartRef = useRef<any>(null); // Store chart instance
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const ma5SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ma20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   // 0. Hydration Fix
   const [mounted, setMounted] = useState(false);
@@ -56,18 +58,32 @@ export function MarketChart({ data }: MarketChartProps) {
     return { processedCandles: result.candles, processedVolume: result.volume };
   }, [data, mounted]);
 
-  // 2. Initialize Chart
+  const isDark = theme === "dark";
+
+  // Theme-aware Colors (Upbit Refined)
+  const UP_COLOR = isDark ? "#0ecb81" : "#d24f45";
+  const DOWN_COLOR = isDark ? "#f6465d" : "#1261c4";
+  const BG_COLOR = isDark ? "#0b0e11" : "#ffffff";
+  const TEXT_COLOR = isDark ? "#848e9c" : "#666666";
+  const GRID_COLOR = isDark ? "#2b3139" : "#f1f1f4";
+
+  // Helper for MA
+  const calculateMA = (data: any[], count: number) => {
+    const result = [];
+    for (let i = 0; i < data.length; i++) {
+      if (i < count - 1) continue;
+      const sum = data
+        .slice(i - count + 1, i + 1)
+        .reduce((acc, val) => acc + val.close, 0);
+      result.push({ time: data[i].time, value: sum / count });
+    }
+    return result;
+  };
+
+  // 2. Initialize Chart (Run Once)
   useEffect(() => {
     if (!mounted || !chartContainerRef.current) return;
-
-    const isDark = theme === "dark";
-
-    // Theme-aware Colors (Upbit Refined)
-    const UP_COLOR = isDark ? "#0ecb81" : "#d24f45";
-    const DOWN_COLOR = isDark ? "#f6465d" : "#1261c4";
-    const BG_COLOR = isDark ? "#0b0e11" : "#ffffff";
-    const TEXT_COLOR = isDark ? "#848e9c" : "#666666";
-    const GRID_COLOR = isDark ? "#2b3139" : "#f1f1f4";
+    if (chartRef.current) return;
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
@@ -89,7 +105,6 @@ export function MarketChart({ data }: MarketChartProps) {
           top: 0.1,
           bottom: 0.1, // Reduced margin to minimize empty space at bottom
         },
-
         autoScale: true,
       },
       timeScale: {
@@ -111,29 +126,16 @@ export function MarketChart({ data }: MarketChartProps) {
       wickUpColor: UP_COLOR,
       wickDownColor: DOWN_COLOR,
     });
-    candleSeries.setData(processedCandles as any);
     candleSeriesRef.current = candleSeries;
 
     // 2. Moving Averages
-    const calculateMA = (data: any[], count: number) => {
-      const result = [];
-      for (let i = 0; i < data.length; i++) {
-        if (i < count - 1) continue;
-        const sum = data
-          .slice(i - count + 1, i + 1)
-          .reduce((acc, val) => acc + val.close, 0);
-        result.push({ time: data[i].time, value: sum / count });
-      }
-      return result;
-    };
-
     const ma5Series = chart.addSeries(LineSeries, {
       color: "#fcd535",
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    ma5Series.setData(calculateMA(processedCandles, 5));
+    ma5SeriesRef.current = ma5Series;
 
     const ma20Series = chart.addSeries(LineSeries, {
       color: "#0ecb81",
@@ -141,36 +143,25 @@ export function MarketChart({ data }: MarketChartProps) {
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    ma20Series.setData(calculateMA(processedCandles, 20));
+    ma20SeriesRef.current = ma20Series;
 
-    // 3. Optional Volume Series
-    if (volumeSeriesRef.current && !showVolume) {
-      chart.removeSeries(volumeSeriesRef.current);
-      volumeSeriesRef.current = null;
-    }
-
-    if (showVolume && !volumeSeriesRef.current) {
-      const volumeSeries = chart.addSeries(HistogramSeries, {
+    // 3. Volume Series
+    const volumeSeries = chart.addSeries(HistogramSeries, {
         priceFormat: {
           type: "volume",
         },
         priceScaleId: "",
-      });
-
-      volumeSeries.priceScale().applyOptions({
+        visible: showVolume,
+    });
+    volumeSeries.priceScale().applyOptions({
         scaleMargins: {
           top: 0.8,
           bottom: 0,
         },
-      });
+    });
+    volumeSeriesRef.current = volumeSeries;
 
-      volumeSeries.setData(processedVolume as any);
-      volumeSeriesRef.current = volumeSeries;
-    } else if (showVolume && volumeSeriesRef.current) {
-      // If volume is shown and series already exists, just update data
-      volumeSeriesRef.current.setData(processedVolume as any);
-    }
-
+    // Crosshair Handler
     chart.subscribeCrosshairMove((param: MouseEventParams) => {
       if (
         param.point === undefined ||
@@ -186,10 +177,14 @@ export function MarketChart({ data }: MarketChartProps) {
           (param.time as number) * 1000
         ).toLocaleString();
 
-        const candleData = param.seriesData.get(candleSeries) as any;
-        const volumeData = volumeSeriesRef.current
-          ? (param.seriesData.get(volumeSeriesRef.current) as any)
-          : null;
+        const cSeries = candleSeriesRef.current;
+        const vSeries = volumeSeriesRef.current;
+
+        const candleData = cSeries ? param.seriesData.get(cSeries) as any : null;
+        let volumeData = null;
+        if (vSeries && param.seriesData.get(vSeries)) {
+             volumeData = param.seriesData.get(vSeries) as any;
+        }
 
         if (candleData) {
           setTooltip({
@@ -204,11 +199,83 @@ export function MarketChart({ data }: MarketChartProps) {
       }
     });
 
-    chart.timeScale().fitContent();
+    // Cleanup
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+        candleSeriesRef.current = null;
+        volumeSeriesRef.current = null;
+        ma5SeriesRef.current = null;
+        ma20SeriesRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
 
+  // 3. Update Data Effect
+  useEffect(() => {
+    if (!chartRef.current) return;
+    
+    if (candleSeriesRef.current) {
+        candleSeriesRef.current.setData(processedCandles as any);
+    }
+    if (ma5SeriesRef.current) {
+        ma5SeriesRef.current.setData(calculateMA(processedCandles, 5));
+    }
+    if (ma20SeriesRef.current) {
+        ma20SeriesRef.current.setData(calculateMA(processedCandles, 20));
+    }
+    if (volumeSeriesRef.current) {
+        volumeSeriesRef.current.setData(processedVolume as any);
+    }
+    
+    chartRef.current.timeScale().fitContent();
+  }, [processedCandles, processedVolume]);
+
+  // 4. Update Theme Effect
+  useEffect(() => {
+    if (!chartRef.current) return;
+
+    chartRef.current.applyOptions({
+      layout: {
+        background: { type: ColorType.Solid, color: BG_COLOR },
+        textColor: TEXT_COLOR,
+      },
+      grid: {
+        vertLines: { color: GRID_COLOR },
+        horzLines: { color: GRID_COLOR },
+      },
+      rightPriceScale: { borderColor: GRID_COLOR },
+      timeScale: { borderColor: GRID_COLOR },
+    });
+
+    if (candleSeriesRef.current) {
+        candleSeriesRef.current.applyOptions({
+            upColor: UP_COLOR,
+            downColor: DOWN_COLOR,
+            borderUpColor: UP_COLOR,
+            borderDownColor: DOWN_COLOR,
+            wickUpColor: UP_COLOR,
+            wickDownColor: DOWN_COLOR,
+        });
+    }
+  }, [theme, BG_COLOR, TEXT_COLOR, GRID_COLOR, UP_COLOR, DOWN_COLOR]);
+
+  // 5. Update Volume Visibility
+  useEffect(() => {
+      if (volumeSeriesRef.current) {
+          volumeSeriesRef.current.applyOptions({
+              visible: showVolume
+          });
+      }
+  }, [showVolume]);
+
+  // 6. Handle Resize
+  useEffect(() => {
     const handleResize = () => {
-      if (chartContainerRef.current) {
-        chart.applyOptions({
+      if (chartContainerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({
           width: chartContainerRef.current.clientWidth,
           height: chartContainerRef.current.clientHeight,
         });
@@ -219,9 +286,8 @@ export function MarketChart({ data }: MarketChartProps) {
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      chart.remove();
     };
-  }, [mounted, processedCandles, processedVolume, theme, showVolume]);
+  }, []);
 
   if (!mounted) {
     return (

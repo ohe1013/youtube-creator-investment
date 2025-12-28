@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
 
 interface OrderBookProps {
@@ -9,9 +9,19 @@ interface OrderBookProps {
 
 export function OrderBook({ currentPrice }: OrderBookProps) {
   const { t } = useLanguage();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Generate mock order book data based on currentPrice
+  // Only generate after mount to avoid hydration mismatch due to Math.random()
   const { asks, bids } = useMemo(() => {
+    if (!mounted) {
+      return { asks: [], bids: [] };
+    }
+
     const askList = [];
     const bidList = [];
     const spreadCount = 8;
@@ -32,11 +42,11 @@ export function OrderBook({ currentPrice }: OrderBookProps) {
     }
 
     return { asks: askList, bids: bidList };
-  }, [currentPrice]);
+  }, [currentPrice, mounted]);
 
   const maxQty = useMemo(() => {
     const all = [...asks, ...bids].map((o) => o.quantity);
-    return Math.max(...all);
+    return Math.max(...all, 1); // Prevent division by zero
   }, [asks, bids]);
 
   return (

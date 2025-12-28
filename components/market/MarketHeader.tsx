@@ -12,6 +12,7 @@ interface MarketHeaderProps {
     currentSubs: number;
     currentViews: number;
     liquidity: number;
+    category: string;
   } | null;
   stats?: {
     high24h: number;
@@ -59,7 +60,7 @@ export function MarketHeader({
           <h1 className="text-xl font-bold flex items-center gap-2">
             {displayName}
             <span className="text-xs text-muted font-normal bg-card px-2 py-0.5 rounded border border-border-exchange">
-              YOUTUBE
+              {creator.category}
             </span>
           </h1>
           <div className="flex items-end gap-2 text-2xl font-mono font-bold">

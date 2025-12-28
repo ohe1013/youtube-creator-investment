@@ -40,7 +40,6 @@ const SEARCH_TARGETS = [
       "Workman",
       "Psick Univ",
       "ChimChakMan",
-      "Calm Down Man",
       "Running Man",
       "Infinite Challenge",
       "Korea Comedy",

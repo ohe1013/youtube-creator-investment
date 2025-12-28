@@ -1,4 +1,4 @@
-"use client";
+  "use client";
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
@@ -117,14 +117,14 @@ export default function CreatorsPage() {
 
         <div className="flex flex-col lg:flex-row gap-4">
           {/* Compact Filter Bar */}
-          <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar lg:flex-wrap lg:w-48 lg:flex-col lg:shrink-0">
+          <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-thin lg:flex-wrap lg:w-48 lg:flex-col lg:shrink-0">
             {categories.map((cat) => (
               <button
                 key={cat}
                 onClick={() => updateFilters({ category: cat })}
                 className={`whitespace-nowrap px-4 py-1.5 rounded text-xs font-bold transition-all border ${
                   category === cat
-                    ? "bg-primary text-background border-primary shadow-sm"
+                    ? "bg-foreground text-white border-foreground shadow-sm"
                     : "text-muted hover:bg-card border-transparent"
                 }`}
               >

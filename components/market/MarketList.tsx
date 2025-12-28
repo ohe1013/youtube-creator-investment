@@ -100,7 +100,7 @@ export function MarketList({ creators, selectedId }: MarketListProps) {
       </div>
 
       {/* List - Scrollable */}
-      <div className="flex-1 overflow-y-auto scrollbar-hide">
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
         {filteredAndSortedCreators.map((c) => {
           const isSelected = c.id === selectedId;
           const changeColor = (c.change24h || 0) >= 0 ? "text-up" : "text-down";

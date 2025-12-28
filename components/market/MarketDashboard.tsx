@@ -113,7 +113,7 @@ export function MarketDashboard({
                   onClick={() => setDataTab("ORDERBOOK")}
                   className={`flex-1 text-[10px] font-bold uppercase tracking-wider transition-all relative ${
                     dataTab === "ORDERBOOK"
-                      ? "text-primary bg-primary/5"
+                      ? "bg-primary text-primary border-b-2 border-primary"
                       : "text-muted hover:text-foreground hover:bg-card"
                   }`}
                 >
@@ -126,7 +126,7 @@ export function MarketDashboard({
                   onClick={() => setDataTab("TRADES")}
                   className={`flex-1 text-[10px] font-bold uppercase tracking-wider transition-all relative ${
                     dataTab === "TRADES"
-                      ? "text-primary bg-primary/5"
+                      ? "bg-primary text-primary border-b-2 border-primary"
                       : "text-muted hover:text-foreground hover:bg-card"
                   }`}
                 >

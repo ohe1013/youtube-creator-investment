@@ -215,7 +215,7 @@ export function CreatorInfo({
             onClick={() => setActiveTab("trending")}
             className={`px-6 h-full text-sm font-bold transition-all relative flex items-center justify-center ${
               activeTab === "trending"
-                ? "text-primary bg-primary/5"
+                ? "text-primary bg-primary/5 border-b-2 border-primary"
                 : "text-muted hover:text-foreground hover:bg-card/50"
             }`}
           >
@@ -228,7 +228,7 @@ export function CreatorInfo({
             onClick={() => setActiveTab("content")}
             className={`px-6 h-full text-sm font-bold transition-all relative flex items-center justify-center ${
               activeTab === "content"
-                ? "text-primary bg-primary/5"
+                ? "text-primary bg-primary/5 border-b-2 border-primary"
                 : "text-muted hover:text-foreground hover:bg-card/50"
             }`}
           >
@@ -256,7 +256,7 @@ export function CreatorInfo({
         </a>
       </div>
 
-      <div className="flex-1 overflow-y-auto scrollbar-hide">
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
         {activeTab === "trending" ? (
           <div className="p-6 space-y-8 animate-in fade-in duration-300">
             {/* Market Info Row */}
@@ -471,7 +471,7 @@ export function CreatorInfo({
                 onClick={() => setContentFilter("all")}
                 className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
                   contentFilter === "all"
-                    ? "bg-primary text-white shadow-md scale-[1.02]"
+                    ? "bg-foreground text-white shadow-md scale-[1.02]"
                     : "text-muted hover:text-foreground hover:bg-card"
                 }`}
               >
@@ -481,7 +481,7 @@ export function CreatorInfo({
                 onClick={() => setContentFilter("long")}
                 className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
                   contentFilter === "long"
-                    ? "bg-primary text-white shadow-md scale-[1.02]"
+                    ? "bg-foreground text-white shadow-md scale-[1.02]"
                     : "text-muted hover:text-foreground hover:bg-card"
                 }`}
               >
@@ -491,7 +491,7 @@ export function CreatorInfo({
                 onClick={() => setContentFilter("shorts")}
                 className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
                   contentFilter === "shorts"
-                    ? "bg-primary text-white shadow-md scale-[1.02]"
+                    ? "bg-foreground text-white shadow-md scale-[1.02]"
                     : "text-muted hover:text-foreground hover:bg-card"
                 }`}
               >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
 
 interface OrderFormProps {
@@ -23,9 +23,12 @@ export function OrderForm({
   const [tab, setTab] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
   const [amount, setAmount] = useState<string>("");
-  const [limitPrice, setLimitPrice] = useState<string>(currentPrice.toString());
+  const [limitPrice, setLimitPrice] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const { t } = useLanguage();
+  useEffect(() => {
+    setLimitPrice(currentPrice.toString());
+  }, [currentPrice]);
 
   const price =
     orderType === "MARKET" ? currentPrice : parseFloat(limitPrice) || 0;
@@ -79,7 +82,7 @@ export function OrderForm({
               onClick={() => setOrderType("LIMIT")}
               className={`py-1.5 text-xs font-bold rounded transition-all ${
                 orderType === "LIMIT"
-                  ? "bg-primary text-white shadow-sm"
+                  ? "bg-foreground text-white border-b-2 border-foreground"
                   : "text-muted hover:text-foreground"
               }`}
             >
@@ -89,7 +92,7 @@ export function OrderForm({
               onClick={() => setOrderType("MARKET")}
               className={`py-1.5 text-xs font-bold rounded transition-all ${
                 orderType === "MARKET"
-                  ? "bg-primary text-white shadow-sm"
+                  ? "bg-foreground text-white border-b-2 border-foreground"
                   : "text-muted hover:text-foreground"
               }`}
             >
