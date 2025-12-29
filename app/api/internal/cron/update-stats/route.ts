@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getChannelStats } from "@/lib/youtube";
+import { getChannelStats, getChannelsStats } from "@/lib/youtube";
 import { updateCreatorScoreAndPrice } from "@/lib/scoring";
 
 export async function POST(request: NextRequest) {
@@ -18,9 +18,21 @@ export async function POST(request: NextRequest) {
       where: {
         isActive: true,
       },
+      select: {
+        id: true,
+        youtubeChannelId: true,
+        name: true,
+        currentSubs: true,
+        currentViews: true,
+      },
     });
 
     console.log(`Updating stats for ${creators.length} creators...`);
+
+    // 1. Batch Fetch Latest Stats (Quota Efficient: 1 unit per 50 creators)
+    const channelIds = creators.map((c) => c.youtubeChannelId);
+    const latestStatsList = await getChannelsStats(channelIds);
+    const statsMap = new Map(latestStatsList.map((s) => [s.channelId, s]));
 
     const results = {
       success: 0,
@@ -28,11 +40,10 @@ export async function POST(request: NextRequest) {
       errors: [] as string[],
     };
 
-    // Update each creator
+    // 2. Update each creator using batched data
     for (const creator of creators) {
       try {
-        // Fetch latest stats from YouTube
-        const stats = await getChannelStats(creator.youtubeChannelId);
+        const stats = statsMap.get(creator.youtubeChannelId) as any;
 
         if (!stats) {
           results.failed++;
@@ -71,10 +82,6 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        // Note: Automatic price updates based on metrics are disabled as per new requirements.
-        // Price is now determined ONLY by trading (Price Impact model).
-        // await updateCreatorScoreAndPrice(creator.id);
-
         results.success++;
       } catch (error) {
         results.failed++;
@@ -84,9 +91,6 @@ export async function POST(request: NextRequest) {
           }`
         );
       }
-
-      // Small delay to avoid rate limiting
-      await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
     console.log(

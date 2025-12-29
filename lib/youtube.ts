@@ -65,33 +65,53 @@ const parseDurationInSeconds = (duration: string) => {
 export async function getChannelStats(
   channelId: string
 ): Promise<ChannelData | null> {
+  const results = await getChannelsStats([channelId]);
+  return results[0] || null;
+}
+
+export async function getChannelsStats(
+  channelIds: string[]
+): Promise<ChannelData[]> {
   if (!YOUTUBE_API_KEY) throw new Error("YOUTUBE_API_KEY is not configured");
+  if (channelIds.length === 0) return [];
 
   try {
-    const url =
-      `${BASE_URL}/channels?part=snippet,statistics&id=${channelId}` +
-      `&hl=ko&key=${YOUTUBE_API_KEY}`;
+    // YouTube API allows up to 50 IDs per call
+    const chunks = [];
+    for (let i = 0; i < channelIds.length; i += 50) {
+      chunks.push(channelIds.slice(i, i + 50));
+    }
 
-    const response = await fetch(url);
-    if (!response.ok) return null;
+    const allResults: ChannelData[] = [];
 
-    const data = await response.json();
-    const channel: YouTubeChannel | undefined = data.items?.[0];
+    for (const chunk of chunks) {
+      const url =
+        `${BASE_URL}/channels?part=snippet,statistics&id=${chunk.join(",")}` +
+        `&hl=ko&key=${YOUTUBE_API_KEY}`;
 
-    if (!channel) return null;
+      const response = await fetch(url);
+      if (!response.ok) continue;
 
-    return {
-      channelId: channel.id,
-      name: channel.snippet?.title ?? "",
-      thumbnailUrl: pickBestThumbnailUrl(channel.snippet?.thumbnails),
-      country: channel.snippet?.country,
-      subs: Number(channel.statistics?.subscriberCount ?? 0),
-      views: Number(channel.statistics?.viewCount ?? 0),
-      videos: Number(channel.statistics?.videoCount ?? 0),
-    };
+      const data = await response.json();
+      if (!data.items) continue;
+
+      const mapped = data.items.map((channel: any) => ({
+        channelId: channel.id,
+        name: channel.snippet?.title ?? "",
+        thumbnailUrl: pickBestThumbnailUrl(channel.snippet?.thumbnails),
+        country: channel.snippet?.country,
+        subs: Number(channel.statistics?.subscriberCount ?? 0),
+        views: Number(channel.statistics?.viewCount ?? 0),
+        videos: Number(channel.statistics?.videoCount ?? 0),
+      }));
+
+      allResults.push(...mapped);
+    }
+
+    return allResults;
   } catch (error) {
-    console.error("Error fetching YouTube channel stats:", error);
-    return null;
+    console.error("Error fetching batched YouTube channel stats:", error);
+    return [];
   }
 }
 
