@@ -69,7 +69,7 @@ export function CreatorInfo({
     "trending"
   );
   const [chartMode, setChartMode] = useState<"subs" | "views">("subs");
-  const [timeRange, setTimeRange] = useState<"30d" | "90d">("30d");
+  // Remove timeRange state
   const [contentFilter, setContentFilter] = useState<"all" | "long" | "shorts">(
     "all"
   );
@@ -103,35 +103,46 @@ export function CreatorInfo({
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
     const latest = sortedStats[sortedStats.length - 1];
+    
+    // Helper to get stats N days ago
     const daysAgos = (days: number) => {
+      // If we don't have enough data, use the earliest available
       if (sortedStats.length <= days) return sortedStats[0];
       return sortedStats[sortedStats.length - 1 - days];
     };
+
+    const stats1d = daysAgos(1);
     const stats7d = daysAgos(7);
-    const stats30d = daysAgos(30);
+
+    // 1 Day Change (Daily)
+    const subsGrowth1d = latest.subs - stats1d.subs;
+    const viewsGrowth1d = latest.views - stats1d.views;
+
+    // 7 Day Change (Weekly)
     const subsGrowth7d = latest.subs - stats7d.subs;
-    const subsGrowth30d = latest.subs - stats30d.subs;
     const viewsGrowth7d = latest.views - stats7d.views;
-    const viewsGrowth30d = latest.views - stats30d.views;
-    const subsGrowthRate30d =
-      stats30d.subs > 0 ? (subsGrowth30d / stats30d.subs) * 100 : 0;
-    const viewsGrowthRate30d =
-      stats30d.views > 0 ? (viewsGrowth30d / stats30d.views) * 100 : 0;
+
+    // Growth Rates for Weekly (7d)
+    const subsGrowthRate7d =
+      stats7d.subs > 0 ? (subsGrowth7d / stats7d.subs) * 100 : 0;
+    const viewsGrowthRate7d =
+      stats7d.views > 0 ? (viewsGrowth7d / stats7d.views) * 100 : 0;
+
     return {
+      subsGrowth1d,
       subsGrowth7d,
-      subsGrowth30d,
+      viewsGrowth1d,
       viewsGrowth7d,
-      viewsGrowth30d,
-      subsGrowthRate30d,
-      viewsGrowthRate30d,
-      hasEnoughData7d: sortedStats.length >= 7,
-      hasEnoughData30d: sortedStats.length >= 30,
+      subsGrowthRate7d,
+      viewsGrowthRate7d,
+      hasEnoughData1d: sortedStats.length >= 2, // Need at least 2 points for 1d change
+      hasEnoughData7d: sortedStats.length >= 8, // Need at least 8 points for 7d change
     };
   }, [stats]);
 
   const chartData = useMemo(() => {
     if (!stats || stats.length === 0) return [];
-    const days = timeRange === "30d" ? 30 : 90;
+    const days = 7; // Fixed to 7 days as requested
     return stats.slice(-days).map((s) => ({
       ...s,
       dateFormatted: new Date(s.date).toLocaleDateString(
@@ -139,7 +150,7 @@ export function CreatorInfo({
         { month: "short", day: "numeric" }
       ),
     }));
-  }, [stats, timeRange, locale]);
+  }, [stats, locale]);
 
   // Content Tab Data
   const filteredVideos = useMemo(() => {
@@ -287,47 +298,47 @@ export function CreatorInfo({
               </h3>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <MomentumCard
-                  label={t("channel.subsChange7d")}
-                  value={momentum?.subsGrowth7d || 0}
+                  label={t("channel.subsChangeDaily") || "Daily Change"} // Requires new locale key or hardcoded for now
+                  value={momentum?.subsGrowth1d || 0}
                   subValue={t("channel.subscribers")}
+                  isPositive={(momentum?.subsGrowth1d || 0) >= 0}
+                  loading={!momentum?.hasEnoughData1d}
+                  t={t}
+                />
+                <MomentumCard
+                  label={t("channel.subsChangeWeekly") || "Weekly Change"} // Requires new locale key
+                  value={momentum?.subsGrowth7d || 0}
+                  subValue={
+                    momentum?.subsGrowthRate7d !== undefined
+                      ? `${momentum.subsGrowthRate7d.toFixed(1)}% ${t(
+                          "channel.growth"
+                        )}`
+                      : "N/A"
+                  }
                   isPositive={(momentum?.subsGrowth7d || 0) >= 0}
                   loading={!momentum?.hasEnoughData7d}
                   t={t}
                 />
                 <MomentumCard
-                  label={t("channel.subsChange30d")}
-                  value={momentum?.subsGrowth30d || 0}
+                  label={t("channel.viewsChangeDaily") || "Daily Change"} // Requires new locale key
+                  value={momentum?.viewsGrowth1d || 0}
+                  subValue={t("channel.totalViews")}
+                  isPositive={(momentum?.viewsGrowth1d || 0) >= 0}
+                  loading={!momentum?.hasEnoughData1d}
+                  t={t}
+                />
+                <MomentumCard
+                  label={t("channel.viewsChangeWeekly") || "Weekly Change"} // Requires new locale key
+                  value={momentum?.viewsGrowth7d || 0}
                   subValue={
-                    momentum?.subsGrowthRate30d !== undefined
-                      ? `${momentum.subsGrowthRate30d.toFixed(1)}% ${t(
+                    momentum?.viewsGrowthRate7d !== undefined
+                      ? `${momentum.viewsGrowthRate7d.toFixed(1)}% ${t(
                           "channel.growth"
                         )}`
                       : "N/A"
                   }
-                  isPositive={(momentum?.subsGrowth30d || 0) >= 0}
-                  loading={!momentum?.hasEnoughData30d}
-                  t={t}
-                />
-                <MomentumCard
-                  label={t("channel.viewsChange7d")}
-                  value={momentum?.viewsGrowth7d || 0}
-                  subValue={t("channel.totalViews")}
                   isPositive={(momentum?.viewsGrowth7d || 0) >= 0}
                   loading={!momentum?.hasEnoughData7d}
-                  t={t}
-                />
-                <MomentumCard
-                  label={t("channel.viewsChange30d")}
-                  value={momentum?.viewsGrowth30d || 0}
-                  subValue={
-                    momentum?.viewsGrowthRate30d !== undefined
-                      ? `${momentum.viewsGrowthRate30d.toFixed(1)}% ${t(
-                          "channel.growth"
-                        )}`
-                      : "N/A"
-                  }
-                  isPositive={(momentum?.viewsGrowth30d || 0) >= 0}
-                  loading={!momentum?.hasEnoughData30d}
                   t={t}
                 />
               </div>
@@ -358,27 +369,11 @@ export function CreatorInfo({
                     {t("channel.totalViews")}
                   </button>
                 </div>
+                {/* Fixed time range label instead of buttons */}
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => setTimeRange("30d")}
-                    className={`px-3 py-1 text-xs font-bold rounded transition-colors ${
-                      timeRange === "30d"
-                        ? "text-primary bg-primary/10"
-                        : "text-muted hover:text-foreground"
-                    }`}
-                  >
-                    30D
-                  </button>
-                  <button
-                    onClick={() => setTimeRange("90d")}
-                    className={`px-3 py-1 text-xs font-bold rounded transition-colors ${
-                      timeRange === "90d"
-                        ? "text-primary bg-primary/10"
-                        : "text-muted hover:text-foreground"
-                    }`}
-                  >
-                    90D
-                  </button>
+                   <span className="px-3 py-1 text-xs font-bold text-primary bg-primary/10 rounded">
+                     Last 7 Days
+                   </span>
                 </div>
               </div>
               <div className="flex-1 p-4 min-h-0">

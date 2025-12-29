@@ -49,13 +49,10 @@ export const locales = {
       visitYoutube: "YouTube 채널 방문",
       marketCap: "시가총액",
       liquidity: "유동성",
-      subsChange7d: "7일 구독자 변화",
-      subsChange30d: "30일 구독자 변화",
-      viewsChange7d: "7일 조회수 변화",
-      viewsChange30d: "30일 조회수 변화",
-      growth: "성장률",
-      collectingData: "데이터 수집 중",
-    },
+      subsChangeDaily: "일일 구독자 변화",
+      subsChangeWeekly: "주간 구독자 변화",
+      viewsChangeDaily: "일일 조회수 변화",
+      viewsChangeWeekly: "주간 조회수 변화",
   },
 
   en: {
@@ -108,14 +105,14 @@ export const locales = {
       visitYoutube: "Visit YouTube Channel",
       marketCap: "Market Cap",
       liquidity: "Liquidity",
-      subsChange7d: "7D Subs Change",
-      subsChange30d: "30D Subs Change",
-      viewsChange7d: "7D Views Change",
-      viewsChange30d: "30D Views Change",
+      subsChangeDaily: "Daily Subs Change",
+      subsChangeWeekly: "Weekly Subs Change",
+      viewsChangeDaily: "Daily Views Change",
+      viewsChangeWeekly: "Weekly Views Change",
       growth: "Growth",
       collectingData: "Collecting Data",
     },
   },
-};
+}}
 
 export type LocaleType = "ko" | "en";

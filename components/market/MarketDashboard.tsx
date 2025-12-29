@@ -13,6 +13,8 @@ import { useLanguage } from "@/lib/LanguageContext";
 interface MarketDashboardProps {
   selectedCreator: any;
   stats: any;
+  historyStats?: any[]; // For CreatorInfo
+  videos?: any[]; // For CreatorInfo
   chartData: any[];
   trades: any[];
   creators: any[];
@@ -23,6 +25,8 @@ interface MarketDashboardProps {
 export function MarketDashboard({
   selectedCreator,
   stats,
+  historyStats = [],
+  videos = [],
   chartData,
   trades,
   creators,
@@ -88,7 +92,11 @@ export function MarketDashboard({
               {chartTab === "CHART" ? (
                 <MarketChart data={chartData} />
               ) : (
-                <CreatorInfo creator={selectedCreator} />
+                <CreatorInfo
+                  creator={selectedCreator}
+                  stats={historyStats}
+                  videos={videos}
+                />
               )}
             </div>
           </div>

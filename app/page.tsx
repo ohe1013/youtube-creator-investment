@@ -105,6 +105,23 @@ export default async function MarketPage({
     }));
   }
 
+  // 6. Fetch Historical Stats (for CreatorInfo Trending)
+  const historyStats = selectedCreator
+    ? await prisma.creatorStat.findMany({
+        where: { creatorId: selectedCreator.id },
+        orderBy: { date: "asc" },
+      })
+    : [];
+
+  // 7. Fetch Recent Videos (for CreatorInfo Content)
+  const videos = selectedCreator
+    ? await prisma.video.findMany({
+        where: { creatorId: selectedCreator.id },
+        orderBy: { publishedAt: "desc" },
+        take: 10,
+      })
+    : [];
+
   return (
     <main className="h-[calc(100vh-56px)] bg-background text-foreground flex flex-col overflow-hidden">
       <MarketDashboard
@@ -115,6 +132,8 @@ export default async function MarketPage({
           vol24h: selectedCreator.currentViews * 10,
           change24h: selectedCreator.id === "1" ? 2.5 : -1.2,
         }}
+        historyStats={historyStats} // New Prop
+        videos={videos} // New Prop
         chartData={chartData}
         trades={trades}
         creators={creators}
