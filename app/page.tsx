@@ -66,30 +66,62 @@ export default async function MarketPage({
       userQuantity = freshUser?.positions[0]?.quantity || 0;
     }
 
-    // 4. Generate/Fetch Chart Data (Higher Density: 5 ticks/min)
-    const now = new Date();
-    let current = selectedCreator.currentPrice;
-    const ticksPerMinute = 5;
-    const totalMinutes = 120;
-    const totalPoints = totalMinutes * ticksPerMinute;
+    // 4. Fetch Real Trade Data for Chart (7 days history)
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 7);
 
-    chartData = Array.from({ length: totalPoints }).map((_, i) => {
-      const volatility = 0.002; // 0.2% max movement per tick
-      const noise = (Math.random() - 0.5) * (current * volatility);
-      current += noise;
-
-      // Intervals of 12 seconds
-      const time = new Date(
-        now.getTime() - (totalPoints - i) * (60 / ticksPerMinute) * 1000
-      );
-
-      return {
-        date: time.toISOString(),
-        price: current,
-      };
+    const historyTrades = await prisma.trade.findMany({
+      where: {
+        creatorId: selectedCreator.id,
+        createdAt: { gte: startDate },
+      },
+      orderBy: { createdAt: "asc" },
+      select: {
+        createdAt: true,
+        price: true,
+        quantity: true,
+      },
     });
 
-    // 5. Fetch Recent Trades
+    chartData = historyTrades.map((t) => ({
+      date: t.createdAt.toISOString(),
+      price: t.price,
+      volume: t.quantity * t.price,
+    }));
+
+    if (chartData.length === 0) {
+      chartData = [
+        {
+          date: new Date().toISOString(),
+          price: selectedCreator.currentPrice,
+          volume: 0,
+        },
+      ];
+    }
+
+    // 5. Calculate 24h Stats dynamically
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+
+    const last24hTrades = historyTrades.filter((t) => t.createdAt >= oneDayAgo);
+
+    let high24h = selectedCreator.currentPrice;
+    let low24h = selectedCreator.currentPrice;
+    let vol24h = 0;
+    let change24h = 0;
+
+    if (last24hTrades.length > 0) {
+      const prices = last24hTrades.map((t) => t.price);
+      high24h = Math.max(...prices, selectedCreator.currentPrice);
+      low24h = Math.min(...prices, selectedCreator.currentPrice);
+      vol24h = last24hTrades.reduce((sum, t) => sum + t.quantity * t.price, 0);
+
+      const firstPrice = last24hTrades[0].price;
+      const lastPrice = last24hTrades[last24hTrades.length - 1].price;
+      change24h = ((lastPrice - firstPrice) / firstPrice) * 100;
+    }
+
+    // 6. Fetch Recent Trades (for the trades list)
     const recentTrades = await prisma.trade.findMany({
       where: { creatorId: selectedCreator.id },
       orderBy: { createdAt: "desc" },
@@ -99,47 +131,52 @@ export default async function MarketPage({
     trades = recentTrades.map((t: any) => ({
       id: t.id,
       price: t.price,
-      quantity: t.quantity,
+      quantity: t.quantity ?? 0,
       type: t.type,
       time: t.createdAt.toLocaleTimeString(),
     }));
+
+    // 7. Fetch Historical Stats (for CreatorInfo Trending)
+    const historyStats = await prisma.creatorStat.findMany({
+      where: { creatorId: selectedCreator.id },
+      orderBy: { date: "asc" },
+    });
+
+    // 8. Fetch Recent Videos (for CreatorInfo Content)
+    const videos = await prisma.video.findMany({
+      where: { creatorId: selectedCreator.id },
+      orderBy: { publishedAt: "desc" },
+      take: 10,
+    });
+
+    return (
+      <main className="h-[calc(100vh-56px)] bg-background text-foreground flex flex-col overflow-hidden">
+        <MarketDashboard
+          selectedCreator={selectedCreator}
+          stats={{
+            high24h,
+            low24h,
+            vol24h,
+            change24h,
+          }}
+          historyStats={historyStats}
+          videos={videos}
+          chartData={chartData}
+          trades={trades}
+          creators={creators}
+          userBalance={userBalance}
+          userQuantity={userQuantity}
+        />
+      </main>
+    );
   }
 
-  // 6. Fetch Historical Stats (for CreatorInfo Trending)
-  const historyStats = selectedCreator
-    ? await prisma.creatorStat.findMany({
-        where: { creatorId: selectedCreator.id },
-        orderBy: { date: "asc" },
-      })
-    : [];
-
-  // 7. Fetch Recent Videos (for CreatorInfo Content)
-  const videos = selectedCreator
-    ? await prisma.video.findMany({
-        where: { creatorId: selectedCreator.id },
-        orderBy: { publishedAt: "desc" },
-        take: 10,
-      })
-    : [];
-
   return (
-    <main className="h-[calc(100vh-56px)] bg-background text-foreground flex flex-col overflow-hidden">
-      <MarketDashboard
-        selectedCreator={selectedCreator}
-        stats={{
-          high24h: selectedCreator.currentPrice * 1.1,
-          low24h: selectedCreator.currentPrice * 0.9,
-          vol24h: selectedCreator.currentViews * 10,
-          change24h: selectedCreator.id === "1" ? 2.5 : -1.2,
-        }}
-        historyStats={historyStats} // New Prop
-        videos={videos} // New Prop
-        chartData={chartData}
-        trades={trades}
-        creators={creators}
-        userBalance={userBalance}
-        userQuantity={userQuantity}
-      />
-    </main>
+    <div className="flex items-center justify-center min-h-screen bg-background text-foreground">
+      <div className="text-center">
+        <h1 className="text-2xl font-bold mb-4">No creators found</h1>
+        <p className="text-muted">Market is currently empty.</p>
+      </div>
+    </div>
   );
 }

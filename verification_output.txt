@@ -1,0 +1,102 @@
+﻿--- Bot Verification Script ---
+10 or more bots already exist.
+Current bot count: 10
+
+Simulating bot activity (20 random trades)...
+Trade 1/20: Trade 2/20: Bot MarketBot_vsoaw BUY ?덉뭅?붾뱶: 1 @ 1884.52 -> 1888.07
+Trade 3/20: Trade 4/20: Bot MarketBot_7ylrbc BUY UNDERkg: 1 @ 1366.03 -> 1367.9
+Trade 5/20: Bot MarketBot_vsoaw BUY HYBE LABELS: 1 @ 4533.23 -> 4553.78
+Trade 6/20: Trade 7/20: Bot MarketBot_qnkal BUY Korea Market Brief: 1 @ 4239.13 -> 4257.1
+Trade 8/20: Bot MarketBot_aulyq BUY 移⑥갑留? 1 @ 4107.75 -> 4124.62
+Trade 9/20: Trade 10/20: Trade 11/20: Bot MarketBot_7ylrbc BUY ?먰씎誘?Son Heung Min Live Concert: 1 @ 1703.46 -> 1706.36
+Trade 12/20: Bot MarketBot_apsef skipping 吏?꾧퓤 (Cooldown: 6.5 < 19m)
+Trade 13/20: Trade 14/20: Trade 15/20: Trade 16/20: Trade 17/20: Bot MarketBot_qnkal BUY [?꾩?]Hamzy: 1 @ 3127.82 -> 3137.6
+Trade 18/20: Bot MarketBot_3ov9s9 BUY Lofi Girl - Topic: 1 @ 2259.41 -> 2264.51
+Trade 19/20: Trade 20/20: Bot MarketBot_apsef BUY JTBC News: 1 @ 4435.86 -> 4455.54
+
+--- Verification Results ---
+Total trades in system: 18
+Trades made by bots in this run/total: 18
+
+Creators with price movements:
+- 移⑥갑留? 4107.75 -> 4124.62
+- 1theK (?먮뜑耳??: 3523.19 -> 3523.19
+- KBS Kpop: 3984.36 -> 3984.36
+- HYBE LABELS: 4533.23 -> 4553.78
+- SBSKPOP X INKIGAYO: 5054.62 -> 5080.17
+- Hongyu ASMR ?띿쑀: 5113.05 -> 5113.05
+- ?뚰겕留?Workman: 4601.64 -> 4601.64
+- ?쇱떇??셆sick Univ: 2095.97 -> 2095.97
+- Lofi Girl - Topic: 2259.41 -> 2264.51
+- Infinite Challenge - Topic: 1459.43 -> 1459.43
+- 肄붾??뷀떚鍮?Comedy TV: 5771.31 -> 5771.31
+- 鍮좊땲蹂댄? Pani Bottle: 4512.13 -> 4512.13
+- 怨쏀뒠釉? 2233.47 -> 2233.47
+- Imagine Your Korea: 1525.9 -> 1525.90
+- Zoe's 議곗뿉: 3935.81 -> 3935.81
+- BLACKPINK - Topic: 1763.1 -> 1763.10
+- BANGTANTV: 1631.59 -> 1631.59
+- Jane ASMR ?쒖씤: 1301.08 -> 1302.77
+- SMTOWN: 402.12 -> 402.12
+- PONY Syndrome: 1290.22 -> 1291.88
+- T1 Faker: 5166.56 -> 5166.56
+- 媛먯뒪?퇖AMST: 4166.91 -> 4166.91
+- ?낅룞 源釉붾（: 1215.83 -> 1215.83
+- [?꾩?]Hamzy: 3127.82 -> 3137.60
+- Tottenham Hotspur: 2298.63 -> 2298.63
+- SPOTV: 3518.31 -> 3518.31
+- UNDERkg: 1366.03 -> 1367.90
+- ?덊뙘Heopop: 4728.41 -> 4728.41
+- ?μ궪?대꽕 Heungsam's Family: 1361.12 -> 1361.12
+- LCK: 5220.58 -> 5247.83
+- RISABAE: 3745.54 -> 3745.54
+- ?띾쾾??hongbeomseok: 3189.3 -> 3199.47
+- Beauty Trip Korea: 6441.86 -> 6441.86
+- Korea Fashion Week: 1913.2 -> 1913.20
+- ?먰씎誘?Son Heung Min Live Concert: 1703.46 -> 1706.36
+- Boram Tube Vlog [蹂대엺?쒕툕 釉뚯씠濡쒓렇]: 441.12 -> 441.12
+- ?ㅽ뒠?붿삤 洹몃깷: 717.86 -> 717.86
+- 吏?꾧퓤: 4289.08 -> 4307.48
+- Kids Tv Korea - ?대┛?대룞?? 3325.88 -> 3325.88
+- KBS News: 1060.01 -> 1061.13
+- MBCkpop: 5325.94 -> 5325.94
+- essential;: 2940.13 -> 2940.13
+- ??밸㎤-Wassup Man: 1914.04 -> 1914.04
+- ?곕떇留?- ?ㅻ툕??怨듭떇 梨꾨꼸: 6020.67 -> 6020.67
+- Korea Variety: 5311.77 -> 5311.77
+- ?먯??섑븯猷? 5108.98 -> 5108.98
+- ?쒖??댁빞湲?SeoeunStory]: 3188.53 -> 3188.53
+- Gonigs: 3629.7 -> 3629.70
+- Samsung: 4589.17 -> 4589.17
+- LGTWINSTV: 1721.46 -> 1721.46
+-  YTN: 2899.26 -> 2899.26
+- Korea Market Brief: 4239.13 -> 4257.10
+- ??쒕?援?援먯쑁諛뺣엺?? 1651.27 -> 1651.27
+- KOREA SCIENCE: 4613.48 -> 4613.48
+- JTBC News: 4435.86 -> 4455.54
+- officialpsy: 3650.75 -> 3650.75
+- BTS - Topic: 3756.12 -> 3756.12
+- Mnet K-POP: 4821.33 -> 4844.58
+- JYP Entertainment: 5832.66 -> 5832.66
+- planD?뚮옖?? 4248.52 -> 4248.52
+- ToyPuddingTV: 5747.43 -> 5747.43
+- LCK Global: 1621.64 -> 1621.64
+- dotty: 1837.14 -> 1837.14
+- Korea Gaming: 6661.09 -> 6661.09
+- ?쏇룷?щ툕: 5420.48 -> 5420.48
+- tzuyang易붿뼇: 4856.72 -> 4856.72
+- 諛깆쥌??PAIK JONG WON: 561.28 -> 561.28
+- ?몃뵒?쒕뱶 FoodieLand: 2161.68 -> 2161.68
+- ssin ?щ떂: 3146.9 -> 3146.90
+- ?쒓뎅湲곗닠援먯쑁??숆탳 KOREATECH: 1700.39 -> 1703.28
+- ?덉뭅?붾뱶: 1884.52 -> 1888.07
+- ITSub?뉗꽠: 3202.25 -> 3202.25
+- SBS ?댁뒪: 1519.77 -> 1519.77
+- KOREA HISTORY: 3683.41 -> 3683.41
+
+Active bot positions: 18
+- Bot Position: 1 shares of Jane ASMR ?쒖씤
+- Bot Position: 1 shares of ?쒓뎅湲곗닠援먯쑁??숆탳 KOREATECH
+- Bot Position: 1 shares of SBSKPOP X INKIGAYO
+- Bot Position: 1 shares of 吏?꾧퓤
+- Bot Position: 1 shares of LCK

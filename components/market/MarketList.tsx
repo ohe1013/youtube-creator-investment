@@ -43,7 +43,9 @@ export function MarketList({ creators, selectedId }: MarketListProps) {
       .sort((a, b) => {
         const order = sortConfig.order === "asc" ? 1 : -1;
         if (sortConfig.key === "name") {
-          return order * a.name.localeCompare(b.name);
+          const trimmedA = a.name.trim();
+          const trimmedB = b.name.trim();
+          return order * trimmedA.localeCompare(trimmedB);
         }
         if (sortConfig.key === "price") {
           return order * (a.currentPrice - b.currentPrice);
@@ -77,7 +79,7 @@ export function MarketList({ creators, selectedId }: MarketListProps) {
           className="flex-1 uppercase cursor-pointer hover:text-foreground transition-colors flex items-center gap-1"
           onClick={() => handleSort("name")}
         >
-          NAME
+          {t("market.name")}
           {sortConfig.key === "name" &&
             (sortConfig.order === "asc" ? "▲" : "▼")}
         </span>
@@ -85,7 +87,7 @@ export function MarketList({ creators, selectedId }: MarketListProps) {
           className="w-16 text-right uppercase cursor-pointer hover:text-foreground transition-colors"
           onClick={() => handleSort("price")}
         >
-          PRICE
+          {t("market.price")}
           {sortConfig.key === "price" &&
             (sortConfig.order === "asc" ? "▲" : "▼")}
         </span>
@@ -93,7 +95,7 @@ export function MarketList({ creators, selectedId }: MarketListProps) {
           className="w-14 text-right uppercase cursor-pointer hover:text-foreground transition-colors"
           onClick={() => handleSort("change")}
         >
-          CHG%
+          {t("market.change24h")}
           {sortConfig.key === "change" &&
             (sortConfig.order === "asc" ? "▲" : "▼")}
         </span>

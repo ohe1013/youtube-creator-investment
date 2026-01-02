@@ -29,7 +29,9 @@ export const locales = {
       high24h: "24시 고가",
       low24h: "24시 저가",
       vol24h: "24시 거래량",
-      change24h: "24시 대비",
+      change24h: "전일 대비",
+      price: "현재가",
+      name: "크리에이터",
     },
     channel: {
       subscribers: "구독자",
@@ -53,8 +55,10 @@ export const locales = {
       subsChangeWeekly: "주간 구독자 변화",
       viewsChangeDaily: "일일 조회수 변화",
       viewsChangeWeekly: "주간 조회수 변화",
+      growth: "성장률",
+      collectingData: "데이터 수집 중",
+    },
   },
-
   en: {
     common: {
       search: "Search",
@@ -113,6 +117,6 @@ export const locales = {
       collectingData: "Collecting Data",
     },
   },
-}}
+};
 
 export type LocaleType = "ko" | "en";

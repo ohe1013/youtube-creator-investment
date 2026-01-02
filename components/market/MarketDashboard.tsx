@@ -147,7 +147,10 @@ export function MarketDashboard({
 
               <div className="flex-1 overflow-hidden flex flex-col">
                 {dataTab === "ORDERBOOK" ? (
-                  <OrderBook currentPrice={selectedCreator.currentPrice} />
+                  <OrderBook
+                    currentPrice={selectedCreator.currentPrice}
+                    liquidity={selectedCreator.liquidity}
+                  />
                 ) : (
                   <RecentTrades trades={trades} />
                 )}

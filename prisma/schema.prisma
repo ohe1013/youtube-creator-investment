@@ -36,13 +36,13 @@ model Creator {
   videos            Video[]
 
   // Aggregated Content Stats (Managed by Cron)
-  avgLikes          Float         @default(0)
-  avgComments       Float         @default(0)
-  engagementRate    Float         @default(0)
-  viewsPerSubs      Float         @default(0)
+  avgLikes       Float   @default(0)
+  avgComments    Float   @default(0)
+  engagementRate Float   @default(0)
+  viewsPerSubs   Float   @default(0)
+  Order          Order[]
 
   @@index([youtubeChannelId])
-
   @@index([category])
   @@index([visibility, isActive])
 }
@@ -55,46 +55,45 @@ model CreatorStat {
   subs             Float
   views            Float
   videos           Float
-  dailySubsChange  Float      @default(0)
-  dailyViewsChange Float      @default(0)
-  
+  dailySubsChange  Float    @default(0)
+  dailyViewsChange Float    @default(0)
+
   // Engagement History
-  avgLikes         Float      @default(0)
-  avgComments      Float      @default(0)
-  totalLikes       Float      @default(0)
-  totalComments    Float      @default(0)
+  avgLikes      Float @default(0)
+  avgComments   Float @default(0)
+  totalLikes    Float @default(0)
+  totalComments Float @default(0)
 
-  createdAt        DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  creator Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
 
   @@unique([creatorId, date, period])
   @@index([creatorId, date])
 }
 
 model Video {
-  id               String   @id // YouTube Video ID
-  creatorId        String
-  title            String
-  thumbnailUrl     String?
-  publishedAt      DateTime
-  duration         String   // ISO 8601 (e.g., PT1M5S)
-  type             VideoType @default(LONG)
-  
+  id           String    @id // YouTube Video ID
+  creatorId    String
+  title        String
+  thumbnailUrl String?
+  publishedAt  DateTime
+  duration     String // ISO 8601 (e.g., PT1M5S)
+  type         VideoType @default(LONG)
+
   // Latest Stats
-  viewCount        Float    @default(0)
-  likeCount        Float    @default(0)
-  commentCount     Float    @default(0)
-  
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  
-  creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  viewCount    Float @default(0)
+  likeCount    Float @default(0)
+  commentCount Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
 
   @@index([creatorId, publishedAt])
   @@index([type])
 }
-
 
 model User {
   id            String     @id @default(cuid())
@@ -112,6 +111,7 @@ model User {
   positions     Position[]
   sessions      Session[]
   trades        Trade[]
+  orders        Order[]
 }
 
 model Position {
@@ -133,12 +133,14 @@ model Trade {
   id        String    @id @default(cuid())
   userId    String
   creatorId String
+  orderId   String? // Link to the Order that generated this trade (if any)
   type      TradeType
   quantity  Float
   price     Float
   createdAt DateTime  @default(now())
   creator   Creator   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order     Order?    @relation(fields: [orderId], references: [id])
 
   @@index([userId, createdAt])
   @@index([creatorId])
@@ -188,7 +190,6 @@ enum VideoType {
   SHORTS
 }
 
-
 enum Period {
   HOURLY
   DAILY
@@ -202,4 +203,38 @@ enum UserRole {
 enum TradeType {
   BUY
   SELL
+}
+
+enum OrderType {
+  LIMIT
+  MARKET
+}
+
+enum OrderStatus {
+  OPEN
+  PARTIAL
+  FILLED
+  CANCELLED
+}
+
+model Order {
+  id        String      @id @default(cuid())
+  userId    String
+  creatorId String
+  type      TradeType // BUY or SELL side
+  orderType OrderType   @default(LIMIT)
+  price     Float // Limit Price
+  quantity  Float // Original Quantity
+  filled    Float       @default(0) // Filled Quantity
+  status    OrderStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trades  Trade[]
+
+  @@index([creatorId, status, type, price]) // For matching engine (Price-Time priority)
+  @@index([userId])
 }

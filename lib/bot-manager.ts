@@ -1,30 +1,25 @@
 import { prisma } from "./prisma";
-import { calculateNewPrice } from "./market";
+import { placeOrder } from "./matching-engine";
 
 const BOT_CONFIG = {
-  MAX_TRADE_AMOUNT_CAP: 2000,   // Hard cap per trade
-  TRADE_AMOUNT_PCT: 0.02,       // 2% of balance
-  MAX_POSITION_PCT: 0.20,       // Max 20% allocation per stock
-  COOLDOWN_MIN: 5,              // Minutes
-  COOLDOWN_MAX: 30,             // Minutes
+  MAX_TRADE_AMOUNT_CAP: 2000,
+  TRADE_AMOUNT_PCT: 0.02,
+  MAX_POSITION_PCT: 0.2,
+  COOLDOWN_MIN: 1, // Reduced for testing
+  COOLDOWN_MAX: 10,
 };
-
-/**
- * Bot Manager
- * 
- * Rules:
- * 1. Bots are regular users with isBot=true.
- * 2. Bots participate in the market (0-10 bots randomly per session).
- * 3. Bots follow the same trading constraints as users.
- * 4. Safety Caps applied to prevent market manipulation.
- */
 
 export async function spawnBots(count: number) {
   const bots = [];
   for (let i = 0; i < count; i++) {
+    const existing = await prisma.user.findFirst({
+      where: { name: { startsWith: "MarketBot_" } },
+    });
+    // To ensure unique names if many exist, though random substring is robust enough usually
+    const suffix = Math.random().toString(36).substring(7);
     const bot = await prisma.user.create({
       data: {
-        name: `MarketBot_${Math.random().toString(36).substring(7)}`,
+        name: `MarketBot_${suffix}`,
         isBot: true,
         balance: 100000,
         initialBudget: 100000,
@@ -36,161 +31,132 @@ export async function spawnBots(count: number) {
 }
 
 export async function executeBotTrade() {
-  // Pick a random bot
+  // 1. Pick Bot & Creator
   const botCount = await prisma.user.count({ where: { isBot: true } });
-  if (botCount === 0) {
-    await spawnBots(10); // Initial spawn
-  }
+  if (botCount === 0) await spawnBots(10);
 
   const randomBot = await prisma.user.findFirst({
     where: { isBot: true },
     skip: Math.floor(Math.random() * botCount),
-    include: { positions: true } // Need positions for portfolio check
+    include: { positions: true },
   });
-
   if (!randomBot) return;
 
-  // Pick a random creator
-  const creatorCount = await prisma.creator.count({ where: { isActive: true } });
+  const creatorCount = await prisma.creator.count({
+    where: { isActive: true },
+  });
   if (creatorCount === 0) return;
 
   const creator = await prisma.creator.findFirst({
     where: { isActive: true },
     skip: Math.floor(Math.random() * creatorCount),
   });
-
   if (!creator) return;
 
-  // --- SAFETY CHECK 1: Cooldown ---
-  // Check last trade for this bot-creator pair
-  const lastTrade = await prisma.trade.findFirst({
-    where: { userId: randomBot.id, creatorId: creator.id },
-    orderBy: { createdAt: 'desc' }
-  });
-
-  if (lastTrade) {
-    const minutesSinceLast = (Date.now() - lastTrade.createdAt.getTime()) / (1000 * 60);
-    // Random cooldown requirement between 5 and 30 minutes
-    const requiredCooldown = Math.floor(Math.random() * (BOT_CONFIG.COOLDOWN_MAX - BOT_CONFIG.COOLDOWN_MIN + 1)) + BOT_CONFIG.COOLDOWN_MIN;
-    
-    if (minutesSinceLast < requiredCooldown) {
-      console.log(`Bot ${randomBot.name} skipping ${creator.name} (Cooldown: ${minutesSinceLast.toFixed(1)} < ${requiredCooldown}m)`);
-      return;
-    }
-  }
-
-  // --- STRATEGY: Random/Momentum (No FV) ---
-  const tradeType = Math.random() < 0.6 ? 'BUY' : 'SELL'; // Slightly bias towards BUY for activity
-  
-  // Calculate max allowable trade amount
-  const maxTradeByBalance = randomBot.balance * BOT_CONFIG.TRADE_AMOUNT_PCT;
-  const maxTradeAmount = Math.min(maxTradeByBalance, BOT_CONFIG.MAX_TRADE_AMOUNT_CAP);
-  
-  // Determine quantity based on price
-  // Ensure at least 1 share or min trade unit
-  let quantity = Math.floor(maxTradeAmount / creator.currentPrice);
-  if (quantity < 1) quantity = 1;
-
-  // Cap quantity randomly to vary trade sizes (1 to calculated max)
-  quantity = Math.floor(Math.random() * quantity) + 1;
+  // 2. Decide Strategy: Maker (Liquidity) vs Taker (Active)
+  const isMaker = Math.random() < 0.7; // 70% chance to place passive limit order
 
   try {
-    await prisma.$transaction(async (tx: any) => {
-      const cost = quantity * creator.currentPrice;
+    const currentPrice = creator.currentPrice;
 
-      if (tradeType === 'BUY') {
-        if (randomBot.balance < cost) return;
+    if (isMaker) {
+      // --- MAKER STRATEGY ---
+      // Place orders around the current price to build the book
+      // Spread: 1% to 10% away
+      const side = Math.random() < 0.5 ? "BUY" : "SELL";
+      const spread = 0.01 + Math.random() * 0.09;
 
-        // --- SAFETY CHECK 2: Portfolio Allocation ---
-        // Verify this position won't exceed 20% of total portfolio value
-        // Total Value approx = Balance + Sum(Pos * MP)
-        // For simplicity, we check if (CurrentPos + NewTrade) > Total * 0.2
-        // If strict portfolio calc is expensive, we can just cap Position Value vs InitialBudget or Balance
-        
-        const currentPos = randomBot.positions.find(p => p.creatorId === creator.id);
-        const currentPosValue = (currentPos?.quantity || 0) * creator.currentPrice;
-        const projectedPosValue = currentPosValue + cost;
-        
-        // Approximate Total Value (using initial budget is a safe baseline, or current balance + positions)
-        // For speed, let's use a conservative estimate: Balance + CurrentPosValue
-        // A better check: projectedPosValue should not be > (Balance + AllPos) * 0.2
-        // We will use a simpler proxy: projectedPosValue shouldn't exceed 20% of InitialBudget for now to keep bots safer
-        // Or better: shouldn't exceed 20% of current available capital + holdings.
-        
-        // Let's use: Max Position Value = 20,000 (20% of 100k)
-        if (projectedPosValue > (randomBot.initialBudget * BOT_CONFIG.MAX_POSITION_PCT)) {
-           console.log(`Bot ${randomBot.name} skipped BUY ${creator.name} (Max Pos Limit)`);
-           return;
+      let price =
+        side === "BUY"
+          ? currentPrice * (1 - spread)
+          : currentPrice * (1 + spread);
+
+      price = Math.round(price);
+      if (price < 1) price = 1;
+
+      // Quantity logic
+      const balanceToUse = randomBot.balance * 0.05; // Use 5% of balance for makers
+      const quantity = Math.max(1, Math.floor(balanceToUse / price));
+
+      if (side === "SELL") {
+        // Check if bot has shares to sell
+        const pos = randomBot.positions.find((p) => p.creatorId === creator.id);
+        if (!pos || pos.quantity < 1) {
+          // Can't sell what we don't have. Switch to BUY or skip.
+          // Let's Skip to avoid error spam
+          return;
         }
-
-        // Execute BUY
-        const newPrice = calculateNewPrice(creator.currentPrice, cost, 'BUY', creator.liquidity);
-        
-        await tx.trade.create({
-          data: { userId: randomBot.id, creatorId: creator.id, type: 'BUY', quantity, price: creator.currentPrice }
-        });
-
-        if (currentPos) {
-          await tx.position.update({
-            where: { id: currentPos.id },
-            data: { 
-              quantity: currentPos.quantity + quantity,
-              avgPrice: (currentPos.avgPrice * currentPos.quantity + cost) / (currentPos.quantity + quantity)
-            }
-          });
-        } else {
-          await tx.position.create({
-            data: { userId: randomBot.id, creatorId: creator.id, quantity, avgPrice: creator.currentPrice }
-          });
-        }
-
-        await tx.user.update({
-          where: { id: randomBot.id },
-          data: { balance: randomBot.balance - cost }
-        });
-
-        await tx.creator.update({
-          where: { id: creator.id },
-          data: { currentPrice: newPrice }
-        });
-        
-        console.log(`Bot ${randomBot.name} BUY ${creator.name}: ${quantity} @ ${creator.currentPrice} -> ${newPrice}`);
-
+        // Cap quantity to owned
+        const sellQty = Math.min(quantity, pos.quantity);
+        await placeOrder(
+          randomBot.id,
+          creator.id,
+          "SELL",
+          price,
+          sellQty,
+          "LIMIT"
+        );
+        console.log(`Bot ${randomBot.name} MAKER SELL: ${sellQty} @ ${price}`);
       } else {
-        // SELL
-        const currentPos = randomBot.positions.find(p => p.creatorId === creator.id);
-        if (!currentPos || currentPos.quantity < quantity) return;
-
-        const proceeds = quantity * creator.currentPrice;
-        const newPrice = calculateNewPrice(creator.currentPrice, proceeds, 'SELL', creator.liquidity);
-
-        await tx.trade.create({
-          data: { userId: randomBot.id, creatorId: creator.id, type: 'SELL', quantity, price: creator.currentPrice }
-        });
-
-        if (currentPos.quantity === quantity) {
-          await tx.position.delete({ where: { id: currentPos.id } });
-        } else {
-          await tx.position.update({
-            where: { id: currentPos.id },
-            data: { quantity: currentPos.quantity - quantity }
-          });
-        }
-
-        await tx.user.update({
-          where: { id: randomBot.id },
-          data: { balance: randomBot.balance + proceeds }
-        });
-
-        await tx.creator.update({
-          where: { id: creator.id },
-          data: { currentPrice: newPrice }
-        });
-        
-        console.log(`Bot ${randomBot.name} SELL ${creator.name}: ${quantity} @ ${creator.currentPrice} -> ${newPrice}`);
+        // BUY
+        await placeOrder(
+          randomBot.id,
+          creator.id,
+          "BUY",
+          price,
+          quantity,
+          "LIMIT"
+        );
+        console.log(`Bot ${randomBot.name} MAKER BUY: ${quantity} @ ${price}`);
       }
-    });
+    } else {
+      // --- TAKER STRATEGY ---
+      // Cross the spread!
+      // If we want to BUY, we pay slightly MORE than current price to match existing sells.
+      // If we want to SELL, we ask slightly LESS.
+
+      const side = Math.random() < 0.55 ? "BUY" : "SELL"; // Slight buy bias
+      const aggro = 0.02; // 2% aggressive crossing
+
+      let price =
+        side === "BUY"
+          ? currentPrice * (1 + aggro)
+          : currentPrice * (1 - aggro);
+
+      price = Math.round(price);
+      if (price < 1) price = 1;
+
+      // Quantity
+      const maxTradeVal = 2000;
+      let quantity = Math.floor(maxTradeVal / price);
+      quantity = Math.floor(Math.random() * quantity) + 1;
+
+      if (side === "SELL") {
+        const pos = randomBot.positions.find((p) => p.creatorId === creator.id);
+        if (!pos || pos.quantity < 1) return;
+        const sellQty = Math.min(quantity, pos.quantity);
+        await placeOrder(
+          randomBot.id,
+          creator.id,
+          "SELL",
+          price,
+          sellQty,
+          "LIMIT"
+        ); // Limit acting as Market if prices match
+        console.log(`Bot ${randomBot.name} TAKER SELL: ${sellQty} @ ${price}`);
+      } else {
+        await placeOrder(
+          randomBot.id,
+          creator.id,
+          "BUY",
+          price,
+          quantity,
+          "LIMIT"
+        );
+        console.log(`Bot ${randomBot.name} TAKER BUY: ${quantity} @ ${price}`);
+      }
+    }
   } catch (error) {
-    console.error(`Bot trade error:`, error);
+    // console.error("Bot trade failed:", error); // Suppress expected errors like "Insufficient balance"
   }
 }

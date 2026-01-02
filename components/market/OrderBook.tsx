@@ -5,9 +5,17 @@ import { useLanguage } from "@/lib/LanguageContext";
 
 interface OrderBookProps {
   currentPrice: number;
+  liquidity: number;
+  asks?: { price: number; quantity: number }[];
+  bids?: { price: number; quantity: number }[];
 }
 
-export function OrderBook({ currentPrice }: OrderBookProps) {
+export function OrderBook({
+  currentPrice,
+  liquidity,
+  asks: propAsks,
+  bids: propBids,
+}: OrderBookProps) {
   const { t } = useLanguage();
   const [mounted, setMounted] = useState(false);
 
@@ -15,35 +23,63 @@ export function OrderBook({ currentPrice }: OrderBookProps) {
     setMounted(true);
   }, []);
 
-  // Generate mock order book data based on currentPrice
-  // Only generate after mount to avoid hydration mismatch due to Math.random()
+  const k = 0.1; // Consistent with lib/market.ts
+
+  // Generate simulated order book data based on currentPrice and liquidity
   const { asks, bids } = useMemo(() => {
     if (!mounted) {
       return { asks: [], bids: [] };
     }
 
+    // Use Real Data if provided
+    if (propAsks && propBids) {
+      return { asks: propAsks, bids: propBids };
+    }
+
     const askList = [];
     const bidList = [];
     const spreadCount = 8;
-    const step = Math.max(1, Math.floor(currentPrice * 0.005)); // 0.5% steps
+    const safeLiquidity = Math.max(liquidity || 0, 1000);
+
+    // Each level represents a 0.5% price movement roughly
+    const stepPct = 0.005;
 
     for (let i = spreadCount; i >= 1; i--) {
+      const price = currentPrice * (1 + i * stepPct);
+      // How much trade value would cause this impact?
+      // impact = (k * tradeValue) / liquidity -> tradeValue = (impact * liquidity) / k
+      const impact = i * stepPct;
+      const tradeValue = (impact * safeLiquidity) / k;
+
+      // Add +/- 20% random noise to the quantity to make it look "real"
+      const noise = 0.8 + Math.random() * 0.4;
+      const quantity = (tradeValue / price) * noise;
+
       askList.push({
-        price: currentPrice + i * step,
-        quantity: Math.floor(Math.random() * 5000) + 100,
+        price: Math.round(price),
+        quantity: Number(quantity.toFixed(2)),
       });
     }
 
     for (let i = 1; i <= spreadCount; i++) {
+      const price = currentPrice * (1 - i * stepPct);
+      const impact = i * stepPct;
+      const tradeValue = (impact * safeLiquidity) / k;
+
+      const noise = 0.8 + Math.random() * 0.4;
+      const quantity = (tradeValue / price) * noise;
+
       bidList.push({
-        price: Math.max(1, currentPrice - i * step),
-        quantity: Math.floor(Math.random() * 5000) + 100,
+        price: Math.max(1, Math.round(price)),
+        quantity: Number(quantity.toFixed(2)),
       });
     }
 
-    return { asks: askList, bids: bidList };
-  }, [currentPrice, mounted]);
-
+    return {
+      asks: askList.sort((a, b) => a.price - b.price), // Lowest price first for asks (standard)
+      bids: bidList.sort((a, b) => b.price - a.price), // Highest price first for bids (standard)
+    };
+  }, [currentPrice, liquidity, mounted, propAsks, propBids]);
   const maxQty = useMemo(() => {
     const all = [...asks, ...bids].map((o) => o.quantity);
     return Math.max(...all, 1); // Prevent division by zero

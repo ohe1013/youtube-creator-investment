@@ -37,18 +37,37 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   };
 
   const t = (key: string): string => {
-    const keys = key.split(".");
-    let result: any = locales[locale];
+    const localeData = locales[locale];
 
-    for (const k of keys) {
-      if (result && result[k]) {
-        result = result[k];
-      } else {
-        return key; // Fallback to key if not found
+    // 1. Try exact path if it has dots
+    if (key.includes(".")) {
+      const keys = key.split(".");
+      let result: any = localeData;
+      for (const k of keys) {
+        if (result && result[k]) {
+          result = result[k];
+        } else {
+          result = undefined;
+          break;
+        }
+      }
+      if (typeof result === "string") return result;
+    }
+
+    // 2. Try flat search (if not found or if no dot provided)
+    // We check common, then market, then channel for priority
+    const namespaces = ["common", "market", "channel"] as const;
+    const searchKey = key.includes(".") ? key.split(".").pop()! : key;
+
+    for (const ns of namespaces) {
+      const nsData = (localeData as any)[ns];
+      if (nsData && nsData[searchKey]) {
+        return nsData[searchKey];
       }
     }
 
-    return result as string;
+    // 3. Last fallback: return the last segment of the key
+    return searchKey;
   };
 
   return (
