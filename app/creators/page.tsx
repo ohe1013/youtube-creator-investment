@@ -21,7 +21,9 @@ interface PaginationInfo {
   totalPages: number;
 }
 
-export default function CreatorsPage() {
+import { Suspense } from "react";
+
+function CreatorsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -244,5 +246,13 @@ export default function CreatorsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CreatorsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <CreatorsContent />
+    </Suspense>
   );
 }

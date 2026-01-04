@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { TradeType, OrderType, OrderStatus } from "@prisma/client";
+import { TradeType, OrderType, OrderStatus, Prisma } from "@prisma/client";
 
 /**
  * Places a new order and attempts to match it immediately.
@@ -13,7 +13,7 @@ export async function placeOrder(
   orderType: OrderType = "LIMIT"
 ) {
   // Use a transaction to ensure integrity
-  return await prisma.$transaction(async (tx) => {
+  return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // 1. Asset Verification
     if (side === "BUY") {
       const user = await tx.user.findUnique({ where: { id: userId } });
@@ -69,7 +69,7 @@ export async function placeOrder(
 /**
  * Matches an order against the order book.
  */
-async function matchOrder(tx: any, orderId: string) {
+async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
   const order = await tx.order.findUnique({ where: { id: orderId } });
   if (!order || order.status === "FILLED" || order.status === "CANCELLED")
     return;
