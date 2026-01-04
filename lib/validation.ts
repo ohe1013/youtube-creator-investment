@@ -4,6 +4,8 @@ import { z } from "zod";
 export const tradeSchema = z.object({
   creatorId: z.string().cuid(),
   quantity: z.number().positive().max(10000, "Maximum quantity is 10,000"),
+  orderType: z.enum(["MARKET", "LIMIT"]).default("MARKET"),
+  limitPrice: z.number().positive().optional(),
 });
 
 export type TradeInput = z.infer<typeof tradeSchema>;

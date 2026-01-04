@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { creatorId, quantity } = validationResult.data;
+    const { creatorId, quantity, orderType, limitPrice } = validationResult.data;
 
     // Execute sell transaction
     const result = await prisma.$transaction(async (tx: any) => {
@@ -73,6 +73,13 @@ export async function POST(request: NextRequest) {
 
       if (!creator) {
         throw new Error("Creator not found");
+      }
+
+      // Check Limit Price condition
+      if (orderType === "LIMIT" && limitPrice && creator.currentPrice < limitPrice) {
+        throw new Error(
+          `Current price (${creator.currentPrice}) is lower than your limit price (${limitPrice})`
+        );
       }
 
       // Calculate proceeds (using current price)

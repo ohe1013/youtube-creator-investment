@@ -142,12 +142,49 @@ export default async function MarketPage({
       orderBy: { date: "asc" },
     });
 
-    // 8. Fetch Recent Videos (for CreatorInfo Content)
     const videos = await prisma.video.findMany({
       where: { creatorId: selectedCreator.id },
       orderBy: { publishedAt: "desc" },
       take: 10,
     });
+
+    // 9. Fetch Order Book Data
+    let orderBook: { asks: { price: number; quantity: number }[]; bids: { price: number; quantity: number }[] } = { asks: [], bids: [] };
+    
+    // Check if Order model exists (it might not if generation failed or schema is old)
+    if ((prisma as any).order) {
+      const activeOrders = await (prisma as any).order.findMany({
+        where: { 
+          creatorId: selectedCreator.id, 
+          status: { in: ["OPEN", "PARTIAL"] } 
+        },
+        select: { type: true, price: true, quantity: true, filled: true },
+      });
+
+      const askMap = new Map<number, number>();
+      const bidMap = new Map<number, number>();
+
+      activeOrders.forEach((o: any) => {
+        const remaining = o.quantity - o.filled;
+        if (remaining <= 0) return;
+
+        if (o.type === "SELL") {
+          askMap.set(o.price, (askMap.get(o.price) || 0) + remaining);
+        } else {
+          bidMap.set(o.price, (bidMap.get(o.price) || 0) + remaining);
+        }
+      });
+
+      const asks = Array.from(askMap.entries())
+        .map(([price, quantity]) => ({ price, quantity }))
+        .sort((a, b) => a.price - b.price);
+
+      const bids = Array.from(bidMap.entries())
+        .map(([price, quantity]) => ({ price, quantity }))
+        .sort((a, b) => b.price - a.price);
+        
+      orderBook = { asks, bids };
+    }
 
     return (
       <main className="h-[calc(100vh-56px)] bg-background text-foreground flex flex-col overflow-hidden">
@@ -161,6 +198,7 @@ export default async function MarketPage({
           }}
           historyStats={historyStats}
           videos={videos}
+          orderBook={orderBook}
           chartData={chartData}
           trades={trades}
           creators={creators}

@@ -15,6 +15,7 @@ interface MarketDashboardProps {
   stats: any;
   historyStats?: any[]; // For CreatorInfo
   videos?: any[]; // For CreatorInfo
+  orderBook?: { asks: any[]; bids: any[] }; // Real OrderBook Data
   chartData: any[];
   trades: any[];
   creators: any[];
@@ -27,6 +28,7 @@ export function MarketDashboard({
   stats,
   historyStats = [],
   videos = [],
+  orderBook = { asks: [], bids: [] },
   chartData,
   trades,
   creators,
@@ -150,6 +152,8 @@ export function MarketDashboard({
                   <OrderBook
                     currentPrice={selectedCreator.currentPrice}
                     liquidity={selectedCreator.liquidity}
+                    asks={orderBook.asks}
+                    bids={orderBook.bids}
                   />
                 ) : (
                   <RecentTrades trades={trades} />

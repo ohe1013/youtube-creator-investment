@@ -30,6 +30,10 @@ export function OrderForm({
     setLimitPrice(currentPrice.toString());
   }, [currentPrice]);
 
+  useEffect(() => {
+    setAmount("0");
+  }, [tab]);
+
   const price =
     orderType === "MARKET" ? currentPrice : parseFloat(limitPrice) || 0;
   const quantity = parseFloat(amount) || 0;
@@ -180,6 +184,9 @@ export function OrderForm({
                   body: JSON.stringify({
                     creatorId,
                     quantity: parseFloat(amount),
+                    orderType,
+                    limitPrice:
+                      orderType === "LIMIT" ? parseFloat(limitPrice) : undefined,
                   }),
                 });
                 const data = await res.json();
