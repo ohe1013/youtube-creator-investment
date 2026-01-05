@@ -3,93 +3,70 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const userId = (session.user as any).id;
+
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions);
-
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const userId = session.user.id;
-
-    // Get user data
+    // 1. User Balance
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        balance: true,
-        initialBudget: true,
-      },
+      select: { balance: true },
     });
 
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    // Get all positions with creator data
+    // 2. Positions (Holdings)
     const positions = await prisma.position.findMany({
-      where: { userId },
+      where: { userId, quantity: { gt: 0 } },
       include: {
         creator: {
           select: {
             id: true,
             name: true,
-            thumbnailUrl: true,
-            category: true,
             currentPrice: true,
-            currentScore: true,
-            youtubeChannelId: true,
+            thumbnailUrl: true,
           },
         },
       },
     });
 
-    // Calculate portfolio metrics
-    let totalPositionValue = 0;
-    const positionsWithMetrics = positions.map((position) => {
-      const currentValue = position.quantity * position.creator.currentPrice;
-      const costBasis = position.quantity * position.avgPrice;
-      const profitLoss = currentValue - costBasis;
-      const profitLossPercent = (profitLoss / costBasis) * 100;
-
-      totalPositionValue += currentValue;
-
-      return {
-        id: position.id,
-        creator: position.creator,
-        quantity: position.quantity,
-        avgPrice: position.avgPrice,
-        currentPrice: position.creator.currentPrice,
-        currentValue,
-        costBasis,
-        profitLoss,
-        profitLossPercent,
-      };
+    // 3. Open Orders (Limit Orders)
+    const openOrders = await prisma.order.findMany({
+      where: {
+        userId,
+        status: { in: ["OPEN", "PARTIAL"] },
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        creator: { select: { id: true, name: true } },
+      },
     });
 
-    const totalAssets = user.balance + totalPositionValue;
-    const totalProfitLoss = totalAssets - user.initialBudget;
-    const totalProfitLossPercent = (totalProfitLoss / user.initialBudget) * 100;
+    // 4. Trade History
+    const trades = await prisma.trade.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: {
+        creator: { select: { id: true, name: true } },
+      },
+    });
 
     return NextResponse.json({
-      portfolio: {
-        balance: user.balance,
-        totalPositionValue,
-        totalAssets,
-        totalProfitLoss,
-        totalProfitLossPercent,
-        initialBudget: user.initialBudget,
-      },
-      positions: positionsWithMetrics,
+      balance: user?.balance || 0,
+      positions,
+      openOrders,
+      trades,
     });
   } catch (error) {
-    console.error("Portfolio error:", error);
+    console.error("Portfolio Fetch Error:", error);
     return NextResponse.json(
-      {
-        error: "Internal server error",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
+      { error: "Internal Server Error" },
       { status: 500 }
     );
   }

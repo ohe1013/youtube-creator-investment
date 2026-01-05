@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
+import { useSession } from "next-auth/react";
 
 interface OrderFormProps {
   creatorId: string;
@@ -26,6 +27,8 @@ export function OrderForm({
   const [limitPrice, setLimitPrice] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const { t } = useLanguage();
+  const { update } = useSession();
+
   useEffect(() => {
     setLimitPrice(currentPrice.toString());
   }, [currentPrice]);
@@ -176,29 +179,38 @@ export function OrderForm({
               if (loading || total <= 0) return;
               setLoading(true);
               try {
-                const endpoint =
-                  tab === "BUY" ? "/api/trade/buy" : "/api/trade/sell";
-                const res = await fetch(endpoint, {
+                // Unified CLOB Trade API
+                const res = await fetch("/api/trade", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     creatorId,
+                    side: tab, // "BUY" | "SELL"
+                    orderType, // "LIMIT" | "MARKET"
+                    price, // Limit Price
                     quantity: parseFloat(amount),
-                    orderType,
-                    limitPrice:
-                      orderType === "LIMIT" ? parseFloat(limitPrice) : undefined,
                   }),
                 });
                 const data = await res.json();
 
-                if (!res.ok) throw new Error(data.error || "Trade Failed");
+                if (!res.ok) throw new Error(data.error || "Order Failed");
 
-                alert(`Success: ${data.message || "Trade executed"}`);
+                // Alert specific message based on what happened (Filled vs Placed)
+                const isFilled = data.order?.status === "FILLED";
+                const msg = isFilled
+                  ? `Trade Executed: ${tab} ${amount} shares @ ${data.order.price}`
+                  : `Order Placed: ${tab} ${amount} shares @ ${price}`;
+
+                alert(msg);
+
+                // Refresh session to update Navbar balance
+                await update?.();
+
                 setAmount("");
                 window.location.reload();
               } catch (e) {
                 console.error(e);
-                alert(e instanceof Error ? e.message : "Trade Failed");
+                alert(e instanceof Error ? e.message : "Order Failed");
               } finally {
                 setLoading(false);
               }

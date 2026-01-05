@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { CreatorInfo } from "@/components/market/CreatorInfo";
 import { OrderBook } from "@/components/market/OrderBook";
@@ -64,6 +65,7 @@ interface HistoryPoint {
 
 export default function CreatorDetailPage() {
   const { id } = useParams();
+  const { update } = useSession();
   const [creator, setCreator] = useState<Creator | null>(null);
   const [stats, setStats] = useState<CreatorStat[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
@@ -212,6 +214,10 @@ export default function CreatorDetailPage() {
       if (!res.ok) throw new Error(data.error || "Trade failed");
 
       alert(`Order Placed: ${side} ${inputQuantity} @ ${p}`);
+
+      // Update session to reflect balance change in Navbar
+      await update?.();
+
       setInputQuantity("");
     } catch (e: any) {
       alert(e.message);

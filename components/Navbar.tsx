@@ -45,7 +45,7 @@ export default function Navbar() {
                 {t("common.creators")}
               </Link>
               <Link
-                href="/rankings"
+                href="/dashboard"
                 className="text-sm font-medium text-white/90 hover:text-white dark:text-foreground dark:hover:text-primary transition-colors"
               >
                 {t("common.dashboard")}
@@ -180,7 +180,7 @@ export default function Navbar() {
               {t("common.creators")}
             </Link>
             <Link
-              href="/rankings"
+              href="/dashboard"
               className="block text-white/90 dark:text-foreground hover:text-white dark:hover:text-primary py-2"
             >
               {t("common.dashboard")}
