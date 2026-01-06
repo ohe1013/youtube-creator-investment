@@ -66,7 +66,7 @@ async function main() {
         await placeOrder(bot.id, creator.id, "SELL", askPrice, qty, "LIMIT");
         // console.log(`  Deployed ASK: ${qty} @ ${askPrice}`);
       } catch (e) {
-        console.error(`  Failed to sell: ${e.message}`);
+        console.error(`  Failed to sell: ${(e as Error).message}`);
       }
     }
 
@@ -91,7 +91,7 @@ async function main() {
         await placeOrder(bot.id, creator.id, "BUY", bidPrice, qty, "LIMIT");
         // console.log(`  Deployed BID: ${qty} @ ${bidPrice}`);
       } catch (e) {
-        console.error(`  Failed to buy: ${e.message}`);
+        console.error(`  Failed to buy: ${(e as Error).message}`);
       }
     }
     console.log(`  ✅ Seeded orders for ${creator.name}`);
