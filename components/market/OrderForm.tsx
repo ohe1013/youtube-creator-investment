@@ -11,6 +11,11 @@ interface OrderFormProps {
   userQuantity: number; // User's holding of this creator
   onBuy: (amount: number) => Promise<void>;
   onSell: (amount: number) => Promise<void>;
+  externalPriceUpdate?: {
+    price: number;
+    side?: "BUY" | "SELL";
+    timestamp: number;
+  };
 }
 
 export function OrderForm({
@@ -20,6 +25,7 @@ export function OrderForm({
   userQuantity,
   onBuy,
   onSell,
+  externalPriceUpdate,
 }: OrderFormProps) {
   const [tab, setTab] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -31,7 +37,21 @@ export function OrderForm({
 
   useEffect(() => {
     setLimitPrice(currentPrice.toString());
-  }, [currentPrice]);
+    setOrderType("MARKET"); // Reset to MARKET on creator change
+  }, [creatorId, currentPrice]);
+
+  useEffect(() => {
+    if (externalPriceUpdate) {
+      if (externalPriceUpdate.side) {
+        setTab(externalPriceUpdate.side);
+        setLimitPrice(externalPriceUpdate.price.toString());
+        setOrderType("LIMIT");
+      } else {
+        // If side is not provided, it's a current price click -> MARKET
+        setOrderType("MARKET");
+      }
+    }
+  }, [externalPriceUpdate]);
 
   useEffect(() => {
     setAmount("0");

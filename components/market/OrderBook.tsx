@@ -8,6 +8,7 @@ interface OrderBookProps {
   liquidity: number;
   asks?: { price: number; quantity: number }[];
   bids?: { price: number; quantity: number }[];
+  onPriceClick?: (price: number, side?: "BUY" | "SELL") => void;
 }
 
 export function OrderBook({
@@ -15,6 +16,7 @@ export function OrderBook({
   liquidity,
   asks: propAsks,
   bids: propBids,
+  onPriceClick,
 }: OrderBookProps) {
   const { t } = useLanguage();
   const [mounted, setMounted] = useState(false);
@@ -45,7 +47,8 @@ export function OrderBook({
           {asks.map((o, i) => (
             <div
               key={`ask-${i}`}
-              className="relative flex items-center px-4 py-1 text-xs hover:bg-down/5 transition-colors group h-7"
+              onClick={() => onPriceClick?.(o.price, "BUY")}
+              className="relative flex items-center px-4 py-1 text-xs hover:bg-down/10 transition-colors group h-7 cursor-pointer active:bg-down/20"
             >
               {/* Depth Bar */}
               <div
@@ -63,7 +66,10 @@ export function OrderBook({
         </div>
 
         {/* Current Price Divider */}
-        <div className="bg-card/80 border-y border-border-exchange py-1.5 px-4 flex justify-between items-center z-20 shadow-sm relative">
+        <div
+          onClick={() => onPriceClick?.(currentPrice)}
+          className="bg-card/80 border-y border-border-exchange py-1.5 px-4 flex justify-between items-center z-20 shadow-sm relative cursor-pointer hover:bg-card/90 active:bg-card transition-colors"
+        >
           <span className="text-sm font-bold text-primary">
             {currentPrice.toLocaleString()}
           </span>
@@ -77,7 +83,8 @@ export function OrderBook({
           {bids.map((o, i) => (
             <div
               key={`bid-${i}`}
-              className="relative flex items-center px-4 py-1 text-xs hover:bg-up/5 transition-colors group h-7"
+              onClick={() => onPriceClick?.(o.price, "SELL")}
+              className="relative flex items-center px-4 py-1 text-xs hover:bg-up/10 transition-colors group h-7 cursor-pointer active:bg-up/20"
             >
               {/* Depth Bar */}
               <div

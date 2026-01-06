@@ -44,6 +44,10 @@ export function MarketDashboard({
   const [chartTab, setChartTab] = useState<"CHART" | "INFO">("CHART");
   // Secondary Data Area Tab: 'ORDERBOOK' | 'TRADES'
   const [dataTab, setDataTab] = useState<"ORDERBOOK" | "TRADES">("ORDERBOOK");
+  // External Price Update (from OrderBook to OrderForm)
+  const [priceUpdate, setPriceUpdate] = useState<
+    { price: number; side?: "BUY" | "SELL"; timestamp: number } | undefined
+  >();
   const { t } = useLanguage();
 
   return (
@@ -154,6 +158,9 @@ export function MarketDashboard({
                     liquidity={selectedCreator.liquidity}
                     asks={orderBook.asks}
                     bids={orderBook.bids}
+                    onPriceClick={(price, side) =>
+                      setPriceUpdate({ price, side, timestamp: Date.now() })
+                    }
                   />
                 ) : (
                   <RecentTrades trades={trades} />
@@ -172,6 +179,7 @@ export function MarketDashboard({
                 currentPrice={selectedCreator.currentPrice}
                 userBalance={userBalance}
                 userQuantity={userQuantity}
+                externalPriceUpdate={priceUpdate}
                 onBuy={async (amt) => {
                   await fetch("/api/trade/buy", {
                     method: "POST",
