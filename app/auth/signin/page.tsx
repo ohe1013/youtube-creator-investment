@@ -2,8 +2,27 @@
 
 import { signIn } from "next-auth/react";
 import Link from "next/link";
+import { isAppInTossMode } from "@/lib/appintoss-fetch";
 
 export default function SignInPage() {
+  if (isAppInTossMode()) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center px-4">
+        <div className="bg-card rounded-2xl p-8 border border-border-exchange max-w-md w-full text-center">
+          <h1 className="text-3xl font-bold mb-3">CreatorX</h1>
+          <p className="text-muted mb-6">
+            앱인토스에서는 토스 사용자 식별키로 자동 시작됩니다.
+          </p>
+          <Link
+            href="/"
+            className="block w-full px-6 py-3 bg-primary text-background rounded-lg font-semibold"
+          >
+            마켓으로 이동
+          </Link>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-12 border border-white/20 max-w-md w-full mx-4">

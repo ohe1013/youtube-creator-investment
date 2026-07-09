@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -10,6 +10,12 @@ export const metadata: Metadata = {
   title: "YouTube Creator Investment - 숨은 유망주 발굴 플랫폼",
   description:
     "유튜브 크리에이터의 성장을 추적하고 가상 투자 게임을 즐겨보세요",
+};
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({

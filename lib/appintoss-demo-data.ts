@@ -1,0 +1,357 @@
+export type AppInTossCreator = {
+  id: string;
+  youtubeChannelId: string;
+  name: string;
+  thumbnailUrl: string | null;
+  category: string;
+  country: string | null;
+  currentSubs: number;
+  currentViews: number;
+  currentVideos: number;
+  currentScore: number;
+  initialPrice: number;
+  currentPrice: number;
+  totalSupply: number;
+  circulatingSupply: number;
+  reserveSupply: number;
+  liquidity: number;
+  isActive: boolean;
+  visibility: "PUBLIC";
+  avgLikes: number;
+  avgComments: number;
+  engagementRate: number;
+  viewsPerSubs: number;
+  createdAt: string;
+  lastSyncedAt: string;
+  _count?: { videos: number };
+};
+
+const TODAY = "2026-07-09T09:00:00.000Z";
+const TOTAL_SUPPLY = 1_000_000;
+const CIRCULATING_SUPPLY = 200_000;
+
+const creators: AppInTossCreator[] = [
+  {
+    id: "creator-kpop-lab",
+    youtubeChannelId: "UC_appintoss_kpop_lab",
+    name: "K-POP LAB",
+    thumbnailUrl: "/globe.svg",
+    category: "K-POP",
+    country: "KR",
+    currentSubs: 4_820_000,
+    currentViews: 812_000_000,
+    currentVideos: 640,
+    currentScore: 94.8,
+    initialPrice: 1150,
+    currentPrice: 1280,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 135_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 72_000,
+    avgComments: 2_900,
+    engagementRate: 5.8,
+    viewsPerSubs: 42.1,
+    createdAt: "2026-06-11T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-foodie-seoul",
+    youtubeChannelId: "UC_appintoss_foodie_seoul",
+    name: "Foodie Seoul",
+    thumbnailUrl: "/window.svg",
+    category: "Food",
+    country: "KR",
+    currentSubs: 1_760_000,
+    currentViews: 264_000_000,
+    currentVideos: 388,
+    currentScore: 88.2,
+    initialPrice: 730,
+    currentPrice: 860,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 96_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 31_000,
+    avgComments: 1_200,
+    engagementRate: 4.9,
+    viewsPerSubs: 36.7,
+    createdAt: "2026-06-18T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-tech-under10",
+    youtubeChannelId: "UC_appintoss_tech_under10",
+    name: "Tech Under 10",
+    thumbnailUrl: "/file.svg",
+    category: "Tech",
+    country: "KR",
+    currentSubs: 940_000,
+    currentViews: 118_000_000,
+    currentVideos: 221,
+    currentScore: 83.6,
+    initialPrice: 620,
+    currentPrice: 710,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 88_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 18_000,
+    avgComments: 840,
+    engagementRate: 5.1,
+    viewsPerSubs: 29.5,
+    createdAt: "2026-06-25T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-run-day",
+    youtubeChannelId: "UC_appintoss_run_day",
+    name: "Run Day Korea",
+    thumbnailUrl: "/next.svg",
+    category: "Sports",
+    country: "KR",
+    currentSubs: 680_000,
+    currentViews: 91_000_000,
+    currentVideos: 174,
+    currentScore: 79.1,
+    initialPrice: 510,
+    currentPrice: 548,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 72_500,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 12_400,
+    avgComments: 620,
+    engagementRate: 4.2,
+    viewsPerSubs: 24.3,
+    createdAt: "2026-06-29T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-edu-signal",
+    youtubeChannelId: "UC_appintoss_edu_signal",
+    name: "Edu Signal",
+    thumbnailUrl: "/vercel.svg",
+    category: "Education",
+    country: "KR",
+    currentSubs: 520_000,
+    currentViews: 56_000_000,
+    currentVideos: 312,
+    currentScore: 76.4,
+    initialPrice: 430,
+    currentPrice: 496,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 64_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 9_100,
+    avgComments: 410,
+    engagementRate: 3.8,
+    viewsPerSubs: 19.8,
+    createdAt: "2026-07-01T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-vlog-nomad",
+    youtubeChannelId: "UC_appintoss_vlog_nomad",
+    name: "Nomad Vlog",
+    thumbnailUrl: "/globe.svg",
+    category: "Vlog",
+    country: "KR",
+    currentSubs: 410_000,
+    currentViews: 47_000_000,
+    currentVideos: 147,
+    currentScore: 72.9,
+    initialPrice: 360,
+    currentPrice: 422,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 58_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 8_700,
+    avgComments: 560,
+    engagementRate: 5.6,
+    viewsPerSubs: 31.2,
+    createdAt: "2026-07-03T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-beauty-note",
+    youtubeChannelId: "UC_appintoss_beauty_note",
+    name: "Beauty Note",
+    thumbnailUrl: "/window.svg",
+    category: "Beauty",
+    country: "KR",
+    currentSubs: 350_000,
+    currentViews: 39_000_000,
+    currentVideos: 198,
+    currentScore: 70.3,
+    initialPrice: 330,
+    currentPrice: 375,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 51_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 7_200,
+    avgComments: 390,
+    engagementRate: 4.7,
+    viewsPerSubs: 22.4,
+    createdAt: "2026-07-05T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+  {
+    id: "creator-game-meta",
+    youtubeChannelId: "UC_appintoss_game_meta",
+    name: "Game Meta Lab",
+    thumbnailUrl: "/file.svg",
+    category: "Gaming",
+    country: "KR",
+    currentSubs: 290_000,
+    currentViews: 33_000_000,
+    currentVideos: 286,
+    currentScore: 68.8,
+    initialPrice: 300,
+    currentPrice: 342,
+    totalSupply: TOTAL_SUPPLY,
+    circulatingSupply: CIRCULATING_SUPPLY,
+    reserveSupply: TOTAL_SUPPLY - CIRCULATING_SUPPLY,
+    liquidity: 48_000,
+    isActive: true,
+    visibility: "PUBLIC",
+    avgLikes: 6_100,
+    avgComments: 330,
+    engagementRate: 4.4,
+    viewsPerSubs: 21.7,
+    createdAt: "2026-07-07T09:00:00.000Z",
+    lastSyncedAt: TODAY,
+  },
+];
+
+function day(offset: number) {
+  return new Date(Date.UTC(2026, 6, 9 + offset, 9, 0, 0)).toISOString();
+}
+
+function makeStats(creator: AppInTossCreator) {
+  return Array.from({ length: 7 }, (_, index) => {
+    const factor = index - 6;
+    const subs = Math.round(creator.currentSubs * (1 + factor * 0.006));
+    const views = Math.round(creator.currentViews * (1 + factor * 0.009));
+
+    return {
+      id: `${creator.id}-stat-${index}`,
+      creatorId: creator.id,
+      date: day(index - 6),
+      period: "DAILY",
+      subs,
+      views,
+      videos: creator.currentVideos - Math.max(0, 6 - index),
+      dailySubsChange: Math.round(creator.currentSubs * 0.004 + index * 90),
+      dailyViewsChange: Math.round(creator.currentViews * 0.003 + index * 1200),
+      avgLikes: creator.avgLikes,
+      avgComments: creator.avgComments,
+    };
+  });
+}
+
+function makeTrades(creator: AppInTossCreator) {
+  const prices = [0.96, 0.98, 1.01, 0.99, 1.03, 1.02, 1];
+
+  return prices.map((ratio, index) => ({
+    id: `${creator.id}-trade-${index}`,
+    creatorId: creator.id,
+    userId: index % 2 === 0 ? "appintoss-demo-user" : "market-maker",
+    price: Math.round(creator.currentPrice * ratio),
+    quantity: 8 + index * 3,
+    type: index % 2 === 0 ? "BUY" : "SELL",
+    createdAt: day(index - 6),
+  }));
+}
+
+function makeVideos(creator: AppInTossCreator) {
+  return [0, 1, 2].map((index) => ({
+    id: `${creator.id}-video-${index}`,
+    creatorId: creator.id,
+    title: `${creator.name} 성장 분석 ${index + 1}`,
+    thumbnailUrl: creator.thumbnailUrl ?? "/globe.svg",
+    publishedAt: day(-index - 1),
+    duration: index === 0 ? "PT8M12S" : "PT1M04S",
+    type: index === 0 ? "LONG" : "SHORTS",
+    viewCount: Math.round(creator.currentViews * (0.018 - index * 0.004)),
+    likeCount: Math.round(creator.avgLikes * (1 - index * 0.12)),
+    commentCount: Math.round(creator.avgComments * (1 - index * 0.1)),
+  }));
+}
+
+export const appInTossDemoData = {
+  generatedAt: TODAY,
+  creators: creators.map((creator) => ({
+    ...creator,
+    _count: { videos: 3 },
+  })),
+  stats: Object.fromEntries(creators.map((creator) => [creator.id, makeStats(creator)])),
+  videos: Object.fromEntries(creators.map((creator) => [creator.id, makeVideos(creator)])),
+  trades: Object.fromEntries(creators.map((creator) => [creator.id, makeTrades(creator)])),
+  orders: Object.fromEntries(
+    creators.map((creator) => [
+      creator.id,
+      [
+        {
+          id: `${creator.id}-ask-1`,
+          creatorId: creator.id,
+          type: "SELL",
+          price: Math.round(creator.currentPrice * 1.01),
+          quantity: 24,
+          filled: 0,
+          status: "OPEN",
+          createdAt: day(-1),
+        },
+        {
+          id: `${creator.id}-ask-2`,
+          creatorId: creator.id,
+          type: "SELL",
+          price: Math.round(creator.currentPrice * 1.025),
+          quantity: 42,
+          filled: 0,
+          status: "OPEN",
+          createdAt: day(-1),
+        },
+        {
+          id: `${creator.id}-bid-1`,
+          creatorId: creator.id,
+          type: "BUY",
+          price: Math.round(creator.currentPrice * 0.99),
+          quantity: 31,
+          filled: 0,
+          status: "OPEN",
+          createdAt: day(-1),
+        },
+        {
+          id: `${creator.id}-bid-2`,
+          creatorId: creator.id,
+          type: "BUY",
+          price: Math.round(creator.currentPrice * 0.975),
+          quantity: 55,
+          filled: 0,
+          status: "OPEN",
+          createdAt: day(-1),
+        },
+      ],
+    ])
+  ),
+};
+
+export type AppInTossDemoData = typeof appInTossDemoData;

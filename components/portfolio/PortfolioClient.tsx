@@ -52,6 +52,19 @@ export function PortfolioClient() {
     return (
       <div className="p-8 text-center">{t("channel.collectingData")}...</div>
     );
+  if (!data) {
+    return (
+      <div className="p-8 text-center text-muted">
+        <p className="mb-4">포트폴리오를 불러올 수 없습니다.</p>
+        <Link
+          href="/auth/signin"
+          className="inline-block px-4 py-2 rounded bg-primary text-background font-bold"
+        >
+          로그인하기
+        </Link>
+      </div>
+    );
+  }
 
   const totalAssetsValue =
     data.balance +

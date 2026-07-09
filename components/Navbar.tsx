@@ -2,21 +2,70 @@
 
 import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import { useLanguage } from "@/lib/LanguageContext";
+import { isAppInTossMode } from "@/lib/appintoss-fetch";
+function subscribeToHydration(onStoreChange: () => void) {
+  const timer = window.setTimeout(onStoreChange, 0);
+  return () => window.clearTimeout(timer);
+}
+
+function getClientHydrationSnapshot() {
+  return true;
+}
+
+function getServerHydrationSnapshot() {
+  return false;
+}
+
+function getSessionBalance(user: unknown) {
+  if (user && typeof user === "object" && "balance" in user) {
+    const balance = (user as { balance?: unknown }).balance;
+    return typeof balance === "number" ? balance : 0;
+  }
+
+  return 0;
+}
+
 
 export default function Navbar() {
   const { data: session, status } = useSession();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { theme, setTheme } = useTheme();
   const { locale, setLocale, t } = useLanguage();
-  const [mounted, setMounted] = useState(false);
-
-  // Avoid hydration mismatch
+  const mounted = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
+  const appInTossMode = isAppInTossMode();
+  const [appInTossBalance, setAppInTossBalance] = useState(0);
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    if (!appInTossMode) return;
+
+    let cancelled = false;
+
+    async function loadPortfolioSummary() {
+      try {
+        const res = await fetch("/api/portfolio");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setAppInTossBalance(data.balance || 0);
+      } catch {
+        // Portfolio summary is optional in browser previews.
+      }
+    }
+
+    loadPortfolioSummary();
+    const interval = window.setInterval(loadPortfolioSummary, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [appInTossMode]);
+
 
   if (!mounted) {
     return (
@@ -56,6 +105,7 @@ export default function Navbar() {
           {/* Actions */}
           <div className="flex items-center space-x-4">
             {/* Theme Toggle */}
+            {!appInTossMode && (
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               className="p-2 rounded-lg hover:bg-white/10 dark:hover:bg-card transition-colors text-white dark:text-foreground"
@@ -91,6 +141,7 @@ export default function Navbar() {
                 </svg>
               )}
             </button>
+            )}
 
             {/* Language Toggle */}
             <button
@@ -102,7 +153,19 @@ export default function Navbar() {
 
             {/* Desktop User Actions */}
             <div className="hidden md:flex items-center space-x-6 h-14">
-              {status === "authenticated" ? (
+              {appInTossMode ? (
+                <Link
+                  href="/portfolio"
+                  className="flex items-center space-x-2 text-sm text-white/90 hover:text-white dark:text-foreground dark:hover:text-primary transition-colors"
+                >
+                  <span className="text-white/60 dark:text-muted">
+                    {t("common.balance")}:
+                  </span>
+                  <span className="font-bold text-white dark:text-up mono">
+                    {appInTossBalance.toLocaleString()} P
+                  </span>
+                </Link>
+              ) : status === "authenticated" ? (
                 <>
                   <Link
                     href="/portfolio"
@@ -112,7 +175,7 @@ export default function Navbar() {
                       {t("common.balance")}:
                     </span>
                     <span className="font-bold text-white dark:text-up mono">
-                      {(session.user as any)?.balance?.toLocaleString() || 0} P
+                      {getSessionBalance(session?.user).toLocaleString()} P
                     </span>
                   </Link>
                   <div className="h-4 w-px bg-white/20 dark:bg-border-exchange" />
@@ -185,11 +248,20 @@ export default function Navbar() {
             >
               {t("common.dashboard")}
             </Link>
-            {status === "authenticated" ? (
+            {appInTossMode ? (
+              <div className="space-y-4 pt-4 border-t border-white/10 dark:border-border-exchange">
+                <Link
+                  href="/portfolio"
+                  className="block text-white dark:text-foreground font-bold"
+                >
+                  {t("common.balance")}: {appInTossBalance.toLocaleString()} P
+                </Link>
+              </div>
+            ) : status === "authenticated" ? (
               <div className="space-y-4 pt-4 border-t border-white/10 dark:border-border-exchange">
                 <div className="block text-white dark:text-foreground font-bold">
                   {t("common.balance")}:{" "}
-                  {(session.user as any)?.balance?.toLocaleString()} P
+                  {getSessionBalance(session?.user).toLocaleString()} P
                 </div>
                 <button
                   onClick={() => signOut()}

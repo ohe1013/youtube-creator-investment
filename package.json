@@ -4,13 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:appintoss": "node scripts/appintoss-dev.mjs",
     "build": "next build",
+    "build:appintoss": "node scripts/appintoss-build.mjs",
     "start": "next start",
     "lint": "eslint",
     "postinstall": "prisma generate"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.1",
+    "@apps-in-toss/web-framework": "^2.0.0",
     "@prisma/client": "^5.21.1",
     "date-fns": "^4.1.0",
     "lightweight-charts": "^5.1.0",
