@@ -3,24 +3,19 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { MarketDashboard } from "@/components/market/MarketDashboard";
-import type { AppInTossCreator } from "@/lib/appintoss-demo-data";
+import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
+import type {
+  CreatorStat,
+  CreatorSummary,
+  CreatorVideo,
+  HistoryPoint,
+  OrderBook as CreatorXOrderBook,
+  Portfolio,
+  Trade,
+} from "@/lib/data/contracts";
 
-type Creator = AppInTossCreator;
-type PriceLevel = { price: number; quantity: number };
+type Creator = CreatorSummary;
 type ChartPoint = { date: string; price: number; volume: number };
-type ChartSourcePoint = {
-  date: string | Date;
-  price: number;
-  volume?: number;
-  quantity?: number;
-};
-type TradeResponse = {
-  id: string;
-  price: number;
-  quantity?: number;
-  type: "BUY" | "SELL";
-  createdAt: string;
-};
 type RecentTrade = {
   id: string;
   price: number;
@@ -28,16 +23,6 @@ type RecentTrade = {
   type: "BUY" | "SELL";
   time: string;
 };
-type PortfolioPosition = { creatorId: string; quantity: number };
-type PortfolioResponse = { balance?: number; positions?: PortfolioPosition[] };
-type CreatorsResponse = { creators?: Creator[] };
-type HistoryResponse = { history?: ChartSourcePoint[] };
-type TradesResponse = { trades?: TradeResponse[] };
-type StatsResponse = { stats?: unknown[] };
-type VideosResponse = { videos?: unknown[] };
-type OrderBookResponse = { asks?: PriceLevel[]; bids?: PriceLevel[] };
-
-
 type LoadState = {
   selectedCreator: Creator;
   creators: Creator[];
@@ -47,23 +32,20 @@ type LoadState = {
     vol24h: number;
     change24h: number;
   };
-  historyStats: unknown[];
-  videos: unknown[];
-  orderBook: { asks: PriceLevel[]; bids: PriceLevel[] };
+  historyStats: CreatorStat[];
+  videos: Array<CreatorVideo & { thumbnailUrl: string }>;
+  orderBook: CreatorXOrderBook;
   chartData: ChartPoint[];
   trades: RecentTrade[];
   userBalance: number;
   userQuantity: number;
 };
 
-function toChartPoint(point: ChartSourcePoint): ChartPoint {
+function toChartPoint(point: HistoryPoint): ChartPoint {
   return {
-    date:
-      typeof point.date === "string"
-        ? point.date
-        : new Date(point.date).toISOString(),
+    date: point.date,
     price: point.price,
-    volume: point.volume ?? (point.quantity ?? 0) * point.price,
+    volume: point.volume,
   };
 }
 
@@ -92,112 +74,126 @@ function calculateStats(selectedCreator: Creator | null, history: ChartPoint[]) 
 function MarketPageContent() {
   const searchParams = useSearchParams();
   const ticker = searchParams.get("ticker");
+  const client = useCreatorXDataClient();
   const [state, setState] = useState<LoadState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+
+    const optional = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await promise;
+      } catch {
+        return fallback;
+      }
+    };
 
     async function loadMarket() {
       try {
         setError(null);
-        const creatorsResponse = await fetch("/api/creators?sort=subs&limit=50");
-        if (!creatorsResponse.ok) {
-          throw new Error("Failed to load creators");
-        }
-
-        const creatorsData = (await creatorsResponse.json()) as CreatorsResponse;
-        const creators = creatorsData.creators || [];
+        const creatorsData = await client.listCreators(
+          { sort: "subs", limit: 50 },
+          { signal: controller.signal },
+        );
+        const creators = creatorsData.creators;
         const selectedCreator =
           creators.find((creator) => creator.id === ticker) || creators[0];
 
         if (!selectedCreator) {
-          if (!cancelled) {
-            setState(null);
-          }
+          if (!controller.signal.aborted) setState(null);
           return;
         }
 
-        const [historyRes, tradesRes, statsRes, videosRes, orderBookRes, portfolioRes] =
+        const [history, trades, statsData, videos, orderBook, portfolio] =
           await Promise.all([
-            fetch(`/api/creators/${selectedCreator.id}?history=true&days=7`),
-            fetch(`/api/creators/${selectedCreator.id}?trades=true`),
-            fetch(`/api/creators/${selectedCreator.id}?stats=true&days=90`),
-            fetch(`/api/creators/${selectedCreator.id}?videos=true`),
-            fetch(`/api/creators/${selectedCreator.id}?orderbook=true`),
-            fetch("/api/portfolio"),
+            optional(
+              client.getCreatorHistory(
+                selectedCreator.id,
+                { days: 7 },
+                { signal: controller.signal },
+              ),
+              [] as HistoryPoint[],
+            ),
+            optional(
+              client.getCreatorTrades(selectedCreator.id, {
+                signal: controller.signal,
+              }),
+              [] as Trade[],
+            ),
+            optional(
+              client.getCreatorStats(
+                selectedCreator.id,
+                { days: 90 },
+                { signal: controller.signal },
+              ),
+              [] as CreatorStat[],
+            ),
+            optional(
+              client.getCreatorVideos(selectedCreator.id, {
+                signal: controller.signal,
+              }),
+              [] as CreatorVideo[],
+            ),
+            optional(
+              client.getOrderBook(selectedCreator.id, {
+                signal: controller.signal,
+              }),
+              { asks: [], bids: [] } as CreatorXOrderBook,
+            ),
+            optional(
+              client.getPortfolio({ signal: controller.signal }),
+              { balance: 0, positions: [], openOrders: [], trades: [] } as Portfolio,
+            ),
           ]);
-
-        const [historyData, tradesData, statsData, videosData, orderBookData, portfolioData] =
-          (await Promise.all([
-            historyRes.ok ? historyRes.json() : Promise.resolve({ history: [] }),
-            tradesRes.ok ? tradesRes.json() : Promise.resolve({ trades: [] }),
-            statsRes.ok ? statsRes.json() : Promise.resolve({ stats: [] }),
-            videosRes.ok ? videosRes.json() : Promise.resolve({ videos: [] }),
-            orderBookRes.ok ? orderBookRes.json() : Promise.resolve({ asks: [], bids: [] }),
-            portfolioRes.ok
-              ? portfolioRes.json()
-              : Promise.resolve({ balance: 0, positions: [] }),
-          ])) as [
-            HistoryResponse,
-            TradesResponse,
-            StatsResponse,
-            VideosResponse,
-            OrderBookResponse,
-            PortfolioResponse,
-          ];
-
-        const chartData = (historyData.history || []).map(toChartPoint);
+        if (controller.signal.aborted) return;
+        const chartData = history.map(toChartPoint);
         const stats = calculateStats(selectedCreator, chartData);
-        const selectedPosition = (portfolioData.positions || []).find(
+        const selectedPosition = portfolio.positions.find(
           (position) => position.creatorId === selectedCreator.id
         );
 
-        if (!cancelled) {
-          setState({
-            selectedCreator,
-            creators,
-            stats,
-            historyStats: statsData.stats || [],
-            videos: videosData.videos || [],
-            orderBook: {
-              asks: orderBookData.asks || [],
-              bids: orderBookData.bids || [],
-            },
-            chartData:
-              chartData.length > 0
-                ? chartData
-                : [
-                    {
-                      date: new Date().toISOString(),
-                      price: selectedCreator.currentPrice,
-                      volume: 0,
-                    },
-                  ],
-            trades: (tradesData.trades || []).map((trade) => ({
-              id: trade.id,
-              price: trade.price,
-              quantity: trade.quantity ?? 0,
-              type: trade.type,
-              time: new Date(trade.createdAt).toLocaleTimeString(),
-            })),
-            userBalance: portfolioData.balance || 0,
-            userQuantity: selectedPosition?.quantity || 0,
-          });
-        }
+        setState({
+          selectedCreator,
+          creators,
+          stats,
+          historyStats: statsData,
+          videos: videos.map((video) => ({
+            ...video,
+            thumbnailUrl: video.thumbnailUrl ?? "",
+          })),
+          orderBook,
+          chartData:
+            chartData.length > 0
+              ? chartData
+              : [
+                  {
+                    date: new Date().toISOString(),
+                    price: selectedCreator.currentPrice,
+                    volume: 0,
+                  },
+                ],
+          trades: trades.map((trade) => ({
+            id: trade.id,
+            price: trade.price,
+            quantity: trade.quantity,
+            type: trade.type,
+            time: new Date(trade.createdAt).toLocaleTimeString(),
+          })),
+          userBalance: portfolio.balance,
+          userQuantity: selectedPosition?.quantity || 0,
+        });
       } catch (loadError) {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setError(loadError instanceof Error ? loadError.message : "Market load failed");
         }
       }
     }
 
-    loadMarket();
+    void loadMarket();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [ticker]);
+    return () => controller.abort();
+  }, [client, ticker]);
 
   const content = useMemo(() => {
     if (error) {

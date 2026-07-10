@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
-import { useSession } from "next-auth/react";
+import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmission";
 
 interface OrderFormProps {
   creatorId: string;
   currentPrice: number;
   userBalance: number;
   userQuantity: number; // User's holding of this creator
-  onBuy: (amount: number) => Promise<void>;
-  onSell: (amount: number) => Promise<void>;
   externalPriceUpdate?: {
     price: number;
     side?: "BUY" | "SELL";
@@ -23,39 +21,20 @@ export function OrderForm({
   currentPrice,
   userBalance,
   userQuantity,
-  onBuy,
-  onSell,
   externalPriceUpdate,
 }: OrderFormProps) {
-  const [tab, setTab] = useState<"BUY" | "SELL">("BUY");
-  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
-  const [amount, setAmount] = useState<string>("");
-  const [limitPrice, setLimitPrice] = useState<string>("");
-  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<"BUY" | "SELL">(
+    externalPriceUpdate?.side ?? "BUY",
+  );
+  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">(
+    externalPriceUpdate?.side ? "LIMIT" : "MARKET",
+  );
+  const [amount, setAmount] = useState<string>("0");
+  const [limitPrice, setLimitPrice] = useState<string>(
+    (externalPriceUpdate?.price ?? currentPrice).toString(),
+  );
   const { t } = useLanguage();
-  const { update } = useSession();
-
-  useEffect(() => {
-    setLimitPrice(currentPrice.toString());
-    setOrderType("MARKET"); // Reset to MARKET on creator change
-  }, [creatorId, currentPrice]);
-
-  useEffect(() => {
-    if (externalPriceUpdate) {
-      if (externalPriceUpdate.side) {
-        setTab(externalPriceUpdate.side);
-        setLimitPrice(externalPriceUpdate.price.toString());
-        setOrderType("LIMIT");
-      } else {
-        // If side is not provided, it's a current price click -> MARKET
-        setOrderType("MARKET");
-      }
-    }
-  }, [externalPriceUpdate]);
-
-  useEffect(() => {
-    setAmount("0");
-  }, [tab]);
+  const { isSubmitting, submit } = useCreatorXOrderSubmission();
 
   const price =
     orderType === "MARKET" ? currentPrice : parseFloat(limitPrice) || 0;
@@ -67,7 +46,10 @@ export function OrderForm({
       {/* Buy/Sell Tabs */}
       <div className="flex border-b border-border-exchange bg-card/50">
         <button
-          onClick={() => setTab("BUY")}
+          onClick={() => {
+            setTab("BUY");
+            setAmount("0");
+          }}
           className={`flex-1 py-3 font-bold text-sm transition-colors ${
             tab === "BUY"
               ? "text-up border-b-2 border-up bg-up/5"
@@ -77,7 +59,10 @@ export function OrderForm({
           {t("common.buy")}
         </button>
         <button
-          onClick={() => setTab("SELL")}
+          onClick={() => {
+            setTab("SELL");
+            setAmount("0");
+          }}
           className={`flex-1 py-3 font-bold text-sm transition-colors ${
             tab === "SELL"
               ? "text-down border-b-2 border-down bg-down/5"
@@ -196,53 +181,37 @@ export function OrderForm({
           </div>
           <button
             onClick={async () => {
-              if (loading || total <= 0) return;
-              setLoading(true);
+              if (isSubmitting || total <= 0) return;
               try {
-                // Unified CLOB Trade API
-                const res = await fetch("/api/trade", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    creatorId,
-                    side: tab, // "BUY" | "SELL"
-                    orderType, // "LIMIT" | "MARKET"
-                    price, // Limit Price
-                    quantity: parseFloat(amount),
-                  }),
+                const order = await submit({
+                  creatorId,
+                  side: tab,
+                  orderType,
+                  price,
+                  quantity,
                 });
-                const data = await res.json();
+                if (order === null) return;
 
-                if (!res.ok) throw new Error(data.error || "Order Failed");
-
-                // Alert specific message based on what happened (Filled vs Placed)
-                const isFilled = data.order?.status === "FILLED";
+                const isFilled = order.status === "FILLED";
                 const msg = isFilled
-                  ? `Trade Executed: ${tab} ${amount} shares @ ${data.order.price}`
+                  ? `Trade Executed: ${tab} ${amount} shares @ ${order.price}`
                   : `Order Placed: ${tab} ${amount} shares @ ${price}`;
 
                 alert(msg);
-
-                // Refresh session to update Navbar balance
-                await update?.();
-
                 setAmount("");
-                window.location.reload();
               } catch (e) {
                 console.error(e);
                 alert(e instanceof Error ? e.message : "Order Failed");
-              } finally {
-                setLoading(false);
               }
             }}
-            disabled={loading || total <= 0}
+            disabled={isSubmitting || total <= 0}
             className={`w-full py-3 rounded font-bold text-background transition-all ${
-              loading
+              isSubmitting
                 ? "opacity-50 cursor-not-allowed"
                 : "hover:scale-[1.01] active:scale-[0.99]"
             } ${tab === "BUY" ? "bg-up" : "bg-down"}`}
           >
-            {loading
+            {isSubmitting
               ? "Processing..."
               : tab === "BUY"
               ? t("common.buy")

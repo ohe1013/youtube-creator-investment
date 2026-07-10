@@ -1,18 +1,11 @@
   "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-
-interface Creator {
-  id: string;
-  name: string;
-  thumbnailUrl: string | null;
-  category: string | null;
-  currentSubs: number;
-  currentScore: number;
-  currentPrice: number;
-}
+import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
+import type { CreatorSummary } from "@/lib/data/contracts";
+import { creatorDetailHref } from "@/lib/routing/creator";
 
 interface PaginationInfo {
   page: number;
@@ -21,13 +14,12 @@ interface PaginationInfo {
   totalPages: number;
 }
 
-import { Suspense } from "react";
-
 function CreatorsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const client = useCreatorXDataClient();
 
-  const [creators, setCreators] = useState<Creator[]>([]);
+  const [creators, setCreators] = useState<CreatorSummary[]>([]);
   const [categories, setCategories] = useState<string[]>(["전체"]);
   const [pagination, setPagination] = useState<PaginationInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,15 +33,25 @@ function CreatorsContent() {
   const maxSubs = searchParams.get("maxSubs") || "";
 
   useEffect(() => {
-    fetch("/api/categories")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.categories) setCategories(data.categories);
+    const controller = new AbortController();
+    void client
+      .listCategories({ signal: controller.signal })
+      .then((nextCategories) => {
+        if (!controller.signal.aborted) setCategories(nextCategories);
       })
-      .catch((err) => console.error("Error fetching categories:", err));
-  }, []);
+      .catch((categoryError: unknown) => {
+        if (
+          categoryError instanceof Error &&
+          categoryError.name === "AbortError"
+        ) {
+          return;
+        }
+        console.error("Error fetching categories:", categoryError);
+      });
+    return () => controller.abort();
+  }, [client]);
 
-  const fetchCreators = useCallback(async () => {
+  const fetchCreators = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -59,22 +61,44 @@ function CreatorsContent() {
       if (minSubs) params.append("minSubs", minSubs);
       if (maxSubs) params.append("maxSubs", maxSubs);
 
-      const res = await fetch(`/api/creators?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch creators");
-
-      const data = await res.json();
-      setCreators(data.creators || []);
+      const data = await client.listCreators(
+        {
+          category: params.get("category") ?? undefined,
+          sort: (params.get("sort") ?? "score") as
+            | "score"
+            | "subs"
+            | "price"
+            | "growth",
+          page: Number(params.get("page") ?? "1"),
+          minSubs: params.has("minSubs")
+            ? Number(params.get("minSubs"))
+            : undefined,
+          maxSubs: params.has("maxSubs")
+            ? Number(params.get("maxSubs"))
+            : undefined,
+        },
+        { signal },
+      );
+      if (signal.aborted) return;
+      setCreators(data.creators);
       setPagination(data.pagination);
       setError(null);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (loadError) {
+      if (loadError instanceof Error && loadError.name === "AbortError") return;
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Failed to fetch creators",
+      );
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, [category, sort, page, minSubs, maxSubs]);
+  }, [category, client, maxSubs, minSubs, page, sort]);
 
   useEffect(() => {
-    fetchCreators();
+    const controller = new AbortController();
+    void fetchCreators(controller.signal);
+    return () => controller.abort();
   }, [fetchCreators]);
 
   const updateFilters = (
@@ -97,6 +121,11 @@ function CreatorsContent() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="container mx-auto px-4 py-6">
+        {error && (
+          <p role="alert" className="mb-4 text-down">
+            {error}
+          </p>
+        )}
         {/* Market Header */}
         <div className="flex flex-col md:flex-row justify-between items-end mb-8 gap-4 border-b border-border-exchange pb-6">
           <div>
@@ -172,13 +201,16 @@ function CreatorsContent() {
                       <tr
                         key={creator.id}
                         className="hover:bg-foreground/5 transition-colors group cursor-pointer"
-                        onClick={() => router.push(`/creators/${creator.id}`)}
+                        onClick={() => router.push(creatorDetailHref(creator.id))}
                       >
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                            <img
+                            <Image
                               src={creator.thumbnailUrl || "/placeholder.png"}
                               alt=""
+                              width={32}
+                              height={32}
+                              unoptimized
                               className="w-8 h-8 rounded-full border border-border-exchange"
                             />
                             <span className="font-bold group-hover:text-primary transition-colors truncate max-w-[150px]">

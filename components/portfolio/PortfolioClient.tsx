@@ -1,49 +1,60 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import Image from "next/image";
+import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
+import type { Portfolio } from "@/lib/data/contracts";
+import { creatorDetailHref } from "@/lib/routing/creator";
+import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
 type Tab = "HOLDINGS" | "ORDERS" | "HISTORY";
 
 export function PortfolioClient() {
   const { t } = useLanguage();
-  const { update } = useSession();
+  const client = useCreatorXDataClient();
+  const session = useCreatorXSession();
   const [activeTab, setActiveTab] = useState<Tab>("HOLDINGS");
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<Portfolio | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = async () => {
+  const loadPortfolio = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/portfolio");
-      if (res.ok) {
-        setData(await res.json());
-      }
-    } catch (e) {
-      console.error(e);
+      const portfolio = await client.getPortfolio({ signal });
+      if (signal?.aborted) return;
+      setData(portfolio);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      console.error(error);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  };
+  }, [client]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000); // Poll every 5s
-    return () => clearInterval(interval);
-  }, []);
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
+    const poll = async () => {
+      controller = new AbortController();
+      await loadPortfolio(controller.signal);
+      if (!disposed) timer = setTimeout(poll, 5000);
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      controller?.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [loadPortfolio]);
 
   const handleCancel = async (orderId: string) => {
     if (!confirm(t("portfolio.confirmCancel"))) return;
     try {
-      const res = await fetch(`/api/orders/${orderId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to cancel");
-
-      // Update session to reflect balance change in Navbar
-      await update?.();
-
-      fetchData(); // Refresh immediately
-    } catch (e) {
+      await client.cancelOrder(orderId);
+      await Promise.all([loadPortfolio(), session.refresh()]);
+    } catch {
       alert("Error cancelling order");
     }
   };
@@ -69,9 +80,9 @@ export function PortfolioClient() {
   const totalAssetsValue =
     data.balance +
     data.positions.reduce(
-      (sum: number, p: any) =>
+      (sum, p) =>
         sum + p.quantity * (p.creator?.currentPrice || 0),
-      0
+      0,
     );
 
   return (
@@ -147,7 +158,7 @@ export function PortfolioClient() {
                 </tr>
               </thead>
               <tbody>
-                {data.positions.map((p: any) => {
+                {data.positions.map((p) => {
                   const currentVal = p.quantity * p.creator.currentPrice;
                   const buyVal = p.quantity * p.avgPrice;
                   const pnl = currentVal - buyVal;
@@ -160,13 +171,17 @@ export function PortfolioClient() {
                     >
                       <td className="px-6 py-4 font-bold flex items-center gap-2">
                         {p.creator.thumbnailUrl && (
-                          <img
+                          <Image
                             src={p.creator.thumbnailUrl}
+                            width={24}
+                            height={24}
+                            unoptimized
                             className="w-6 h-6 rounded-full"
+                            alt=""
                           />
                         )}
                         <Link
-                          href={`/creators/${p.creatorId}`}
+                          href={creatorDetailHref(p.creatorId)}
                           className="hover:underline"
                         >
                           {p.creator.name}
@@ -230,7 +245,7 @@ export function PortfolioClient() {
                 </tr>
               </thead>
               <tbody>
-                {data.openOrders.map((o: any) => (
+                {data.openOrders.map((o) => (
                   <tr
                     key={o.id}
                     className="border-b border-border-exchange hover:bg-muted/5"
@@ -240,10 +255,10 @@ export function PortfolioClient() {
                     </td>
                     <td className="px-6 py-4 font-bold">
                       <Link
-                        href={`/creators/${o.creatorId}`}
+                        href={creatorDetailHref(o.creatorId)}
                         className="hover:underline"
                       >
-                        {o.creator.name}
+                        {o.creator?.name ?? o.creatorId}
                       </Link>
                     </td>
                     <td
@@ -306,34 +321,34 @@ export function PortfolioClient() {
                 </tr>
               </thead>
               <tbody>
-                {data.trades.map((t_data: any) => (
+                {data.trades.map((trade) => (
                   <tr
-                    key={t_data.id}
+                    key={trade.id}
                     className="border-b border-border-exchange hover:bg-muted/5"
                   >
                     <td className="px-6 py-4 text-muted text-xs">
-                      {new Date(t_data.createdAt).toLocaleString()}
+                      {new Date(trade.createdAt).toLocaleString()}
                     </td>
                     <td className="px-6 py-4 font-bold">
-                      {t_data.creator.name}
+                      {trade.creator?.name ?? trade.creatorId ?? "-"}
                     </td>
                     <td
                       className={`px-6 py-4 font-bold ${
-                        t_data.type === "BUY" ? "text-up" : "text-down"
+                        trade.type === "BUY" ? "text-up" : "text-down"
                       }`}
                     >
-                      {t_data.type === "BUY"
+                      {trade.type === "BUY"
                         ? t("common.buy")
                         : t("common.sell")}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {t_data.price.toLocaleString()}
+                      {trade.price.toLocaleString()}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {t_data.quantity.toLocaleString()}
+                      {trade.quantity.toLocaleString()}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {(t_data.price * t_data.quantity).toLocaleString()}
+                      {(trade.price * trade.quantity).toLocaleString()}
                     </td>
                   </tr>
                 ))}

@@ -9,16 +9,36 @@ import { OrderBook } from "./OrderBook";
 import { MarketList } from "./MarketList";
 import { CreatorInfo } from "./CreatorInfo";
 import { useLanguage } from "@/lib/LanguageContext";
+import type {
+  CreatorStat,
+  CreatorSummary,
+  CreatorVideo,
+  OrderBook as CreatorXOrderBook,
+} from "@/lib/data/contracts";
+
+type MobileTab = "CHART" | "ORDER" | "TRADES" | "LIST";
+const MOBILE_TABS: MobileTab[] = ["CHART", "ORDER", "TRADES", "LIST"];
 
 interface MarketDashboardProps {
-  selectedCreator: any;
-  stats: any;
-  historyStats?: any[]; // For CreatorInfo
-  videos?: any[]; // For CreatorInfo
-  orderBook?: { asks: any[]; bids: any[] }; // Real OrderBook Data
-  chartData: any[];
-  trades: any[];
-  creators: any[];
+  selectedCreator: CreatorSummary;
+  stats: {
+    high24h: number;
+    low24h: number;
+    vol24h: number;
+    change24h: number;
+  };
+  historyStats?: CreatorStat[];
+  videos?: Array<CreatorVideo & { thumbnailUrl: string }>;
+  orderBook?: CreatorXOrderBook;
+  chartData: Array<{ date: string | Date; price: number; volume?: number }>;
+  trades: Array<{
+    id: string;
+    price: number;
+    quantity: number;
+    type: "BUY" | "SELL";
+    time: string;
+  }>;
+  creators: CreatorSummary[];
   userBalance: number;
   userQuantity: number;
 }
@@ -36,9 +56,7 @@ export function MarketDashboard({
   userQuantity,
 }: MarketDashboardProps) {
   // Mobile Tab State: 'CHART' | 'ORDER' | 'TRADES' | 'LIST'
-  const [mobileTab, setMobileTab] = useState<
-    "CHART" | "ORDER" | "TRADES" | "LIST"
-  >("CHART");
+  const [mobileTab, setMobileTab] = useState<MobileTab>("CHART");
 
   // Desktop/Inner Chart Tab State: 'CHART' | 'INFO'
   const [chartTab, setChartTab] = useState<"CHART" | "INFO">("CHART");
@@ -54,7 +72,10 @@ export function MarketDashboard({
     <div className="flex-1 flex flex-col h-full overflow-hidden max-w-[1600px] mx-auto w-full bg-background text-foreground">
       {/* Header - Always Visible */}
       <MarketHeader
-        creator={selectedCreator}
+        creator={{
+          ...selectedCreator,
+          category: selectedCreator.category ?? "Other",
+        }}
         stats={stats}
         chartTab={chartTab}
         setChartTab={setChartTab}
@@ -62,17 +83,17 @@ export function MarketDashboard({
 
       {/* Mobile Navigation Tabs (Visible only on mobile) */}
       <div className="md:hidden flex h-10 border-b border-border-exchange bg-card text-xs font-bold">
-        {["CHART", "ORDER", "TRADES", "LIST"].map((tab) => (
+        {MOBILE_TABS.map((tab) => (
           <button
             key={tab}
-            onClick={() => setMobileTab(tab as any)}
+            onClick={() => setMobileTab(tab)}
             className={`flex-1 ${
               mobileTab === tab
                 ? "text-primary border-b-2 border-primary"
                 : "text-[#848e9c]"
             }`}
           >
-            {t(`common.${tab.toLowerCase()}` as any)}
+            {t(`common.${tab.toLowerCase()}`)}
           </button>
         ))}
       </div>
@@ -175,37 +196,12 @@ export function MarketDashboard({
               }`}
             >
               <OrderForm
+                key={`${selectedCreator.id}:${priceUpdate?.timestamp ?? 0}`}
                 creatorId={selectedCreator.id}
                 currentPrice={selectedCreator.currentPrice}
                 userBalance={userBalance}
                 userQuantity={userQuantity}
                 externalPriceUpdate={priceUpdate}
-                onBuy={async (amt) => {
-                  await fetch("/api/trade/buy", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      creatorId: selectedCreator.id,
-                      quantity: amt,
-                    }),
-                  }).then(async (r) => {
-                    if (!r.ok) throw new Error((await r.json()).error);
-                    window.location.reload();
-                  });
-                }}
-                onSell={async (amt) => {
-                  await fetch("/api/trade/sell", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      creatorId: selectedCreator.id,
-                      quantity: amt,
-                    }),
-                  }).then(async (r) => {
-                    if (!r.ok) throw new Error((await r.json()).error);
-                    window.location.reload();
-                  });
-                }}
               />
             </div>
           </div>

@@ -1,81 +1,35 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
 import Image from "next/image";
+import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
 import { CreatorInfo } from "@/components/market/CreatorInfo";
 import { OrderBook } from "@/components/market/OrderBook";
 import { RecentTrades } from "@/components/market/RecentTrades";
 import { MarketChart } from "@/components/market/MarketChart";
-
-interface CreatorStat {
-  date: string;
-  subs: number;
-  views: number;
-  videos: number;
-  dailySubsChange: number;
-  dailyViewsChange: number;
-}
-
-interface Video {
-  id: string;
-  title: string;
-  thumbnailUrl: string;
-  publishedAt: string;
-  viewCount: number;
-  likeCount: number;
-  commentCount: number;
-  duration: string;
-  type: "LONG" | "SHORTS";
-}
-
-interface Creator {
-  id: string;
-  youtubeChannelId: string;
-  name: string;
-  thumbnailUrl: string | null;
-  category: string | null;
-  currentSubs: number;
-  currentViews: number;
-  currentVideos: number;
-  currentScore: number;
-  currentPrice: number;
-  circulatingSupply: number;
-  liquidity: number;
-  avgLikes: number;
-  avgComments: number;
-  engagementRate: number;
-  viewsPerSubs: number;
-}
-
-interface Trade {
-  id: string;
-  price: number;
-  quantity: number;
-  createdAt: string;
-  type: "BUY" | "SELL";
-}
-
-interface HistoryPoint {
-  date: string;
-  price: number;
-  volume: number;
-}
-interface PriceLevel {
-  price: number;
-  quantity: number;
-}
+import type {
+  Creator,
+  CreatorStat,
+  CreatorVideo,
+  HistoryPoint,
+  OrderBook as CreatorXOrderBook,
+  Trade,
+} from "@/lib/data/contracts";
+import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmission";
 
 
 export function CreatorDetailClient({ id }: { id: string }) {
-  const { update } = useSession();
+  const client = useCreatorXDataClient();
+  const { isSubmitting, submit } = useCreatorXOrderSubmission();
   const [creator, setCreator] = useState<Creator | null>(null);
   const [stats, setStats] = useState<CreatorStat[]>([]);
-  const [videos, setVideos] = useState<Video[]>([]);
+  const [videos, setVideos] = useState<
+    Array<CreatorVideo & { thumbnailUrl: string }>
+  >([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [orderBook, setOrderBook] = useState<{ asks: PriceLevel[]; bids: PriceLevel[] }>({
+  const [orderBook, setOrderBook] = useState<CreatorXOrderBook>({
     asks: [],
     bids: [],
   });
@@ -86,72 +40,83 @@ export function CreatorDetailClient({ id }: { id: string }) {
   const [orderType, setOrderType] = useState<"LIMIT" | "MARKET">("LIMIT");
   const [inputPrice, setInputPrice] = useState("");
   const [inputQuantity, setInputQuantity] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
 
-    const fetchData = () => {
-      Promise.all([
-        fetch(`/api/creators/${id}`).then((res) => {
-          if (!res.ok) throw new Error("Creator not found");
-          return res.json();
-        }),
-        fetch(`/api/creators/${id}?stats=true&days=90`).then((res) => {
-          if (!res.ok) return { stats: [] };
-          return res.json();
-        }),
-        fetch(`/api/creators/${id}?videos=true`).then((res) => {
-          if (!res.ok) return { videos: [] };
-          return res.json();
-        }),
-        fetch(`/api/creators/${id}?history=true&days=7`).then((res) => {
-          if (!res.ok) return { history: [] };
-          return res.json();
-        }),
-        fetch(`/api/creators/${id}?trades=true`).then((res) => {
-          if (!res.ok) return { trades: [] };
-          return res.json();
-        }),
-        fetch(`/api/creators/${id}?orderbook=true`).then((res) => {
-          if (!res.ok) return { asks: [], bids: [] };
-          return res.json();
-        }),
-      ])
-        .then(
-          ([
-            creatorData,
-            statsData,
-            videosData,
-            historyData,
-            tradesData,
-            obData,
-          ]) => {
-            setCreator(creatorData.creator);
-            setStats(statsData.stats || []);
-            setVideos(videosData.videos || []);
-            setHistory(historyData.history || []);
-            setTrades(tradesData.trades || []);
-            setOrderBook({ asks: obData.asks || [], bids: obData.bids || [] });
-            setLoading(false);
-          }
-        )
-        .catch((err) => {
-          setError(err.message);
-          setLoading(false);
-        });
+    const optional = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await promise;
+      } catch {
+        return fallback;
+      }
     };
 
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, [id]);
+    const poll = async () => {
+      controller = new AbortController();
+      const options = { signal: controller.signal };
+      try {
+        const nextCreator = await client.getCreator(id, options);
+        const [nextStats, nextVideos, nextHistory, nextTrades, nextOrderBook] =
+          await Promise.all([
+            optional(
+              client.getCreatorStats(id, { days: 90 }, options),
+              [] as CreatorStat[],
+            ),
+            optional(client.getCreatorVideos(id, options), [] as CreatorVideo[]),
+            optional(
+              client.getCreatorHistory(id, { days: 7 }, options),
+              [] as HistoryPoint[],
+            ),
+            optional(client.getCreatorTrades(id, options), [] as Trade[]),
+            optional(
+              client.getOrderBook(id, options),
+              { asks: [], bids: [] } as CreatorXOrderBook,
+            ),
+          ]);
+        if (controller.signal.aborted || disposed) return;
+        setCreator(nextCreator);
+        setStats(nextStats);
+        setVideos(
+          nextVideos.map((video) => ({
+            ...video,
+            thumbnailUrl: video.thumbnailUrl ?? "",
+          })),
+        );
+        setHistory(nextHistory);
+        setTrades(nextTrades);
+        setOrderBook(nextOrderBook);
+        setInputPrice((current) =>
+          current === "" ? nextCreator.currentPrice.toString() : current,
+        );
+        setError(null);
+      } catch (loadError) {
+        if (
+          !controller.signal.aborted &&
+          !disposed
+        ) {
+          setError(
+            loadError instanceof Error ? loadError.message : "Creator not found",
+          );
+        }
+      } finally {
+        if (!disposed) {
+          setLoading(false);
+          timer = setTimeout(poll, 5000);
+        }
+      }
+    };
 
-  useEffect(() => {
-    if (creator && !inputPrice) {
-      setInputPrice(creator.currentPrice.toString());
-    }
-  }, [creator, inputPrice]);
+    void poll();
+    return () => {
+      disposed = true;
+      controller?.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [client, id]);
 
   const { change24h, high24h, low24h, volume24h } = useMemo(() => {
     if (history.length === 0)
@@ -197,33 +162,22 @@ export function CreatorDetailClient({ id }: { id: string }) {
   }
 
   const handleTrade = async () => {
-    if (!creator) return;
-    setIsSubmitting(true);
+    if (!creator || isSubmitting) return;
     try {
       const p =
         orderType === "MARKET" ? creator.currentPrice : Number(inputPrice);
-      const res = await fetch("/api/trade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          creatorId: creator.id,
-          side,
-          orderType,
-          price: p,
-          quantity: Number(inputQuantity),
-        }),
+      const order = await submit({
+        creatorId: creator.id,
+        side,
+        orderType,
+        price: p,
+        quantity: Number(inputQuantity),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Trade failed");
-
-      alert(`Order Placed: ${side} ${inputQuantity} @ ${p}`);
-      await update?.();
+      if (order === null) return;
+      alert(`Order Placed: ${side} ${inputQuantity} @ ${order.price}`);
       setInputQuantity("");
-      window.location.reload();
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Trade failed");
-    } finally {
-      setIsSubmitting(false);
     }
   };
 

@@ -1,24 +1,19 @@
 "use client";
 
 import { useEffect } from "react";
-import { installAppInTossFetch, isAppInTossMode } from "@/lib/appintoss-fetch";
 
-export function AppInTossRuntime() {
-  installAppInTossFetch();
-
+export function AppInTossRuntime({ enabled }: { enabled: boolean }) {
   useEffect(() => {
-    if (!isAppInTossMode()) return;
+    if (!enabled) return;
 
     let unsubscribe: (() => void) | undefined;
     let disposed = false;
 
     async function setupBridge() {
       try {
-        const { closeView, graniteEvent, getAnonymousKey } = await import(
+        const { closeView, graniteEvent } = await import(
           "@apps-in-toss/web-framework"
         );
-
-        await getAnonymousKey().catch(() => null);
 
         if (disposed) return;
 
@@ -43,13 +38,13 @@ export function AppInTossRuntime() {
       }
     }
 
-    setupBridge();
+    void setupBridge();
 
     return () => {
       disposed = true;
       unsubscribe?.();
     };
-  }, []);
+  }, [enabled]);
 
   return null;
 }

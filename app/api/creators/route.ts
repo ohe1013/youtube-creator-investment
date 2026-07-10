@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import type { CreatorSummary } from "@/lib/data/contracts";
 import { creatorFilterSchema } from "@/lib/validation";
 
 export async function GET(request: NextRequest) {
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
     const { category, minSubs, maxSubs, sort, page, limit } = filterResult.data;
 
     // Build where clause
-    const where: any = {
+    const where: Prisma.CreatorWhereInput = {
       visibility: "PUBLIC",
       isActive: true,
     };
@@ -49,7 +51,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Build orderBy clause
-    const orderBy: any = {};
+    const orderBy: Prisma.CreatorOrderByWithRelationInput = {};
     switch (sort) {
       case "score":
         orderBy.currentScore = "desc";
@@ -85,15 +87,34 @@ export async function GET(request: NextRequest) {
           currentViews: true,
           currentVideos: true,
           currentScore: true,
+          initialPrice: true,
           currentPrice: true,
+          totalSupply: true,
+          circulatingSupply: true,
+          reserveSupply: true,
+          liquidity: true,
+          isActive: true,
+          visibility: true,
+          avgLikes: true,
+          avgComments: true,
+          engagementRate: true,
+          viewsPerSubs: true,
+          createdAt: true,
           lastSyncedAt: true,
+          _count: { select: { videos: true } },
         },
       }),
       prisma.creator.count({ where }),
     ]);
 
+    const summaries: CreatorSummary[] = creators.map((creator) => ({
+      ...creator,
+      createdAt: creator.createdAt.toISOString(),
+      lastSyncedAt: creator.lastSyncedAt.toISOString(),
+    }));
+
     return NextResponse.json({
-      creators,
+      creators: summaries,
       pagination: {
         page,
         limit,

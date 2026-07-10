@@ -2,10 +2,11 @@
 
 import { signIn } from "next-auth/react";
 import Link from "next/link";
-import { isAppInTossMode } from "@/lib/appintoss-fetch";
+import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
 export default function SignInPage() {
-  if (isAppInTossMode()) {
+  const session = useCreatorXSession();
+  if (session.identityKind !== "browser") {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center px-4">
         <div className="bg-card rounded-2xl p-8 border border-border-exchange max-w-md w-full text-center">
@@ -37,7 +38,7 @@ export default function SignInPage() {
 
         <div className="space-y-4">
           <button
-            onClick={() => signIn("google", { callbackUrl: "/" })}
+            onClick={() => void signIn("google", { callbackUrl: "/" })}
             className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-white hover:bg-gray-100 text-gray-800 rounded-lg font-semibold transition-colors"
           >
             <svg className="w-6 h-6" viewBox="0 0 24 24">

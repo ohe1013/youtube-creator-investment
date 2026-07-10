@@ -1,34 +1,54 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
+import type { Dashboard } from "@/lib/data/contracts";
+import { creatorDetailHref } from "@/lib/routing/creator";
 
 export function DashboardClient() {
   const { t } = useLanguage();
-  const { data: session } = useSession();
-  const [data, setData] = useState<any>(null);
+  const client = useCreatorXDataClient();
+  const router = useRouter();
+  const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchData = async () => {
+  const loadDashboard = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/dashboard");
-      if (res.ok) {
-        setData(await res.json());
-      }
-    } catch (e) {
-      console.error(e);
+      const dashboard = await client.getDashboard({ signal });
+      if (signal?.aborted) return;
+      setData(dashboard);
+      setError(null);
+    } catch (loadError) {
+      if (loadError instanceof Error && loadError.name === "AbortError") return;
+      setError(
+        loadError instanceof Error ? loadError.message : "Dashboard unavailable",
+      );
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  };
+  }, [client]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 10000); // Poll every 10s
-    return () => clearInterval(interval);
-  }, []);
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
+    const poll = async () => {
+      controller = new AbortController();
+      await loadDashboard(controller.signal);
+      if (!disposed) timer = setTimeout(poll, 10000);
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      controller?.abort();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [loadDashboard]);
 
   if (loading && !data)
     return (
@@ -36,6 +56,9 @@ export function DashboardClient() {
         {t("channel.collectingData")}...
       </div>
     );
+  if (!data) {
+    return <div role="alert" className="p-8 text-center">{error}</div>;
+  }
 
   return (
     <div className="h-[calc(100vh-56px)] overflow-hidden flex flex-col bg-background text-foreground font-sans">
@@ -119,19 +142,22 @@ export function DashboardClient() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-exchange/30">
-                {data.rankings.map((r: any, idx: number) => (
+                {data.rankings.map((r, idx) => (
                   <tr
                     key={r.id}
                     className="hover:bg-primary/5 group transition-colors cursor-pointer"
-                    onClick={() => (window.location.href = `/creators/${r.id}`)}
+                    onClick={() => router.push(creatorDetailHref(r.id))}
                   >
                     <td className="px-6 py-4 font-mono text-sm text-muted">
                       #{idx + 1}
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-3">
-                        <img
-                          src={r.thumbnailUrl}
+                        <Image
+                          src={r.thumbnailUrl ?? "/placeholder.png"}
+                          width={32}
+                          height={32}
+                          unoptimized
                           className="w-8 h-8 rounded-full border border-border-exchange"
                           alt=""
                         />
@@ -232,14 +258,17 @@ export function DashboardClient() {
               </h2>
             </div>
             <div className="p-6 space-y-4">
-              {data.newListings.map((c: any) => (
+              {data.newListings.map((c) => (
                 <Link
                   key={c.id}
-                  href={`/creators/${c.id}`}
+                  href={creatorDetailHref(c.id)}
                   className="flex items-center gap-3 p-3 rounded-lg border border-border-exchange/50 hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
-                  <img
-                    src={c.thumbnailUrl}
+                  <Image
+                    src={c.thumbnailUrl ?? "/placeholder.png"}
+                    width={40}
+                    height={40}
+                    unoptimized
                     className="w-10 h-10 rounded-full grayscale group-hover:grayscale-0 transition-all shadow-sm"
                     alt=""
                   />
