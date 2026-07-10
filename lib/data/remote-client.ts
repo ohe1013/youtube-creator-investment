@@ -33,7 +33,13 @@ import {
   type CreatorXErrorCode,
 } from "@/lib/data/errors";
 
-const idSchema = z.string().trim().min(1);
+const idSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => value !== "." && value !== "..", {
+    message: "Path dot segments are not valid identifiers",
+  });
 const daysQuerySchema = z.object({ days: z.number().int().positive() }).strict();
 const categoriesEnvelopeSchema = z
   .object({ categories: z.array(z.string().min(1)) })
@@ -119,14 +125,42 @@ function networkUnavailableError(status?: number): CreatorXClientError {
   );
 }
 
+function sessionUnavailableError(): CreatorXClientError {
+  return new CreatorXClientError(
+    "SESSION_UNAVAILABLE",
+    "로그인 정보를 확인할 수 없습니다. 다시 시도해 주세요.",
+    true,
+  );
+}
+
+function abortError(): Error {
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function parseRequest<T>(schema: z.ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (!parsed.success) throw requestRejectedError();
   return parsed.data;
 }
 
-function isAbort(error: unknown, signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true || (error instanceof Error && error.name === "AbortError");
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  if (isAbortError(signal.reason)) throw signal.reason;
+  throw abortError();
+}
+
+function preserveAbort(
+  error: unknown,
+  signal: AbortSignal | undefined,
+): void {
+  throwIfAborted(signal);
+  if (isAbortError(error)) throw error;
 }
 
 function asRecognizedDomainCode(
@@ -136,26 +170,62 @@ function asRecognizedDomainCode(
   return value as CreatorXErrorCode;
 }
 
-async function toHttpError(response: Response): Promise<CreatorXClientError> {
+function domainError(
+  code: CreatorXErrorCode,
+  status: number,
+): CreatorXClientError {
+  switch (code) {
+    case "INSUFFICIENT_BALANCE":
+      return new CreatorXClientError(
+        code,
+        "잔액이 부족합니다.",
+        false,
+        status,
+      );
+    case "INSUFFICIENT_SHARES":
+      return new CreatorXClientError(
+        code,
+        "보유 수량이 부족합니다.",
+        false,
+        status,
+      );
+    case "ORDER_NOT_FOUND":
+      return new CreatorXClientError(
+        code,
+        "주문을 찾을 수 없습니다.",
+        false,
+        status,
+      );
+    default:
+      return new CreatorXClientError(
+        "REQUEST_REJECTED",
+        "요청을 처리할 수 없습니다.",
+        false,
+        status,
+      );
+  }
+}
+
+async function toHttpError(
+  response: Response,
+  signal: AbortSignal | undefined,
+): Promise<CreatorXClientError> {
   let body: unknown = null;
   try {
     body = await response.json();
-  } catch {
+  } catch (error) {
+    preserveAbort(error, signal);
     // Non-JSON error responses still have a stable HTTP-derived client error.
   }
+  throwIfAborted(signal);
 
   const flat = flatErrorSchema.safeParse(body);
   const nested = nestedErrorSchema.safeParse(body);
-  const message = flat.success
-    ? flat.data.error
-    : nested.success
-      ? nested.data.error.message
-      : undefined;
 
   if (response.status === 401) {
     return new CreatorXClientError(
       "UNAUTHORIZED",
-      message ?? "로그인이 필요합니다.",
+      "로그인이 필요합니다.",
       false,
       response.status,
     );
@@ -163,7 +233,7 @@ async function toHttpError(response: Response): Promise<CreatorXClientError> {
   if (response.status === 404) {
     return new CreatorXClientError(
       "NOT_FOUND",
-      message ?? "요청한 정보를 찾을 수 없습니다.",
+      "요청한 정보를 찾을 수 없습니다.",
       false,
       response.status,
     );
@@ -172,18 +242,11 @@ async function toHttpError(response: Response): Promise<CreatorXClientError> {
   const domainCode = asRecognizedDomainCode(
     flat.success ? flat.data.code : nested.success ? nested.data.error.code : undefined,
   );
-  if (domainCode) {
-    return new CreatorXClientError(
-      domainCode,
-      message ?? "요청을 처리할 수 없습니다.",
-      flat.success ? (flat.data.retryable ?? false) : false,
-      response.status,
-    );
-  }
+  if (domainCode) return domainError(domainCode, response.status);
 
   return new CreatorXClientError(
     "REQUEST_REJECTED",
-    message ?? "요청을 처리할 수 없습니다.",
+    "요청을 처리할 수 없습니다.",
     false,
     response.status,
   );
@@ -367,7 +430,17 @@ export class RemoteDataClient implements CreatorXDataClient {
     path: string,
     parameters: RequestParameters,
   ): Promise<T> {
-    const token = this.getAccessToken ? await this.getAccessToken() : null;
+    throwIfAborted(parameters.signal);
+    let token: string | null = null;
+    if (this.getAccessToken) {
+      try {
+        token = await this.getAccessToken();
+      } catch (error) {
+        preserveAbort(error, parameters.signal);
+        throw sessionUnavailableError();
+      }
+    }
+    throwIfAborted(parameters.signal);
     const headers = new Headers(parameters.headers);
     if (token !== null) headers.set("Authorization", `Bearer ${token}`);
     if (parameters.method === "POST") {
@@ -387,12 +460,8 @@ export class RemoteDataClient implements CreatorXDataClient {
           signal: parameters.signal,
         });
       } catch (error) {
-        if (
-          isAbort(error, parameters.signal) ||
-          error instanceof CreatorXClientError
-        ) {
-          throw error;
-        }
+        preserveAbort(error, parameters.signal);
+        if (error instanceof CreatorXClientError) throw error;
         if (parameters.method === "GET" && attempt < attempts) continue;
         throw networkUnavailableError();
       }
@@ -405,7 +474,7 @@ export class RemoteDataClient implements CreatorXDataClient {
           if (attempt < attempts) continue;
           throw networkUnavailableError(response.status);
         }
-        throw await toHttpError(response);
+        throw await toHttpError(response, parameters.signal);
       }
 
       if (parameters.allowNoContent && response.status === 204) {
@@ -415,9 +484,11 @@ export class RemoteDataClient implements CreatorXDataClient {
       let body: unknown;
       try {
         body = await response.json();
-      } catch {
+      } catch (error) {
+        preserveAbort(error, parameters.signal);
         throw invalidResponseError();
       }
+      throwIfAborted(parameters.signal);
       const parsed = schema.safeParse(body);
       if (!parsed.success) throw invalidResponseError();
       return parsed.data;

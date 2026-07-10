@@ -63,6 +63,18 @@ async function createWireFixtures() {
   };
 }
 
+async function captureClientError(
+  promise: Promise<unknown>,
+): Promise<CreatorXClientError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(CreatorXClientError);
+    return error as CreatorXClientError;
+  }
+  throw new Error("Expected CreatorXClientError");
+}
+
 describe("RemoteDataClient", () => {
   it("constructs the encoded URL and query for every read method and unwraps current envelopes", async () => {
     const fixture = await createWireFixtures();
@@ -273,6 +285,91 @@ describe("RemoteDataClient", () => {
     expect(clientErrorFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("short-circuits a pre-aborted request before auth or fetch", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const getAccessToken = vi.fn(async () => "must-not-load");
+    const fetchFn = createFetchMock();
+    const client = new RemoteDataClient({
+      baseUrl: API_BASE_URL,
+      fetchFn,
+      getAccessToken,
+    });
+
+    const error = await client
+      .listCategories({ signal: controller.signal })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("AbortError");
+    expect(getAccessToken).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("normalizes access-token loader rejection without exposing its message", async () => {
+    const secret = "token-provider-secret:refresh-token";
+    const getAccessToken = vi.fn().mockRejectedValue(new Error(secret));
+    const fetchFn = createFetchMock();
+    const client = new RemoteDataClient({
+      baseUrl: API_BASE_URL,
+      fetchFn,
+      getAccessToken,
+    });
+
+    const error = await captureClientError(client.listCategories());
+
+    expect(error).toMatchObject({
+      code: "SESSION_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(`${error.message}:${error.userMessage}:${JSON.stringify(error)}`).not.toContain(
+      secret,
+    );
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it.each([200, 400])(
+    "preserves AbortError while reading an HTTP %i response body",
+    async (status) => {
+      const abortError = new DOMException("body-read-aborted", "AbortError");
+      const response = new Response(null, { status });
+      vi.spyOn(response, "json").mockRejectedValue(abortError);
+      const fetchFn = createFetchMock().mockResolvedValue(response);
+      const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
+
+      await expect(client.listCategories()).rejects.toBe(abortError);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ["creator", "."],
+    ["creator", ".."],
+    ["cancel", "."],
+    ["cancel", ".."],
+  ] as const)(
+    "rejects the %s dot-segment id %s before auth or fetch",
+    async (operation, id) => {
+      const getAccessToken = vi.fn(async () => "must-not-load");
+      const fetchFn = createFetchMock();
+      const client = new RemoteDataClient({
+        baseUrl: API_BASE_URL,
+        fetchFn,
+        getAccessToken,
+      });
+      const request =
+        operation === "creator"
+          ? client.getCreator(` ${id} `)
+          : client.cancelOrder(` ${id} `);
+
+      await expect(request).rejects.toMatchObject({
+        code: "REQUEST_REJECTED",
+      });
+      expect(getAccessToken).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends credentials, a non-null bearer, JSON, the signal, and the caller idempotency key", async () => {
     const fixture = await createWireFixtures();
     const fetchFn = createFetchMock().mockResolvedValue(
@@ -403,14 +500,18 @@ describe("RemoteDataClient", () => {
     });
   });
 
-  it("preserves only recognized domain codes from flat and nested errors", async () => {
+  it("preserves only recognized domain codes with client-owned safe messages", async () => {
+    const flatSecret = "flat-secret:database-row";
+    const nestedSecret = "nested-secret:order-owner";
+    const unknownSecret = "unknown-secret:stack-trace";
+    const flatUnknownSecret = "flat-unknown-secret:sql-detail";
     const fetchFn = createFetchMock()
       .mockResolvedValueOnce(
         Response.json(
           {
-            error: "잔액이 부족합니다.",
+            error: flatSecret,
             code: "INSUFFICIENT_BALANCE",
-            retryable: false,
+            retryable: true,
           },
           { status: 409 },
         ),
@@ -420,7 +521,7 @@ describe("RemoteDataClient", () => {
           {
             error: {
               code: "ORDER_NOT_FOUND",
-              message: "주문을 찾을 수 없습니다.",
+              message: nestedSecret,
               requestId: "request-1",
             },
           },
@@ -432,27 +533,82 @@ describe("RemoteDataClient", () => {
           {
             error: {
               code: "INTERNAL_DATABASE_DETAIL",
-              message: "must not become a client code",
+              message: unknownSecret,
               requestId: "request-2",
             },
           },
           { status: 500 },
         ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: flatUnknownSecret, retryable: true },
+          { status: 418 },
+        ),
       );
     const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
 
-    await expect(client.placeOrder(ORDER_INPUT)).rejects.toMatchObject({
+    const balanceError = await captureClientError(
+      client.placeOrder(ORDER_INPUT),
+    );
+    expect(balanceError).toMatchObject({
       code: "INSUFFICIENT_BALANCE",
       userMessage: "잔액이 부족합니다.",
+      retryable: false,
     });
-    await expect(client.cancelOrder("missing-order")).rejects.toMatchObject({
+    const orderError = await captureClientError(
+      client.cancelOrder("missing-order"),
+    );
+    expect(orderError).toMatchObject({
       code: "ORDER_NOT_FOUND",
       userMessage: "주문을 찾을 수 없습니다.",
+      retryable: false,
     });
-    await expect(client.getPortfolio()).rejects.toMatchObject({
+    const unknownError = await captureClientError(client.getPortfolio());
+    expect(unknownError).toMatchObject({
       code: "REQUEST_REJECTED",
+      userMessage: "요청을 처리할 수 없습니다.",
+      retryable: false,
     });
+    const flatUnknownError = await captureClientError(client.getDashboard());
+    expect(flatUnknownError).toMatchObject({
+      code: "REQUEST_REJECTED",
+      userMessage: "요청을 처리할 수 없습니다.",
+      retryable: false,
+    });
+
+    const exposed = [
+      balanceError,
+      orderError,
+      unknownError,
+      flatUnknownError,
+    ]
+      .flatMap((error) => [error.message, error.userMessage, JSON.stringify(error)])
+      .join(":");
+    expect(exposed).not.toContain(flatSecret);
+    expect(exposed).not.toContain(nestedSecret);
+    expect(exposed).not.toContain(unknownSecret);
+    expect(exposed).not.toContain(flatUnknownSecret);
   });
+
+  it.each([
+    [401, "UNAUTHORIZED", "로그인이 필요합니다."],
+    [404, "NOT_FOUND", "요청한 정보를 찾을 수 없습니다."],
+  ] as const)(
+    "uses a client-owned message for HTTP %i regardless of backend text",
+    async (status, code, userMessage) => {
+      const secret = `backend-status-secret-${status}`;
+      const fetchFn = createFetchMock().mockResolvedValue(
+        Response.json({ error: secret, retryable: true }, { status }),
+      );
+      const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
+
+      const error = await captureClientError(client.getPortfolio());
+
+      expect(error).toMatchObject({ code, userMessage, retryable: false });
+      expect(`${error.message}:${JSON.stringify(error)}`).not.toContain(secret);
+    },
+  );
 
   it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, Number.NaN])(
     "rejects invalid maxGetAttempts value %s",

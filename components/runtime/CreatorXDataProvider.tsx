@@ -21,11 +21,15 @@ import {
   type RemoteDataClientOptions,
 } from "@/lib/data/remote-client";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
-import type { AsyncKeyValueStore } from "@/lib/storage/client-storage";
+import {
+  createClientStorage,
+  type AsyncKeyValueStore,
+  type KeyValueStorageBackend,
+} from "@/lib/storage/client-storage";
 
 const BROWSER_DEMO_SUBJECT = "browser-demo-user";
 
-type AnonymousKeyResult = unknown;
+type NativeSubjectResult = unknown;
 type MaybePromise<T> = T | Promise<T>;
 
 export type CreatorXDataProviderDependencies = {
@@ -37,7 +41,7 @@ export type CreatorXDataProviderDependencies = {
   ) => CreatorXDataClient;
   loadBrowserStorage?: () => MaybePromise<AsyncKeyValueStore>;
   loadNativeStorage?: () => Promise<AsyncKeyValueStore>;
-  getAnonymousKey?: () => Promise<AnonymousKeyResult>;
+  getGameUserKey?: () => Promise<NativeSubjectResult>;
   getBrowserOrigin?: () => string | null;
   getAccessToken?: () => Promise<string | null>;
 };
@@ -50,41 +54,73 @@ export type CreatorXDataRuntimeValue = {
   retry: () => void;
 };
 
-type BootstrapResult = {
-  client: CreatorXDataClient;
-  subject: string | null;
-};
-
 type DataRuntimeConfig = Pick<
   CreatorXRuntimeConfig,
   "appInToss" | "releaseChannel" | "dataMode" | "apiBaseUrl"
 >;
 
+type ResolvedDependencies = {
+  createDemoClient: (
+    dependencies: DemoDataClientDependencies,
+  ) => CreatorXDataClient;
+  createRemoteClient: (
+    options: RemoteDataClientOptions,
+  ) => CreatorXDataClient;
+  loadBrowserStorage: () => MaybePromise<AsyncKeyValueStore>;
+  loadNativeStorage: () => Promise<AsyncKeyValueStore>;
+  getGameUserKey: () => Promise<NativeSubjectResult>;
+  getBrowserOrigin: () => string | null;
+  getAccessToken: (() => Promise<string | null>) | undefined;
+};
+
+type BootstrapDescriptor = {
+  config: DataRuntimeConfig;
+  dependencies: ResolvedDependencies;
+};
+
+type BootstrapResult = {
+  client: CreatorXDataClient;
+  subject: string | null;
+};
+
 type BootstrapState = Omit<CreatorXDataRuntimeValue, "retry"> & {
-  configKey: string;
+  descriptor: BootstrapDescriptor;
+};
+
+type PendingBootstrap = {
+  descriptor: BootstrapDescriptor;
+  attempt: number;
+  controller: AbortController;
+  promise: Promise<BootstrapResult>;
+  subscribers: number;
+  settled: boolean;
+};
+
+type BootstrapCache = { current: PendingBootstrap | null };
+
+type BootstrapSubscription = {
+  promise: Promise<BootstrapResult>;
+  release(): void;
+};
+
+type LazyBrowserStorage = KeyValueStorageBackend & {
+  load(): Promise<AsyncKeyValueStore>;
 };
 
 const CreatorXDataContext = createContext<CreatorXDataRuntimeValue | undefined>(
   undefined,
 );
 
-function configKey(config: DataRuntimeConfig): string {
-  return [
-    config.appInToss ? "toss" : "browser",
-    config.releaseChannel,
-    config.dataMode,
-    config.apiBaseUrl?.toString() ?? "none",
-  ].join(":");
+function defaultCreateDemoClient(
+  dependencies: DemoDataClientDependencies,
+): CreatorXDataClient {
+  return new DemoDataClient(dependencies);
 }
 
-function loadingState(key: string): BootstrapState {
-  return {
-    configKey: key,
-    client: null,
-    subject: null,
-    status: "loading",
-    error: null,
-  };
+function defaultCreateRemoteClient(
+  options: RemoteDataClientOptions,
+): CreatorXDataClient {
+  return new RemoteDataClient(options);
 }
 
 function configurationError(message: string): CreatorXClientError {
@@ -107,15 +143,6 @@ function sessionError(): CreatorXClientError {
   );
 }
 
-function readAnonymousSubject(value: AnonymousKeyResult): string | null {
-  if (typeof value !== "object" || value === null || !("hash" in value)) {
-    return null;
-  }
-  const hash = value.hash;
-  if (typeof hash !== "string" || hash.trim() === "") return null;
-  return hash.trim();
-}
-
 function abortError(): Error {
   const error = new Error("CreatorX data bootstrap was aborted");
   error.name = "AbortError";
@@ -123,7 +150,11 @@ function abortError(): Error {
 }
 
 function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw abortError();
+  if (!signal.aborted) return;
+  if (signal.reason instanceof Error && signal.reason.name === "AbortError") {
+    throw signal.reason;
+  }
+  throw abortError();
 }
 
 function normalizeBootstrapError(error: unknown): CreatorXClientError {
@@ -133,6 +164,21 @@ function normalizeBootstrapError(error: unknown): CreatorXClientError {
     "앱 데이터를 준비할 수 없습니다. 다시 시도해 주세요.",
     true,
   );
+}
+
+function readGameSubject(value: NativeSubjectResult): string | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("type" in value) ||
+    value.type !== "HASH" ||
+    !("hash" in value)
+  ) {
+    return null;
+  }
+  const hash = value.hash;
+  if (typeof hash !== "string" || hash.trim() === "") return null;
+  return hash.trim();
 }
 
 function defaultBrowserOrigin(): string | null {
@@ -170,31 +216,73 @@ async function defaultNativeStorage(): Promise<AsyncKeyValueStore> {
   };
 }
 
-async function defaultAnonymousKey(): Promise<AnonymousKeyResult> {
-  const { getAnonymousKey } = await import("@apps-in-toss/web-framework");
-  return await getAnonymousKey();
+async function defaultGameUserKey(): Promise<NativeSubjectResult> {
+  const { getUserKeyForGame } = await import("@apps-in-toss/web-framework");
+  return await getUserKeyForGame();
+}
+
+function createLazyBrowserStorage(
+  loader: () => MaybePromise<AsyncKeyValueStore>,
+): LazyBrowserStorage {
+  let storePromise: Promise<AsyncKeyValueStore> | null = null;
+  const load = () => {
+    storePromise ??= Promise.resolve().then(loader);
+    return storePromise;
+  };
+  return {
+    load,
+    async getItem(key) {
+      return await (await load()).getItem(key);
+    },
+    async setItem(key, value) {
+      await (await load()).setItem(key, value);
+    },
+    async removeItem(key) {
+      await (await load()).removeItem(key);
+    },
+  };
+}
+
+async function selectAppInTossStorage(
+  config: DataRuntimeConfig,
+  dependencies: ResolvedDependencies,
+  signal: AbortSignal,
+): Promise<AsyncKeyValueStore> {
+  const browser = createLazyBrowserStorage(dependencies.loadBrowserStorage);
+  let nativeSelected = false;
+  const store = await createClientStorage({
+    releaseChannel: config.releaseChannel,
+    browser,
+    loadNative: async () => {
+      const native = await dependencies.loadNativeStorage();
+      throwIfAborted(signal);
+      nativeSelected = true;
+      return native;
+    },
+  });
+  throwIfAborted(signal);
+  if (!nativeSelected) await browser.load();
+  throwIfAborted(signal);
+  return store;
 }
 
 async function bootstrapDemo(
-  config: DataRuntimeConfig,
-  dependencies: CreatorXDataProviderDependencies,
+  descriptor: BootstrapDescriptor,
   signal: AbortSignal,
 ): Promise<BootstrapResult> {
-  const createDemoClient =
-    dependencies.createDemoClient ??
-    ((value: DemoDataClientDependencies) => new DemoDataClient(value));
-
+  const { config, dependencies } = descriptor;
   if (!config.appInToss) {
     let store: AsyncKeyValueStore;
     try {
-      store = await (dependencies.loadBrowserStorage ?? defaultBrowserStorage)();
+      store = await dependencies.loadBrowserStorage();
     } catch (error) {
+      throwIfAborted(signal);
       if (error instanceof CreatorXClientError) throw error;
       throw storageError();
     }
     throwIfAborted(signal);
     return {
-      client: createDemoClient({
+      client: dependencies.createDemoClient({
         store,
         namespace: BROWSER_DEMO_SUBJECT,
       }),
@@ -204,37 +292,35 @@ async function bootstrapDemo(
 
   let store: AsyncKeyValueStore;
   try {
-    store = await (dependencies.loadNativeStorage ?? defaultNativeStorage)();
+    store = await selectAppInTossStorage(config, dependencies, signal);
   } catch (error) {
+    throwIfAborted(signal);
     if (error instanceof CreatorXClientError) throw error;
     throw storageError();
   }
-  throwIfAborted(signal);
 
-  let anonymousKey: AnonymousKeyResult;
+  let gameUserKey: NativeSubjectResult;
   try {
-    anonymousKey = await (
-      dependencies.getAnonymousKey ?? defaultAnonymousKey
-    )();
+    gameUserKey = await dependencies.getGameUserKey();
   } catch {
+    throwIfAborted(signal);
     throw sessionError();
   }
   throwIfAborted(signal);
 
-  const subject = readAnonymousSubject(anonymousKey);
+  const subject = readGameSubject(gameUserKey);
   if (subject === null) throw sessionError();
-  throwIfAborted(signal);
   return {
-    client: createDemoClient({ store, namespace: subject }),
+    client: dependencies.createDemoClient({ store, namespace: subject }),
     subject,
   };
 }
 
 async function bootstrapRemote(
-  config: DataRuntimeConfig,
-  dependencies: CreatorXDataProviderDependencies,
+  descriptor: BootstrapDescriptor,
   signal: AbortSignal,
 ): Promise<BootstrapResult> {
+  const { config, dependencies } = descriptor;
   let baseUrl: URL;
   if (config.appInToss) {
     if (config.apiBaseUrl === null) {
@@ -244,7 +330,7 @@ async function bootstrapRemote(
     }
     baseUrl = new URL(config.apiBaseUrl.toString());
   } else {
-    const origin = (dependencies.getBrowserOrigin ?? defaultBrowserOrigin)();
+    const origin = dependencies.getBrowserOrigin();
     if (origin === null) {
       throw configurationError("브라우저 API 주소를 확인할 수 없습니다.");
     }
@@ -255,12 +341,8 @@ async function bootstrapRemote(
     }
   }
   throwIfAborted(signal);
-
-  const createRemoteClient =
-    dependencies.createRemoteClient ??
-    ((options: RemoteDataClientOptions) => new RemoteDataClient(options));
   return {
-    client: createRemoteClient({
+    client: dependencies.createRemoteClient({
       baseUrl,
       getAccessToken: dependencies.getAccessToken,
     }),
@@ -269,13 +351,87 @@ async function bootstrapRemote(
 }
 
 async function bootstrap(
-  config: DataRuntimeConfig,
-  dependencies: CreatorXDataProviderDependencies,
+  descriptor: BootstrapDescriptor,
   signal: AbortSignal,
 ): Promise<BootstrapResult> {
-  return config.dataMode === "demo"
-    ? await bootstrapDemo(config, dependencies, signal)
-    : await bootstrapRemote(config, dependencies, signal);
+  return descriptor.config.dataMode === "demo"
+    ? await bootstrapDemo(descriptor, signal)
+    : await bootstrapRemote(descriptor, signal);
+}
+
+function loadingState(descriptor: BootstrapDescriptor): BootstrapState {
+  return {
+    descriptor,
+    client: null,
+    subject: null,
+    status: "loading",
+    error: null,
+  };
+}
+
+function sameRequest(
+  pending: PendingBootstrap,
+  descriptor: BootstrapDescriptor,
+  attempt: number,
+): boolean {
+  return pending.descriptor === descriptor && pending.attempt === attempt;
+}
+
+function startPendingBootstrap(
+  cache: BootstrapCache,
+  descriptor: BootstrapDescriptor,
+  attempt: number,
+): PendingBootstrap {
+  const controller = new AbortController();
+  const pending: PendingBootstrap = {
+    descriptor,
+    attempt,
+    controller,
+    promise: bootstrap(descriptor, controller.signal),
+    subscribers: 0,
+    settled: false,
+  };
+  cache.current = pending;
+  void pending.promise.then(
+    () => {
+      pending.settled = true;
+    },
+    () => {
+      pending.settled = true;
+      if (cache.current === pending) cache.current = null;
+    },
+  );
+  return pending;
+}
+
+function acquireBootstrap(
+  cache: BootstrapCache,
+  descriptor: BootstrapDescriptor,
+  attempt: number,
+): BootstrapSubscription {
+  let pending = cache.current;
+  if (pending && !sameRequest(pending, descriptor, attempt)) {
+    if (!pending.settled) pending.controller.abort();
+    cache.current = null;
+    pending = null;
+  }
+  pending ??= startPendingBootstrap(cache, descriptor, attempt);
+  pending.subscribers += 1;
+  let released = false;
+
+  return {
+    promise: pending.promise,
+    release() {
+      if (released) return;
+      released = true;
+      pending.subscribers -= 1;
+      queueMicrotask(() => {
+        if (cache.current !== pending || pending.subscribers !== 0) return;
+        if (!pending.settled) pending.controller.abort();
+        cache.current = null;
+      });
+    },
+  };
 }
 
 export function CreatorXDataProvider({
@@ -287,6 +443,35 @@ export function CreatorXDataProvider({
   config: CreatorXRuntimeConfig;
   dependencies?: CreatorXDataProviderDependencies;
 }) {
+  const {
+    createDemoClient = defaultCreateDemoClient,
+    createRemoteClient = defaultCreateRemoteClient,
+    loadBrowserStorage = defaultBrowserStorage,
+    loadNativeStorage = defaultNativeStorage,
+    getGameUserKey = defaultGameUserKey,
+    getBrowserOrigin = defaultBrowserOrigin,
+    getAccessToken,
+  } = dependencies;
+  const resolvedDependencies = useMemo<ResolvedDependencies>(
+    () => ({
+      createDemoClient,
+      createRemoteClient,
+      loadBrowserStorage,
+      loadNativeStorage,
+      getGameUserKey,
+      getBrowserOrigin,
+      getAccessToken,
+    }),
+    [
+      createDemoClient,
+      createRemoteClient,
+      getAccessToken,
+      getBrowserOrigin,
+      getGameUserKey,
+      loadBrowserStorage,
+      loadNativeStorage,
+    ],
+  );
   const apiBaseUrlValue = config.apiBaseUrl?.toString() ?? null;
   const bootstrapConfig = useMemo<DataRuntimeConfig>(
     () => ({
@@ -303,30 +488,31 @@ export function CreatorXDataProvider({
       config.releaseChannel,
     ],
   );
-  const key = configKey(bootstrapConfig);
-  const [bootstrapDependencies] = useState<CreatorXDataProviderDependencies>(
-    () => dependencies,
+  const descriptor = useMemo<BootstrapDescriptor>(
+    () => ({ config: bootstrapConfig, dependencies: resolvedDependencies }),
+    [bootstrapConfig, resolvedDependencies],
   );
+  const [cache] = useState<BootstrapCache>(() => ({ current: null }));
   const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<BootstrapState>(() => loadingState(key));
-  const currentState = state.configKey === key ? state : loadingState(key);
+  const [state, setState] = useState<BootstrapState>(() =>
+    loadingState(descriptor),
+  );
+  const currentState =
+    state.descriptor === descriptor ? state : loadingState(descriptor);
 
   const retry = useCallback(() => {
-    setState(loadingState(key));
+    setState(loadingState(descriptor));
     setAttempt((value) => value + 1);
-  }, [key]);
+  }, [descriptor]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void bootstrap(
-      bootstrapConfig,
-      bootstrapDependencies,
-      controller.signal,
-    ).then(
+    const subscription = acquireBootstrap(cache, descriptor, attempt);
+    let active = true;
+    void subscription.promise.then(
       (result) => {
-        if (controller.signal.aborted) return;
+        if (!active) return;
         setState({
-          configKey: key,
+          descriptor,
           client: result.client,
           subject: result.subject,
           status: "ready",
@@ -335,13 +521,13 @@ export function CreatorXDataProvider({
       },
       (error: unknown) => {
         if (
-          controller.signal.aborted ||
+          !active ||
           (error instanceof Error && error.name === "AbortError")
         ) {
           return;
         }
         setState({
-          configKey: key,
+          descriptor,
           client: null,
           subject: null,
           status: "error",
@@ -350,13 +536,11 @@ export function CreatorXDataProvider({
       },
     );
 
-    return () => controller.abort();
-  }, [
-    attempt,
-    bootstrapConfig,
-    bootstrapDependencies,
-    key,
-  ]);
+    return () => {
+      active = false;
+      subscription.release();
+    };
+  }, [attempt, cache, descriptor]);
 
   const value = useMemo<CreatorXDataRuntimeValue>(
     () => ({

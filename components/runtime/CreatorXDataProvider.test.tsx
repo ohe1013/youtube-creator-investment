@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,12 +18,27 @@ import {
   useCreatorXDataRuntime,
 } from "@/components/runtime/CreatorXDataProvider";
 import type { CreatorXDataClient } from "@/lib/data/contracts";
+import type { DemoDataClientDependencies } from "@/lib/data/demo-client";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
 import type { AsyncKeyValueStore } from "@/lib/storage/client-storage";
 
 const BROWSER_SUBJECT = "browser-demo-user";
 
-afterEach(cleanup);
+const sdkMocks = vi.hoisted(() => ({
+  getAnonymousKey: vi.fn(),
+  getUserKeyForGame: vi.fn(),
+}));
+
+vi.mock("@apps-in-toss/web-framework", () => ({
+  getAnonymousKey: sdkMocks.getAnonymousKey,
+  getUserKeyForGame: sdkMocks.getUserKeyForGame,
+}));
+
+afterEach(() => {
+  cleanup();
+  sdkMocks.getAnonymousKey.mockReset();
+  sdkMocks.getUserKeyForGame.mockReset();
+});
 
 function runtimeConfig(
   overrides: Partial<CreatorXRuntimeConfig> = {},
@@ -98,7 +114,10 @@ describe("CreatorXDataProvider", () => {
     const createRemoteClient = vi.fn(() => clientStub("remote"));
     const loadBrowserStorage = vi.fn(() => store);
     const loadNativeStorage = vi.fn(async () => memoryStore());
-    const getAnonymousKey = vi.fn(async () => ({ hash: "native-hash" }));
+    const getGameUserKey = vi.fn(async () => ({
+      type: "HASH",
+      hash: "native-hash",
+    }));
     const observedClients: CreatorXDataClient[] = [];
 
     render(
@@ -109,7 +128,7 @@ describe("CreatorXDataProvider", () => {
           createRemoteClient,
           loadBrowserStorage,
           loadNativeStorage,
-          getAnonymousKey,
+          getGameUserKey,
         }}
       >
         <RuntimeConsumer onClient={(client) => observedClients.push(client)} />
@@ -127,7 +146,7 @@ describe("CreatorXDataProvider", () => {
     expect(createRemoteClient).not.toHaveBeenCalled();
     expect(loadBrowserStorage).toHaveBeenCalledTimes(1);
     expect(loadNativeStorage).not.toHaveBeenCalled();
-    expect(getAnonymousKey).not.toHaveBeenCalled();
+    expect(getGameUserKey).not.toHaveBeenCalled();
     expect(observedClients.every((client) => client === demoClient)).toBe(true);
   });
 
@@ -257,12 +276,18 @@ describe("CreatorXDataProvider", () => {
     expect(createRemoteClient).not.toHaveBeenCalled();
   });
 
-  it("shares the validated anonymous hash with the App-in-Toss demo client", async () => {
+  it("shares the validated game-user hash with the App-in-Toss demo client", async () => {
     const store = memoryStore();
-    const createDemoClient = vi.fn(() => clientStub("demo"));
+    const createDemoClient = vi.fn(
+      (dependencies: DemoDataClientDependencies) =>
+        clientStub(dependencies.namespace),
+    );
     const loadBrowserStorage = vi.fn(() => memoryStore());
     const loadNativeStorage = vi.fn(async () => store);
-    const getAnonymousKey = vi.fn(async () => ({ hash: "  device-hash  " }));
+    const getGameUserKey = vi.fn(async () => ({
+      type: "HASH",
+      hash: "  device-hash  ",
+    }));
 
     render(
       <CreatorXDataProvider
@@ -275,7 +300,7 @@ describe("CreatorXDataProvider", () => {
           createDemoClient,
           loadBrowserStorage,
           loadNativeStorage,
-          getAnonymousKey,
+          getGameUserKey,
         }}
       >
         <RuntimeConsumer />
@@ -285,21 +310,144 @@ describe("CreatorXDataProvider", () => {
     expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
       "ready:device-hash",
     );
-    expect(createDemoClient).toHaveBeenCalledWith({
-      store,
-      namespace: "device-hash",
-    });
-    expect(loadNativeStorage).toHaveBeenCalledTimes(1);
-    expect(getAnonymousKey).toHaveBeenCalledTimes(1);
-    expect(loadBrowserStorage).not.toHaveBeenCalled();
+    expect(createDemoClient).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: "device-hash" }),
+    );
     expect(store.setItem).not.toHaveBeenCalled();
+    const selectedStore = createDemoClient.mock.calls[0][0].store;
+    await selectedStore.getItem("native-missing");
+    await selectedStore.setItem("native-key", "native-value");
+    expect(store.getItem).toHaveBeenCalledWith("native-missing");
+    expect(store.setItem).toHaveBeenCalledWith("native-key", "native-value");
+    expect(loadNativeStorage).toHaveBeenCalledTimes(1);
+    expect(getGameUserKey).toHaveBeenCalledTimes(1);
+    expect(loadBrowserStorage).not.toHaveBeenCalled();
+  });
+
+  it("uses the official game user-key SDK seam by default", async () => {
+    const store = memoryStore();
+    const createDemoClient = vi.fn(() => clientStub("demo"));
+    sdkMocks.getUserKeyForGame.mockResolvedValue({
+      type: "HASH",
+      hash: "official-game-key",
+    });
+
+    render(
+      <CreatorXDataProvider
+        config={runtimeConfig({
+          appInToss: true,
+          releaseChannel: "sandbox",
+          dataMode: "demo",
+        })}
+        dependencies={{
+          createDemoClient,
+          loadNativeStorage: async () => store,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:official-game-key",
+    );
+    expect(sdkMocks.getUserKeyForGame).toHaveBeenCalledTimes(1);
+    expect(sdkMocks.getAnonymousKey).not.toHaveBeenCalled();
+  });
+
+  it("uses browser storage only when native storage fails in sandbox", async () => {
+    const browserStore = memoryStore();
+    const createDemoClient = vi.fn(
+      (dependencies: DemoDataClientDependencies) => {
+        return clientStub(`sandbox-fallback:${dependencies.namespace}`);
+      },
+    );
+    const loadBrowserStorage = vi.fn(() => browserStore);
+    const loadNativeStorage = vi.fn(async () => {
+      throw new Error("native bridge missing");
+    });
+    const getGameUserKey = vi.fn(async () => ({
+      type: "HASH",
+      hash: "sandbox-device",
+    }));
+
+    render(
+      <CreatorXDataProvider
+        config={runtimeConfig({
+          appInToss: true,
+          releaseChannel: "sandbox",
+          dataMode: "demo",
+        })}
+        dependencies={{
+          createDemoClient,
+          loadBrowserStorage,
+          loadNativeStorage,
+          getGameUserKey,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:sandbox-device",
+    );
+    expect(loadNativeStorage).toHaveBeenCalledTimes(1);
+    expect(loadBrowserStorage).toHaveBeenCalledTimes(1);
+    const selectedStore = createDemoClient.mock.calls[0][0].store;
+    await selectedStore.setItem("fallback", "value");
+    expect(browserStore.setItem).toHaveBeenCalledWith("fallback", "value");
+    expect(getGameUserKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("never falls back to browser storage when native storage fails in production", async () => {
+    const loadBrowserStorage = vi.fn(() => memoryStore());
+    const loadNativeStorage = vi.fn(async () => {
+      throw new Error("native bridge missing");
+    });
+    const getGameUserKey = vi.fn(async () => ({
+      type: "HASH",
+      hash: "must-not-load",
+    }));
+    const createDemoClient = vi.fn(() => clientStub("demo"));
+
+    render(
+      <CreatorXDataProvider
+        config={runtimeConfig({
+          appInToss: true,
+          releaseChannel: "production",
+          dataMode: "demo",
+          allowBrowserStorageFallback: false,
+        })}
+        dependencies={{
+          createDemoClient,
+          loadBrowserStorage,
+          loadNativeStorage,
+          getGameUserKey,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveAttribute(
+      "data-error-code",
+      "STORAGE_UNAVAILABLE",
+    );
+    expect(loadNativeStorage).toHaveBeenCalledTimes(1);
+    expect(loadBrowserStorage).not.toHaveBeenCalled();
+    expect(getGameUserKey).not.toHaveBeenCalled();
+    expect(createDemoClient).not.toHaveBeenCalled();
   });
 
   it.each([
+    ["INVALID_CATEGORY", async () => "INVALID_CATEGORY" as const],
     ["ERROR", async () => "ERROR" as const],
     ["undefined", async () => undefined],
-    ["blank hash", async () => ({ hash: "   " })],
-    ["malformed hash", async () => ({ hash: 42 })],
+    ["missing HASH type", async () => ({ hash: "device-hash" })],
+    ["wrong type", async () => ({ type: "TOKEN", hash: "device-hash" })],
+    ["blank hash", async () => ({ type: "HASH", hash: "   " })],
+    ["malformed hash", async () => ({ type: "HASH", hash: 42 })],
     [
       "rejection",
       async () => {
@@ -307,8 +455,8 @@ describe("CreatorXDataProvider", () => {
       },
     ],
   ])(
-    "surfaces retryable SESSION_UNAVAILABLE for anonymous-key %s without fallback writes",
-    async (_label, getAnonymousKey) => {
+    "surfaces retryable SESSION_UNAVAILABLE for game-user-key %s without fallback writes",
+    async (_label, getGameUserKey) => {
       const store = memoryStore();
       const createDemoClient = vi.fn(() => clientStub("demo"));
       const loadBrowserStorage = vi.fn(() => memoryStore());
@@ -324,7 +472,7 @@ describe("CreatorXDataProvider", () => {
             createDemoClient,
             loadBrowserStorage,
             loadNativeStorage: async () => store,
-            getAnonymousKey,
+            getGameUserKey,
           }}
         >
           <RuntimeConsumer />
@@ -344,10 +492,10 @@ describe("CreatorXDataProvider", () => {
     const store = memoryStore();
     const demoClient = clientStub("demo");
     const createDemoClient = vi.fn(() => demoClient);
-    const getAnonymousKey = vi
+    const getGameUserKey = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary bridge error"))
-      .mockResolvedValueOnce({ hash: "retried-device" });
+      .mockResolvedValueOnce({ type: "HASH", hash: "retried-device" });
     const observedClients = new Set<CreatorXDataClient>();
 
     render(
@@ -360,7 +508,7 @@ describe("CreatorXDataProvider", () => {
         dependencies={{
           createDemoClient,
           loadNativeStorage: async () => store,
-          getAnonymousKey,
+          getGameUserKey,
         }}
       >
         <RuntimeConsumer onClient={(client) => observedClients.add(client)} />
@@ -376,15 +524,264 @@ describe("CreatorXDataProvider", () => {
     expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
       "ready:retried-device",
     );
-    expect(getAnonymousKey).toHaveBeenCalledTimes(2);
+    expect(getGameUserKey).toHaveBeenCalledTimes(2);
     expect(createDemoClient).toHaveBeenCalledTimes(1);
     expect(observedClients).toEqual(new Set([demoClient]));
   });
 
+  it("rebuilds remote mode when origin, factory, or token seams change", async () => {
+    const firstClient = clientStub("first-remote");
+    const secondClient = clientStub("second-remote");
+    const firstFactory = vi.fn(() => firstClient);
+    const secondFactory = vi.fn(() => secondClient);
+    const firstToken = vi.fn(async () => "first-token");
+    const secondToken = vi.fn(async () => "second-token");
+    const firstOrigin = vi.fn(() => "https://first.example.com");
+    const secondOrigin = vi.fn(() => "https://second.example.com");
+    const observed = new Set<CreatorXDataClient>();
+    const config = runtimeConfig({ dataMode: "remote" });
+
+    const view = render(
+      <CreatorXDataProvider
+        config={config}
+        dependencies={{
+          createRemoteClient: firstFactory,
+          getAccessToken: firstToken,
+          getBrowserOrigin: firstOrigin,
+        }}
+      >
+        <RuntimeConsumer onClient={(client) => observed.add(client)} />
+      </CreatorXDataProvider>,
+    );
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:none",
+    );
+
+    view.rerender(
+      <CreatorXDataProvider
+        config={runtimeConfig({ dataMode: "remote" })}
+        dependencies={{
+          createRemoteClient: secondFactory,
+          getAccessToken: secondToken,
+          getBrowserOrigin: secondOrigin,
+        }}
+      >
+        <RuntimeConsumer onClient={(client) => observed.add(client)} />
+      </CreatorXDataProvider>,
+    );
+
+    await waitFor(() => expect(secondFactory).toHaveBeenCalledTimes(1));
+    expect(firstFactory).toHaveBeenCalledTimes(1);
+    expect(secondFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: new URL("https://second.example.com"),
+        getAccessToken: secondToken,
+      }),
+    );
+    expect(firstOrigin).toHaveBeenCalledTimes(1);
+    expect(secondOrigin).toHaveBeenCalledTimes(1);
+    expect(observed).toEqual(new Set([firstClient, secondClient]));
+  });
+
+  it("invalidates stale native bootstrap when storage or game-key seams change", async () => {
+    const staleGameKey = deferred<{ type: "HASH"; hash: string }>();
+    const firstGameKey = vi.fn(() => staleGameKey.promise);
+    const secondGameKey = vi.fn(async () => ({
+      type: "HASH",
+      hash: "fresh-device",
+    }));
+    const firstStorage = vi.fn(async () => memoryStore());
+    const secondStorage = vi.fn(async () => memoryStore());
+    const createdNamespaces: string[] = [];
+    const createDemoClient = vi.fn(
+      (dependencies: DemoDataClientDependencies) => {
+        createdNamespaces.push(dependencies.namespace);
+        return clientStub(dependencies.namespace);
+      },
+    );
+    const config = runtimeConfig({
+      appInToss: true,
+      releaseChannel: "sandbox",
+      dataMode: "demo",
+    });
+
+    const view = render(
+      <CreatorXDataProvider
+        config={config}
+        dependencies={{
+          createDemoClient,
+          loadNativeStorage: firstStorage,
+          getGameUserKey: firstGameKey,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+    await waitFor(() => expect(firstGameKey).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <CreatorXDataProvider
+        config={config}
+        dependencies={{
+          createDemoClient,
+          loadNativeStorage: secondStorage,
+          getGameUserKey: secondGameKey,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:fresh-device",
+    );
+    await act(async () => {
+      staleGameKey.resolve({ type: "HASH", hash: "stale-device" });
+      await staleGameKey.promise;
+    });
+    expect(firstStorage).toHaveBeenCalledTimes(1);
+    expect(secondStorage).toHaveBeenCalledTimes(1);
+    expect(createdNamespaces).toEqual(["fresh-device"]);
+  });
+
+  it("uses the latest repaired dependency seams when retrying", async () => {
+    const firstGameKey = vi.fn().mockRejectedValue(new Error("first failure"));
+    const repairedGameKey = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("second failure"))
+      .mockResolvedValueOnce({ type: "HASH", hash: "repaired-device" });
+    const createDemoClient = vi.fn(() => clientStub("repaired"));
+    const loadNativeStorage = vi.fn(async () => memoryStore());
+    const config = runtimeConfig({
+      appInToss: true,
+      releaseChannel: "sandbox",
+      dataMode: "demo",
+    });
+
+    const view = render(
+      <CreatorXDataProvider
+        config={config}
+        dependencies={{
+          createDemoClient,
+          loadNativeStorage,
+          getGameUserKey: firstGameKey,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+    expect(await screen.findByRole("alert")).toHaveAttribute(
+      "data-error-code",
+      "SESSION_UNAVAILABLE",
+    );
+
+    view.rerender(
+      <CreatorXDataProvider
+        config={config}
+        dependencies={{
+          createDemoClient,
+          loadNativeStorage,
+          getGameUserKey: repairedGameKey,
+        }}
+      >
+        <RuntimeConsumer />
+      </CreatorXDataProvider>,
+    );
+    await waitFor(() => expect(repairedGameKey).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("alert")).toHaveAttribute(
+      "data-error-code",
+      "SESSION_UNAVAILABLE",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:repaired-device",
+    );
+    expect(firstGameKey).toHaveBeenCalledTimes(1);
+    expect(repairedGameKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses one pending bootstrap across StrictMode effect replay", async () => {
+    const loadNativeStorage = vi.fn(async () => memoryStore());
+    const getGameUserKey = vi.fn(async () => ({
+      type: "HASH",
+      hash: "strict-device",
+    }));
+    const createDemoClient = vi.fn(() => clientStub("strict"));
+
+    render(
+      <StrictMode>
+        <CreatorXDataProvider
+          config={runtimeConfig({
+            appInToss: true,
+            releaseChannel: "sandbox",
+            dataMode: "demo",
+          })}
+          dependencies={{
+            createDemoClient,
+            loadNativeStorage,
+            getGameUserKey,
+          }}
+        >
+          <RuntimeConsumer />
+        </CreatorXDataProvider>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:strict-device",
+    );
+    expect(loadNativeStorage).toHaveBeenCalledTimes(1);
+    expect(getGameUserKey).toHaveBeenCalledTimes(1);
+    expect(createDemoClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts a StrictMode rejection so retry starts one fresh bootstrap", async () => {
+    const loadNativeStorage = vi.fn(async () => memoryStore());
+    const getGameUserKey = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary"))
+      .mockResolvedValueOnce({ type: "HASH", hash: "strict-retry" });
+    const createDemoClient = vi.fn(() => clientStub("strict-retry"));
+
+    render(
+      <StrictMode>
+        <CreatorXDataProvider
+          config={runtimeConfig({
+            appInToss: true,
+            releaseChannel: "sandbox",
+            dataMode: "demo",
+          })}
+          dependencies={{
+            createDemoClient,
+            loadNativeStorage,
+            getGameUserKey,
+          }}
+        >
+          <RuntimeConsumer />
+        </CreatorXDataProvider>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveAttribute(
+      "data-error-code",
+      "SESSION_UNAVAILABLE",
+    );
+    expect(getGameUserKey).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+
+    expect(await screen.findByTestId("runtime-value")).toHaveTextContent(
+      "ready:strict-retry",
+    );
+    expect(loadNativeStorage).toHaveBeenCalledTimes(2);
+    expect(getGameUserKey).toHaveBeenCalledTimes(2);
+    expect(createDemoClient).toHaveBeenCalledTimes(1);
+  });
+
   it("does not publish a stale async completion after unmount", async () => {
-    const anonymousKey = deferred<{ hash: string }>();
+    const gameUserKey = deferred<{ type: "HASH"; hash: string }>();
     const createDemoClient = vi.fn(() => clientStub("demo"));
-    const getAnonymousKey = vi.fn(() => anonymousKey.promise);
+    const getGameUserKey = vi.fn(() => gameUserKey.promise);
     const view = render(
       <CreatorXDataProvider
         config={runtimeConfig({
@@ -395,18 +792,18 @@ describe("CreatorXDataProvider", () => {
         dependencies={{
           createDemoClient,
           loadNativeStorage: async () => memoryStore(),
-          getAnonymousKey,
+          getGameUserKey,
         }}
       >
         <RuntimeConsumer />
       </CreatorXDataProvider>,
     );
 
-    await waitFor(() => expect(getAnonymousKey).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getGameUserKey).toHaveBeenCalledTimes(1));
     view.unmount();
     await act(async () => {
-      anonymousKey.resolve({ hash: "late-device" });
-      await anonymousKey.promise;
+      gameUserKey.resolve({ type: "HASH", hash: "late-device" });
+      await gameUserKey.promise;
     });
 
     expect(createDemoClient).not.toHaveBeenCalled();
