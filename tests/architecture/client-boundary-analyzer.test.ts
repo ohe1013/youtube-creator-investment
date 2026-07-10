@@ -71,6 +71,9 @@ describe("client boundary mutation probes", () => {
     'const auth = import("next-auth/react", { with: { type: "json" } });',
     'const auth = require("next-auth/react");',
     'const auth = require(`next-auth/react`);',
+    'const r = require; const auth = r("next-auth/react");',
+    'const auth = module.require("next-auth/react");',
+    'const r = module.require; const auth = r("next-auth/react");',
   ])("rejects a NextAuth escape outside the adapter: %s", (source) => {
     expect(rules({ "lib/auth-escape.ts": source })).toContain(
       "lib/auth-escape.ts:nextauth-session-import",
@@ -138,10 +141,32 @@ describe("client boundary mutation probes", () => {
       rules({
         "lib/session/CreatorXSessionProvider.tsx": [
           'import { SessionProvider, getSession, signOut, useSession } from "next-auth/react";',
-          "export const normalized = [SessionProvider, getSession, signOut, useSession];",
+          "const normalized = [SessionProvider, getSession, signOut, useSession];",
+          "void normalized;",
         ].join("\n"),
       }),
     ).toEqual([]);
+  });
+
+  it.each([
+    'const leak = signOut; export { leak };',
+    'const first = signOut; const leak = first; export { leak };',
+    'export const leak = signOut;',
+    'let leak; leak = signOut; export { leak };',
+    'const [leak] = [signOut]; export { leak };',
+    'let leak; [leak] = [signOut]; export { leak };',
+    'let leak; ({ leak } = { leak: signOut }); export { leak };',
+  ])("rejects a restricted NextAuth alias re-export: %s", (escape) => {
+    expect(
+      rules({
+        "lib/session/CreatorXSessionProvider.tsx": [
+          'import { signOut } from "next-auth/react";',
+          escape,
+        ].join("\n"),
+      }),
+    ).toContain(
+      "lib/session/CreatorXSessionProvider.tsx:nextauth-session-import",
+    );
   });
 
   it("resolves a .js import specifier to a project TypeScript helper", () => {
@@ -619,6 +644,17 @@ describe("client boundary mutation probes", () => {
   });
 
   it.each([
+    'const root = globalThis; root["fetch"] = replacement;',
+    "fetch = replacement;",
+    "let fetch = replacement; fetch++;",
+    'const root = globalThis; Object.defineProperty(root, "fetch", { value: replacement });',
+  ])("conservatively rejects a fetch-named mutation target: %s", (source) => {
+    expect(rules({ "lib/mutator.ts": source })).toContain(
+      "lib/mutator.ts:fetch-reassignment",
+    );
+  });
+
+  it.each([
     'const assign = Object.assign; assign(globalThis, { fetch: replacement });',
     'const patch = { fetch: replacement }; Object.assign(globalThis, patch);',
     'const { defineProperty } = Object; defineProperty(window, "fetch", { value: replacement });',
@@ -634,7 +670,7 @@ describe("client boundary mutation probes", () => {
     "Object.assign(localApi, { fetch: replacement });",
     "delete localApi.fetch;",
     'Reflect.deleteProperty(localApi, "fetch");',
-  ])("does not flag a purely local fetch mutation: %s", (source) => {
+  ])("conservatively rejects a local fetch mutation target: %s", (source) => {
     expect(
       rules({
         "lib/local-mutator.ts": [
@@ -642,7 +678,7 @@ describe("client boundary mutation probes", () => {
           source,
         ].join("\n"),
       }),
-    ).toEqual([]);
+    ).toContain("lib/local-mutator.ts:fetch-reassignment");
   });
 
   it.each([

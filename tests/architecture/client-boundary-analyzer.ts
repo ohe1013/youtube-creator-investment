@@ -64,7 +64,9 @@ type ParsedSource = {
 
 type RuntimeSyntaxFacts = {
   apiToken: boolean;
+  callWithFetchArgument: boolean;
   callWithGlobalArgument: boolean;
+  fetchMutationTarget: boolean;
   fetchToken: boolean;
   globalMutation: boolean;
   globalToken: boolean;
@@ -274,10 +276,32 @@ function containsGlobalObjectToken(node: ts.Node): boolean {
   return found;
 }
 
+function containsRuntimeFetchToken(node: ts.Node): boolean {
+  let found = false;
+  const visit = (candidate: ts.Node): void => {
+    if (found || ts.isTypeNode(candidate)) return;
+    if (
+      ((ts.isIdentifier(candidate) || ts.isPrivateIdentifier(candidate)) &&
+        candidate.text === "fetch") ||
+      ((ts.isStringLiteralLike(candidate) ||
+        ts.isTemplateLiteralToken(candidate)) &&
+        candidate.text === "fetch")
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  return found;
+}
+
 function runtimeSyntaxFacts(sourceFile: ts.SourceFile): RuntimeSyntaxFacts {
   const facts: RuntimeSyntaxFacts = {
     apiToken: false,
+    callWithFetchArgument: false,
     callWithGlobalArgument: false,
+    fetchMutationTarget: false,
     fetchToken: false,
     globalMutation: false,
     globalToken: false,
@@ -327,29 +351,50 @@ function runtimeSyntaxFacts(sourceFile: ts.SourceFile): RuntimeSyntaxFacts {
     if (
       ts.isBinaryExpression(node) &&
         node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
-      containsGlobalObjectToken(node.left)
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
-      facts.globalMutation = true;
+      if (containsGlobalObjectToken(node.left)) facts.globalMutation = true;
+      if (containsRuntimeFetchToken(node.left)) {
+        facts.fetchMutationTarget = true;
+      }
     }
     if (
-      ts.isDeleteExpression(node) &&
-      containsGlobalObjectToken(node.expression)
+      (ts.isPrefixUnaryExpression(node) &&
+        (node.operator === ts.SyntaxKind.PlusPlusToken ||
+          node.operator === ts.SyntaxKind.MinusMinusToken)) ||
+      ts.isPostfixUnaryExpression(node)
     ) {
-      facts.globalMutation = true;
+      if (containsRuntimeFetchToken(node.operand)) {
+        facts.fetchMutationTarget = true;
+      }
     }
-    if (
-      ts.isCallExpression(node) &&
-      node.arguments[0] !== undefined &&
-      containsGlobalObjectToken(node.arguments[0])
-    ) {
-      facts.callWithGlobalArgument = true;
+    if (ts.isDeleteExpression(node)) {
+      if (containsGlobalObjectToken(node.expression)) {
+        facts.globalMutation = true;
+      }
+      if (containsRuntimeFetchToken(node.expression)) {
+        facts.fetchMutationTarget = true;
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      if (
+        node.arguments[0] !== undefined &&
+        containsGlobalObjectToken(node.arguments[0])
+      ) {
+        facts.callWithGlobalArgument = true;
+      }
+      if (node.arguments.some(containsRuntimeFetchToken)) {
+        facts.callWithFetchArgument = true;
+      }
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   if (facts.callWithGlobalArgument && facts.mutationCapability) {
     facts.globalMutation = true;
+  }
+  if (facts.callWithFetchArgument && facts.mutationCapability) {
+    facts.fetchMutationTarget = true;
   }
   return facts;
 }
@@ -360,9 +405,8 @@ function containsForbiddenClientToken(facts: RuntimeSyntaxFacts): boolean {
 
 function containsGlobalFetchReassignment(facts: RuntimeSyntaxFacts): boolean {
   return (
-    facts.fetchToken &&
-    facts.globalToken &&
-    facts.globalMutation
+    facts.fetchMutationTarget ||
+    (facts.fetchToken && facts.globalToken && facts.globalMutation)
   );
 }
 
@@ -402,6 +446,139 @@ function directNextAuthImportAllowed(
   );
 }
 
+function runtimeExpressionReferencesAlias(
+  node: ts.Node,
+  aliases: ReadonlySet<string>,
+): boolean {
+  let found = false;
+  const visit = (candidate: ts.Node): void => {
+    if (found || ts.isTypeNode(candidate)) return;
+    if (ts.isIdentifier(candidate) && aliases.has(candidate.text)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function addBindingAliases(
+  name: ts.BindingName,
+  aliases: Set<string>,
+): boolean {
+  if (ts.isIdentifier(name)) {
+    const size = aliases.size;
+    aliases.add(name.text);
+    return aliases.size !== size;
+  }
+  let changed = false;
+  for (const element of name.elements) {
+    if (ts.isBindingElement(element)) {
+      changed = addBindingAliases(element.name, aliases) || changed;
+    }
+  }
+  return changed;
+}
+
+function addAssignmentAliases(
+  target: ts.Expression,
+  aliases: Set<string>,
+): boolean {
+  if (ts.isParenthesizedExpression(target)) {
+    return addAssignmentAliases(target.expression, aliases);
+  }
+  if (ts.isIdentifier(target)) {
+    const size = aliases.size;
+    aliases.add(target.text);
+    return aliases.size !== size;
+  }
+  if (ts.isArrayLiteralExpression(target)) {
+    let changed = false;
+    for (const element of target.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      changed = addAssignmentAliases(
+        ts.isSpreadElement(element) ? element.expression : element,
+        aliases,
+      ) || changed;
+    }
+    return changed;
+  }
+  if (ts.isObjectLiteralExpression(target)) {
+    let changed = false;
+    for (const property of target.properties) {
+      if (ts.isShorthandPropertyAssignment(property)) {
+        changed = addAssignmentAliases(property.name, aliases) || changed;
+      } else if (ts.isPropertyAssignment(property)) {
+        changed =
+          addAssignmentAliases(property.initializer, aliases) || changed;
+      } else if (ts.isSpreadAssignment(property)) {
+        changed = addAssignmentAliases(property.expression, aliases) || changed;
+      }
+    }
+    return changed;
+  }
+  return false;
+}
+
+function nextAuthAliasClosure(
+  sourceFile: ts.SourceFile,
+  importedLocals: ReadonlySet<string>,
+): Set<string> {
+  const aliases = new Set(importedLocals);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const visit = (node: ts.Node): void => {
+      if (ts.isTypeNode(node)) return;
+      if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        runtimeExpressionReferencesAlias(node.initializer, aliases)
+      ) {
+        changed = addBindingAliases(node.name, aliases) || changed;
+      } else if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        runtimeExpressionReferencesAlias(node.right, aliases)
+      ) {
+        changed = addAssignmentAliases(node.left, aliases) || changed;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+  return aliases;
+}
+
+function bindingContainsAlias(
+  name: ts.BindingName,
+  aliases: ReadonlySet<string>,
+): boolean {
+  if (ts.isIdentifier(name)) return aliases.has(name.text);
+  return name.elements.some(
+    (element) =>
+      ts.isBindingElement(element) &&
+      bindingContainsAlias(element.name, aliases),
+  );
+}
+
+function hasExportModifier(node: ts.Node): boolean {
+  return Boolean(
+    ts.canHaveModifiers(node) &&
+      ts
+        .getModifiers(node)
+        ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword),
+  );
+}
+
+function callCarriesNextAuthModule(node: ts.CallExpression): boolean {
+  return node.arguments.some(
+    (argument) => staticModuleText(argument) === "next-auth/react",
+  );
+}
+
 function containsRestrictedNextAuthAccess(
   sourceFile: ts.SourceFile,
   path: string,
@@ -424,10 +601,18 @@ function containsRestrictedNextAuthAccess(
       ts.isNamedImports(clause.namedBindings)
     ) {
       for (const element of clause.namedBindings.elements) {
-        if (!element.isTypeOnly) importedLocals.add(element.name.text);
+        const importedName = element.propertyName?.text ?? element.name.text;
+        if (
+          !element.isTypeOnly &&
+          SESSION_ADAPTER_IMPORTS.has(importedName)
+        ) {
+          importedLocals.add(element.name.text);
+        }
       }
     }
   }
+
+  const aliases = nextAuthAliasClosure(sourceFile, importedLocals);
 
   let found = false;
   const visit = (node: ts.Node): void => {
@@ -451,7 +636,7 @@ function containsRestrictedNextAuthAccess(
         node.exportClause.elements.some(
           (element) =>
             !element.isTypeOnly &&
-            importedLocals.has(
+            aliases.has(
               element.propertyName?.text ?? element.name.text,
             ),
         )
@@ -469,14 +654,22 @@ function containsRestrictedNextAuthAccess(
       return;
     } else if (
       ts.isCallExpression(node) &&
-      callModuleSpecifier(node) === "next-auth/react"
+      callCarriesNextAuthModule(node)
     ) {
       found = true;
       return;
     } else if (
       ts.isExportAssignment(node) &&
-      ts.isIdentifier(node.expression) &&
-      importedLocals.has(node.expression.text)
+      runtimeExpressionReferencesAlias(node.expression, aliases)
+    ) {
+      found = true;
+      return;
+    } else if (
+      ts.isVariableStatement(node) &&
+      hasExportModifier(node) &&
+      node.declarationList.declarations.some((declaration) =>
+        bindingContainsAlias(declaration.name, aliases),
+      )
     ) {
       found = true;
       return;

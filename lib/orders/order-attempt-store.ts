@@ -39,7 +39,12 @@ type PersistedAttempt = z.infer<typeof persistedAttemptSchema>;
 
 const operationQueues = new Map<string, Promise<void>>();
 const activeLeases = new Set<string>();
-const volatileSettledKeys = new Map<string, string>();
+const MAX_VOLATILE_SETTLED_KEYS = 64;
+type VolatileSettledBarrier = {
+  keys: Set<string>;
+  saturated: boolean;
+};
+const volatileSettledKeys = new Map<string, VolatileSettledBarrier>();
 
 export type OrderAttempt = z.infer<typeof orderAttemptSchema>;
 
@@ -225,6 +230,42 @@ function settlementRecordState(
   return record.status === "settled" ? "exact-settled" : "exact-pending";
 }
 
+function markVolatileSettled(key: string, idempotencyKey: string): void {
+  let barrier = volatileSettledKeys.get(key);
+  if (barrier === undefined) {
+    barrier = { keys: new Set(), saturated: false };
+    volatileSettledKeys.set(key, barrier);
+  }
+  if (barrier.saturated || barrier.keys.has(idempotencyKey)) return;
+  if (barrier.keys.size >= MAX_VOLATILE_SETTLED_KEYS) {
+    barrier.keys.clear();
+    barrier.saturated = true;
+    return;
+  }
+  barrier.keys.add(idempotencyKey);
+}
+
+function observeDurableRecord(
+  key: string,
+  record: PersistedAttempt | null,
+): boolean {
+  const barrier = volatileSettledKeys.get(key);
+  if (barrier === undefined) return false;
+  if (record === null || record.status === "settled") {
+    volatileSettledKeys.delete(key);
+    return false;
+  }
+  if (barrier.saturated) return true;
+  const matches = barrier.keys.has(record.idempotencyKey);
+  if (matches) {
+    barrier.keys.clear();
+    barrier.keys.add(record.idempotencyKey);
+  } else {
+    volatileSettledKeys.delete(key);
+  }
+  return matches;
+}
+
 export function createMemoryOrderAttemptStore(): OrderAttemptStore {
   const records = new Map<string, PersistedAttempt>();
   const leases = new Set<string>();
@@ -325,16 +366,8 @@ export function createPersistentOrderAttemptStore(
       const key = await keyFor(signature);
       return await enqueueOperation(key, async () => {
         const current = await read(key);
-        const volatileSettled = volatileSettledKeys.get(key);
-        if (
-          volatileSettled !== undefined &&
-          current?.status === "pending" &&
-          current.idempotencyKey !== volatileSettled
-        ) {
-          volatileSettledKeys.delete(key);
-          return attempt(signature, current.idempotencyKey);
-        }
-        if (volatileSettled === undefined && current?.status === "pending") {
+        const volatileSettled = observeDurableRecord(key, current);
+        if (!volatileSettled && current?.status === "pending") {
           return attempt(signature, current.idempotencyKey);
         }
 
@@ -373,9 +406,10 @@ export function createPersistentOrderAttemptStore(
         try {
           current = await read(key);
         } catch (error) {
-          volatileSettledKeys.set(key, expected.idempotencyKey);
+          markVolatileSettled(key, expected.idempotencyKey);
           return { storageConcern: storageConcern(error) };
         }
+        observeDurableRecord(key, current);
         const initialState = settlementRecordState(
           current,
           expected.idempotencyKey,
@@ -400,12 +434,14 @@ export function createPersistentOrderAttemptStore(
             } catch (error) {
               concern ??= storageConcern(error);
               try {
+                const stored = await read(key);
+                observeDurableRecord(key, stored);
                 lastReadState = settlementRecordState(
-                  await read(key),
+                  stored,
                   expected.idempotencyKey,
                 );
               } catch (readError) {
-                volatileSettledKeys.set(key, expected.idempotencyKey);
+                markVolatileSettled(key, expected.idempotencyKey);
                 concern ??= storageConcern(readError);
                 return { storageConcern: concern };
               }
@@ -425,12 +461,14 @@ export function createPersistentOrderAttemptStore(
 
           if (!durableBarrier) {
             try {
+              const stored = await read(key);
+              observeDurableRecord(key, stored);
               lastReadState = settlementRecordState(
-                await read(key),
+                stored,
                 expected.idempotencyKey,
               );
             } catch (error) {
-              volatileSettledKeys.set(key, expected.idempotencyKey);
+              markVolatileSettled(key, expected.idempotencyKey);
               concern ??= storageConcern(error);
               return { storageConcern: concern };
             }
@@ -445,17 +483,19 @@ export function createPersistentOrderAttemptStore(
               try {
                 await remove(key);
               } catch (error) {
-                volatileSettledKeys.set(key, expected.idempotencyKey);
+                markVolatileSettled(key, expected.idempotencyKey);
                 concern ??= storageConcern(error);
                 return { storageConcern: concern };
               }
               try {
+                const stored = await read(key);
+                observeDurableRecord(key, stored);
                 lastReadState = settlementRecordState(
-                  await read(key),
+                  stored,
                   expected.idempotencyKey,
                 );
               } catch (error) {
-                volatileSettledKeys.set(key, expected.idempotencyKey);
+                markVolatileSettled(key, expected.idempotencyKey);
                 concern ??= storageConcern(error);
                 return { storageConcern: concern };
               }
@@ -465,7 +505,7 @@ export function createPersistentOrderAttemptStore(
               ) {
                 volatileSettledKeys.delete(key);
               } else if (lastReadState === "exact-pending") {
-                volatileSettledKeys.set(key, expected.idempotencyKey);
+                markVolatileSettled(key, expected.idempotencyKey);
                 concern ??= storageError();
               }
               return { storageConcern: concern };
@@ -481,8 +521,10 @@ export function createPersistentOrderAttemptStore(
           return { storageConcern: concern };
         }
         try {
+          const stored = await read(key);
+          observeDurableRecord(key, stored);
           lastReadState = settlementRecordState(
-            await read(key),
+            stored,
             expected.idempotencyKey,
           );
         } catch (error) {
@@ -490,7 +532,7 @@ export function createPersistentOrderAttemptStore(
           return { storageConcern: concern };
         }
         if (lastReadState === "exact-pending") {
-          volatileSettledKeys.set(key, expected.idempotencyKey);
+          markVolatileSettled(key, expected.idempotencyKey);
           concern ??= storageError();
         }
         return { storageConcern: concern };

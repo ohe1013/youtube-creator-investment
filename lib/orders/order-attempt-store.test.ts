@@ -289,6 +289,59 @@ describe("persistent order attempt store", () => {
     ).resolves.toMatchObject({ idempotencyKey: "attempt-key-2" });
   });
 
+  it("keeps newer and stale runtime settlement barriers monotonic across read outages", async () => {
+    const backing: SharedBacking = new Map();
+    let failReads = false;
+    let failSettledWrites = false;
+    let failRemoval = false;
+    const attempts = createPersistentOrderAttemptStore(
+      adapter(backing, {
+        async getItem(key) {
+          if (failReads) throw new Error("native reads unavailable");
+          return backing.get(key) ?? null;
+        },
+        async setItem(key, value) {
+          const next = JSON.parse(value) as { status?: string };
+          if (next.status === "settled" && failSettledWrites) {
+            throw new Error("native settled writes unavailable");
+          }
+          backing.set(key, value);
+        },
+        async removeItem(key) {
+          if (failRemoval) throw new Error("native removal unavailable");
+          backing.delete(key);
+        },
+      }),
+      "monotonic-runtime-barrier-device",
+    );
+    const first = await attempts.resolve(
+      SIGNATURE_A,
+      keyFactory("attempt-key-1"),
+    );
+    failSettledWrites = true;
+    failRemoval = true;
+    await attempts.settle(first);
+
+    failSettledWrites = false;
+    failRemoval = false;
+    const second = await attempts.resolve(
+      SIGNATURE_A,
+      keyFactory("attempt-key-2"),
+    );
+    expect(second.idempotencyKey).toBe("attempt-key-2");
+
+    failReads = true;
+    await attempts.settle(second);
+    await attempts.settle(first);
+    failReads = false;
+
+    const third = await attempts.resolve(
+      SIGNATURE_A,
+      keyFactory("attempt-key-3"),
+    );
+    expect(third.idempotencyKey).toBe("attempt-key-3");
+  });
+
   it("reads back a settled barrier when native storage commits and then throws", async () => {
     const backing: SharedBacking = new Map();
     const commitThenThrow = adapter(backing, {
