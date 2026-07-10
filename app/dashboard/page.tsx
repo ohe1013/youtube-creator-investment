@@ -2,7 +2,7 @@ import { DashboardClient } from "@/components/dashboard/DashboardClient";
 
 export const metadata = {
   title: "Dashboard | CreatorX",
-  description: "Market overview and investment rankings",
+  description: "Virtual-point creator growth game rankings",
 };
 
 export default function DashboardPage() {

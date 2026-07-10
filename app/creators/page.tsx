@@ -131,7 +131,7 @@ function CreatorsContent() {
           <div>
             <h1 className="text-2xl font-bold mb-1">Market</h1>
             <p className="text-sm text-muted">
-              Discover and invest in the next top YouTube stars
+              가상 포인트 기반 크리에이터 성장 예측 게임
             </p>
           </div>
           <div className="flex gap-6 text-sm">

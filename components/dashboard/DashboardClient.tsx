@@ -296,11 +296,11 @@ export function DashboardClient() {
             <div className="p-6 rounded-2xl bg-gradient-to-br from-brand-blue to-brand-red p-[1px]">
               <div className="bg-background rounded-[15px] p-5">
                 <h3 className="text-sm font-black mb-2 tracking-tighter uppercase italic">
-                  Be the Whale.
+                  Predict Creator Growth.
                 </h3>
                 <p className="text-[10px] text-muted leading-relaxed">
-                  Early investors in high-potential creators see the biggest
-                  returns. Spot the trend before anyone else.
+                  크리에이터의 성장 흐름을 예측하는 가상 포인트 게임입니다.
+                  포인트는 현금 가치가 없으며 실제 수익을 보장하지 않습니다.
                 </p>
               </div>
             </div>

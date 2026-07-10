@@ -5,6 +5,55 @@ const optionalUrl = z.preprocess(
   z.string().url().optional(),
 );
 
+const legacyTossLogoUrl =
+  "https://static.toss.im/icons/png/4x/icon-toss-logo.png";
+
+function isTossBrandIcon(value: string) {
+  const url = new URL(value);
+  return (
+    value === legacyTossLogoUrl ||
+    (url.hostname.toLowerCase() === "static.toss.im" &&
+      url.pathname.toLowerCase().includes("toss-logo"))
+  );
+}
+
+function isRemoteHttpsUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    const normalizedHostname = hostname.replace(/^\[|\]$/g, "");
+    const ipv4 = normalizedHostname.split(".").map(Number);
+    const isIpv4 =
+      ipv4.length === 4 &&
+      ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const isPrivateIpv4 =
+      isIpv4 &&
+      (ipv4[0] === 0 ||
+        ipv4[0] === 10 ||
+        ipv4[0] === 127 ||
+        (ipv4[0] === 100 && ipv4[1] >= 64 && ipv4[1] <= 127) ||
+        (ipv4[0] === 169 && ipv4[1] === 254) ||
+        (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31) ||
+        (ipv4[0] === 192 && ipv4[1] === 168));
+    const isPrivateIpv6 =
+      normalizedHostname === "::" ||
+      normalizedHostname === "::1" ||
+      /^(?:fc|fd|fe[89ab])/i.test(normalizedHostname);
+    const isLocal =
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      (!isIpv4 &&
+        !normalizedHostname.includes(".") &&
+        !normalizedHostname.includes(":")) ||
+      isPrivateIpv4 ||
+      isPrivateIpv6;
+
+    return url.protocol === "https:" && !isLocal;
+  } catch {
+    return false;
+  }
+}
+
 const schema = z
   .object({
     NEXT_PUBLIC_APP_IN_TOSS: z.enum(["0", "1"]).default("0"),
@@ -30,11 +79,24 @@ const schema = z
         message: "production requires remote data mode",
       });
     }
-    if (!value.NEXT_PUBLIC_CREATORX_API_BASE_URL?.startsWith("https://")) {
+    if (
+      !value.NEXT_PUBLIC_CREATORX_API_BASE_URL ||
+      !isRemoteHttpsUrl(value.NEXT_PUBLIC_CREATORX_API_BASE_URL)
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["NEXT_PUBLIC_CREATORX_API_BASE_URL"],
-        message: "production requires an HTTPS API URL",
+        message: "production requires a remote HTTPS API URL",
+      });
+    }
+    if (
+      !value.NEXT_PUBLIC_CREATORX_SUPPORT_URL ||
+      !isRemoteHttpsUrl(value.NEXT_PUBLIC_CREATORX_SUPPORT_URL)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CREATORX_SUPPORT_URL"],
+        message: "production requires a remote HTTPS support URL",
       });
     }
     for (const key of [
@@ -51,6 +113,21 @@ const schema = z
           message: key + " is required for production",
         });
       }
+    }
+
+    const iconUrl = value.NEXT_PUBLIC_CREATORX_ICON_URL;
+    if (iconUrl && !isRemoteHttpsUrl(iconUrl)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CREATORX_ICON_URL"],
+        message: "production icon must be a remote HTTPS URL",
+      });
+    } else if (iconUrl && isTossBrandIcon(iconUrl)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CREATORX_ICON_URL"],
+        message: "production icon must be CreatorX-owned, not the Toss logo",
+      });
     }
   });
 
@@ -95,4 +172,25 @@ export function parseRuntimeConfig(
         value.NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE ?? "2026-07-10",
     },
   };
+}
+
+export function readPublicRuntimeConfig(): CreatorXRuntimeConfig {
+  return parseRuntimeConfig({
+    NEXT_PUBLIC_APP_IN_TOSS: process.env.NEXT_PUBLIC_APP_IN_TOSS,
+    NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL:
+      process.env.NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL,
+    NEXT_PUBLIC_CREATORX_DATA_MODE:
+      process.env.NEXT_PUBLIC_CREATORX_DATA_MODE,
+    NEXT_PUBLIC_CREATORX_API_BASE_URL:
+      process.env.NEXT_PUBLIC_CREATORX_API_BASE_URL,
+    NEXT_PUBLIC_CREATORX_OPERATOR_NAME:
+      process.env.NEXT_PUBLIC_CREATORX_OPERATOR_NAME,
+    NEXT_PUBLIC_CREATORX_SUPPORT_URL:
+      process.env.NEXT_PUBLIC_CREATORX_SUPPORT_URL,
+    NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT:
+      process.env.NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT,
+    NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE:
+      process.env.NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE,
+    NEXT_PUBLIC_CREATORX_ICON_URL: process.env.NEXT_PUBLIC_CREATORX_ICON_URL,
+  });
 }

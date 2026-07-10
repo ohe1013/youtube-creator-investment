@@ -12,7 +12,7 @@ export default function SignInPage() {
         <div className="bg-card rounded-2xl p-8 border border-border-exchange max-w-md w-full text-center">
           <h1 className="text-3xl font-bold mb-3">CreatorX</h1>
           <p className="text-muted mb-6">
-            앱인토스에서는 토스 사용자 식별키로 자동 시작됩니다.
+            앱인토스에서는 가명 게임 식별자로 자동 시작됩니다.
           </p>
           <Link
             href="/"
@@ -29,10 +29,10 @@ export default function SignInPage() {
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-12 border border-white/20 max-w-md w-full mx-4">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-white mb-3">
-            YouTube Creator Investment
+            크리에이터X
           </h1>
           <p className="text-blue-200">
-            가상 투자 게임을 시작하려면 로그인하세요
+            가상 포인트 기반 크리에이터 성장 예측 게임을 시작하세요
           </p>
         </div>
 
@@ -66,6 +66,9 @@ export default function SignInPage() {
             <p className="text-blue-200 text-sm mb-2">
               로그인하면 자동으로 10만 포인트가 지급됩니다
             </p>
+            <p className="text-blue-200 text-xs">
+              포인트는 현금 가치가 없고 현금으로 전환하거나 환급할 수 없습니다.
+            </p>
           </div>
         </div>
 
@@ -78,13 +81,13 @@ export default function SignInPage() {
         <div className="mt-6 text-center text-xs text-blue-300">
           <p>
             로그인하면{" "}
-            <a href="#" className="underline">
+            <Link href="/terms" className="underline">
               이용약관
-            </a>{" "}
+            </Link>{" "}
             및{" "}
-            <a href="#" className="underline">
+            <Link href="/privacy" className="underline">
               개인정보처리방침
-            </a>
+            </Link>
             에 동의하는 것으로 간주됩니다.
           </p>
         </div>

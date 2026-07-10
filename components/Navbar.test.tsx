@@ -63,3 +63,22 @@ it("reserves a native close rail only in Apps-in-Toss mode", async () => {
     screen.getByRole("navigation").querySelector(".container"),
   ).toHaveClass("creatorx-navbar-native-inline");
 });
+
+it("makes terms, privacy, and support discoverable from the mobile menu", async () => {
+  render(<Navbar />);
+
+  await waitFor(() => expect(screen.getByRole("navigation")).toBeVisible());
+  fireEvent.click(screen.getByRole("button", { name: "메뉴 열기" }));
+
+  expect(screen.getByRole("link", { name: "이용약관" })).toHaveAttribute(
+    "href",
+    "/terms",
+  );
+  expect(
+    screen.getByRole("link", { name: "개인정보처리방침" }),
+  ).toHaveAttribute("href", "/privacy");
+  expect(screen.getByRole("link", { name: "고객지원" })).toHaveAttribute(
+    "href",
+    "/support",
+  );
+});

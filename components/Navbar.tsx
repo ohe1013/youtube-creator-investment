@@ -164,6 +164,8 @@ export default function Navbar() {
               <button
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
                 className="text-white dark:text-foreground p-2"
+                aria-label={isMenuOpen ? "메뉴 닫기" : "메뉴 열기"}
+                aria-expanded={isMenuOpen}
               >
                 <svg
                   className="w-6 h-6"
@@ -232,6 +234,26 @@ export default function Navbar() {
                 {t("common.login")}
               </Link>
             )}
+            <div className="grid grid-cols-3 gap-3 border-t border-white/10 pt-4 text-xs dark:border-border-exchange">
+              <Link
+                href="/terms"
+                className="text-white/70 hover:text-white dark:text-muted dark:hover:text-primary"
+              >
+                이용약관
+              </Link>
+              <Link
+                href="/privacy"
+                className="text-white/70 hover:text-white dark:text-muted dark:hover:text-primary"
+              >
+                개인정보처리방침
+              </Link>
+              <Link
+                href="/support"
+                className="text-white/70 hover:text-white dark:text-muted dark:hover:text-primary"
+              >
+                고객지원
+              </Link>
+            </div>
           </div>
         )}
       </div>
