@@ -7,7 +7,20 @@ import {
 } from "@/tests/architecture/client-boundary-analyzer";
 
 const ROOT = process.cwd();
-const SOURCE_ROOTS = ["app", "components", "hooks", "lib"];
+const EXCLUDED_DIRECTORIES = new Set([
+  ".git",
+  ".next",
+  ".superpowers",
+  "__tests__",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "prisma",
+  "scripts",
+  "tests",
+]);
 
 function sourceFiles(): string[] {
   const files: string[] = [];
@@ -15,20 +28,13 @@ function sourceFiles(): string[] {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const candidate = join(path, entry.name);
       if (entry.isDirectory()) {
-        visit(candidate);
+        if (!EXCLUDED_DIRECTORIES.has(entry.name)) visit(candidate);
       } else if (entry.isFile() && isProjectOwnedSourcePath(projectPath(candidate))) {
         files.push(candidate);
       }
     }
   };
-  for (const root of SOURCE_ROOTS) {
-    const candidate = join(ROOT, root);
-    if (existsSync(candidate)) visit(candidate);
-  }
-  for (const entry of readdirSync(ROOT, { withFileTypes: true })) {
-    if (!entry.isFile() || !isProjectOwnedSourcePath(entry.name)) continue;
-    files.push(join(ROOT, entry.name));
-  }
+  visit(ROOT);
   return files;
 }
 

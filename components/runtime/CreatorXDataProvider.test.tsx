@@ -142,6 +142,7 @@ describe("CreatorXDataProvider", () => {
     expect(createDemoClient).toHaveBeenCalledWith({
       store,
       namespace: BROWSER_SUBJECT,
+      storageScope: BROWSER_SUBJECT,
     });
     expect(createRemoteClient).not.toHaveBeenCalled();
     expect(loadBrowserStorage).toHaveBeenCalledTimes(1);

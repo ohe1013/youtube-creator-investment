@@ -159,33 +159,32 @@ type LocalState = Omit<
 type LocalPosition = z.infer<typeof localPositionSchema>;
 type LocalOrder = z.infer<typeof localOrderSchema>;
 
-const mutationQueues = new WeakMap<
-  AsyncKeyValueStore,
-  Map<string, Promise<void>>
->();
+const mutationQueues = new Map<string, Promise<void>>();
+const storeScopeIds = new WeakMap<AsyncKeyValueStore, number>();
+let nextStoreScopeId = 0;
+
+function storeScope(store: AsyncKeyValueStore): string {
+  let id = storeScopeIds.get(store);
+  if (id === undefined) {
+    id = ++nextStoreScopeId;
+    storeScopeIds.set(store, id);
+  }
+  return `store:${id}`;
+}
 
 function enqueueMutation<T>(
-  store: AsyncKeyValueStore,
   stateKey: string,
   mutation: () => Promise<T>,
 ): Promise<T> {
-  let storeQueues = mutationQueues.get(store);
-  if (!storeQueues) {
-    storeQueues = new Map();
-    mutationQueues.set(store, storeQueues);
-  }
-
-  const previous = storeQueues.get(stateKey) ?? Promise.resolve();
+  const previous = mutationQueues.get(stateKey) ?? Promise.resolve();
   const result = previous.then(mutation);
   const tail = result.then(
     () => undefined,
     () => undefined,
   );
-  storeQueues.set(stateKey, tail);
+  mutationQueues.set(stateKey, tail);
   void tail.then(() => {
-    if (storeQueues.get(stateKey) !== tail) return;
-    storeQueues.delete(stateKey);
-    if (storeQueues.size === 0) mutationQueues.delete(store);
+    if (mutationQueues.get(stateKey) === tail) mutationQueues.delete(stateKey);
   });
   return result;
 }
@@ -193,6 +192,7 @@ function enqueueMutation<T>(
 export type DemoDataClientDependencies = {
   store: AsyncKeyValueStore;
   namespace: string;
+  storageScope?: string;
   now?: () => Date;
   idFactory?: () => string;
 };
@@ -309,6 +309,7 @@ function cloneCreator(creator: Creator): Creator {
 }
 
 export class DemoDataClient implements CreatorXDataClient {
+  private readonly mutationKey: string;
   private readonly stateKey: string;
   private readonly namespace: string;
   private readonly now: () => Date;
@@ -318,6 +319,11 @@ export class DemoDataClient implements CreatorXDataClient {
     const namespace = parseRequest(identifierSchema, dependencies.namespace);
     this.namespace = namespace;
     this.stateKey = `${STATE_KEY_PREFIX}${namespace}`;
+    const scope =
+      dependencies.storageScope === undefined
+        ? storeScope(dependencies.store)
+        : `stable:${parseRequest(identifierSchema, dependencies.storageScope)}`;
+    this.mutationKey = `${scope}:${this.stateKey}`;
     this.now = dependencies.now ?? (() => new Date());
     this.idFactory =
       dependencies.idFactory ?? (() => globalThis.crypto.randomUUID());
@@ -586,8 +592,7 @@ export class DemoDataClient implements CreatorXDataClient {
     if (!Number.isFinite(total)) throw requestError();
 
     return enqueueMutation(
-      this.dependencies.store,
-      this.stateKey,
+      this.mutationKey,
       async () => {
         this.checkSignal(options);
         const state = await this.readState();
@@ -711,8 +716,7 @@ export class DemoDataClient implements CreatorXDataClient {
     this.checkSignal(options);
     const orderId = parseRequest(identifierSchema, id);
     await enqueueMutation(
-      this.dependencies.store,
-      this.stateKey,
+      this.mutationKey,
       async () => {
         this.checkSignal(options);
         const state = await this.readState();

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrderForm } from "@/components/market/OrderForm";
 import type { CreatorXDataClient, Order } from "@/lib/data/contracts";
 import { CreatorXClientError } from "@/lib/data/errors";
+import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmission";
 
 const mocks = vi.hoisted(() => ({
   client: null as unknown,
@@ -65,6 +66,45 @@ function submitBuy() {
   fireEvent.click(buttons[buttons.length - 1]);
 }
 
+function ConcurrentSubmissionHarness() {
+  const { isSubmitting, submit } = useCreatorXOrderSubmission();
+  return (
+    <>
+      <output data-testid="submission-state">
+        {isSubmitting ? "busy" : "idle"}
+      </output>
+      <button
+        type="button"
+        onClick={() => {
+          void submit({
+            creatorId: "creator-a",
+            side: "BUY",
+            orderType: "MARKET",
+            price: 100,
+            quantity: 1,
+          });
+        }}
+      >
+        submit-a
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          void submit({
+            creatorId: "creator-b",
+            side: "BUY",
+            orderType: "MARKET",
+            price: 200,
+            quantity: 1,
+          });
+        }}
+      >
+        submit-b
+      </button>
+    </>
+  );
+}
+
 beforeEach(() => {
   mocks.refresh.mockReset().mockResolvedValue(undefined);
   mocks.randomUUID.mockReset();
@@ -82,6 +122,47 @@ afterEach(() => {
 });
 
 describe("OrderForm", () => {
+  it("keeps isSubmitting active until concurrent A and B signatures both settle", async () => {
+    let resolveA: ((order: Order) => void) | undefined;
+    let resolveB: ((order: Order) => void) | undefined;
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockImplementation(
+        (input) =>
+          new Promise((resolve) => {
+            if (input.creatorId === "creator-a") resolveA = resolve;
+            else resolveB = resolve;
+          }),
+      );
+    mocks.client = { placeOrder } as unknown as CreatorXDataClient;
+    render(<ConcurrentSubmissionHarness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "submit-a" }));
+    fireEvent.click(screen.getByRole("button", { name: "submit-b" }));
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("submission-state")).toHaveTextContent("busy");
+
+    resolveA?.({
+      ...acceptedOrder,
+      id: "order-a",
+      creatorId: "creator-a",
+      price: 100,
+      quantity: 1,
+    });
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("submission-state")).toHaveTextContent("busy");
+
+    resolveB?.({
+      ...acceptedOrder,
+      id: "order-b",
+      creatorId: "creator-b",
+      price: 200,
+      quantity: 1,
+    });
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("submission-state")).toHaveTextContent("idle");
+  });
+
   it("submits the exact typed order with one idempotency key and refreshes session after acceptance", async () => {
     const placeOrder = vi.fn<CreatorXDataClient["placeOrder"]>().mockResolvedValue(
       acceptedOrder,
@@ -226,6 +307,33 @@ describe("OrderForm", () => {
           "NETWORK_UNAVAILABLE",
           "Network interrupted",
           true,
+        ),
+      )
+      .mockResolvedValueOnce(acceptedOrder);
+    renderForm(placeOrder);
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "common.buy" }).at(-1)).toBeEnabled(),
+    );
+    submitBuy();
+
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
+    expect(placeOrder.mock.calls[0][1]?.idempotencyKey).toBe("key-1");
+    expect(placeOrder.mock.calls[1][1]?.idempotencyKey).toBe("key-1");
+    expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the key for an ambiguous INVALID_RESPONSE even when marked nonretryable", async () => {
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockRejectedValueOnce(
+        new CreatorXClientError(
+          "INVALID_RESPONSE",
+          "Committed response could not be parsed",
+          false,
+          502,
         ),
       )
       .mockResolvedValueOnce(acceptedOrder);

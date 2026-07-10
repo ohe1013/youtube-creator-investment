@@ -291,6 +291,7 @@ async function bootstrapDemo(
       client: dependencies.createDemoClient({
         store,
         namespace: BROWSER_DEMO_SUBJECT,
+        storageScope: BROWSER_DEMO_SUBJECT,
       }),
       orderAttemptStore: createPersistentOrderAttemptStore(
         store,
@@ -321,7 +322,11 @@ async function bootstrapDemo(
   const subject = readGameSubject(gameUserKey);
   if (subject === null) throw sessionError();
   return {
-    client: dependencies.createDemoClient({ store, namespace: subject }),
+    client: dependencies.createDemoClient({
+      store,
+      namespace: subject,
+      storageScope: subject,
+    }),
     orderAttemptStore: createPersistentOrderAttemptStore(store, subject),
     subject,
   };

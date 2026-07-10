@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OrderForm } from "@/components/market/OrderForm";
@@ -64,6 +71,30 @@ class CommitThenThrowDemoStore implements AsyncKeyValueStore {
   }
 }
 
+function nativeAdapter(
+  values: Map<string, string>,
+  options: { failSettledAttemptWrite?: boolean } = {},
+): AsyncKeyValueStore {
+  return {
+    async getItem(key) {
+      return values.get(key) ?? null;
+    },
+    async setItem(key, value) {
+      if (
+        options.failSettledAttemptWrite &&
+        key.startsWith("creatorx:order-attempt:") &&
+        (JSON.parse(value) as { status?: string }).status === "settled"
+      ) {
+        throw new Error("settled attempt write failed before commit");
+      }
+      values.set(key, value);
+    },
+    async removeItem(key) {
+      values.delete(key);
+    },
+  };
+}
+
 function orderForm() {
   return (
     <OrderForm
@@ -102,6 +133,133 @@ afterEach(() => {
 });
 
 describe("useCreatorXOrderSubmission demo restart durability", () => {
+  it("holds the stable lease while an old Provider waits for refresh", async () => {
+    const values = new Map<string, string>();
+    const refreshGate = Promise.withResolvers<void>();
+    mocks.refresh
+      .mockReset()
+      .mockImplementationOnce(() => refreshGate.promise)
+      .mockResolvedValue(undefined);
+    const browserStorage = vi.fn(() => {
+      throw new Error("native success must not load browser storage");
+    });
+    const clients: DemoDataClient[] = [];
+    const placeOrderSpies: Array<ReturnType<typeof vi.spyOn>> = [];
+    let id = 0;
+    const dependencies: CreatorXDataProviderDependencies = {
+      loadBrowserStorage: browserStorage,
+      loadNativeStorage: vi.fn(async () => nativeAdapter(values)),
+      getGameUserKey: vi.fn(async () => ({
+        type: "HASH",
+        hash: "lease-device",
+      })),
+      createDemoClient: (clientDependencies) => {
+        const client = new DemoDataClient({
+          ...clientDependencies,
+          now: () => new Date("2026-07-10T10:11:12.000Z"),
+          idFactory: () => `lease-${++id}`,
+        });
+        clients.push(client);
+        placeOrderSpies.push(vi.spyOn(client, "placeOrder"));
+        return client;
+      },
+    };
+
+    const first = render(
+      <CreatorXDataProvider config={config} dependencies={dependencies}>
+        {orderForm()}
+      </CreatorXDataProvider>,
+    );
+    await screen.findAllByRole("spinbutton");
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrderSpies[0]).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    render(
+      <CreatorXDataProvider config={config} dependencies={dependencies}>
+        {orderForm()}
+      </CreatorXDataProvider>,
+    );
+    await screen.findAllByRole("spinbutton");
+    enterQuantity("2");
+    submitBuy();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(placeOrderSpies[1]).toHaveBeenCalledTimes(0);
+
+    await act(async () => {
+      refreshGate.resolve();
+      await refreshGate.promise;
+    });
+    submitBuy();
+    await waitFor(() => expect(placeOrderSpies[1]).toHaveBeenCalledTimes(1));
+
+    expect(placeOrderSpies[0].mock.calls[0][1]?.idempotencyKey).toBe(
+      "attempt-key-1",
+    );
+    expect(placeOrderSpies[1].mock.calls[0][1]?.idempotencyKey).toBe(
+      "attempt-key-2",
+    );
+    expect(browserStorage).not.toHaveBeenCalled();
+  });
+
+  it("returns an accepted order when the settled barrier cannot be persisted", async () => {
+    const values = new Map<string, string>();
+    const browserStorage = vi.fn(() => {
+      throw new Error("native success must not load browser storage");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const placeOrderSpies: Array<ReturnType<typeof vi.spyOn>> = [];
+    let id = 0;
+    const dependencies: CreatorXDataProviderDependencies = {
+      loadBrowserStorage: browserStorage,
+      loadNativeStorage: vi.fn(async () =>
+        nativeAdapter(values, { failSettledAttemptWrite: true }),
+      ),
+      getGameUserKey: vi.fn(async () => ({
+        type: "HASH",
+        hash: "settle-failure-device",
+      })),
+      createDemoClient: (clientDependencies) => {
+        const client = new DemoDataClient({
+          ...clientDependencies,
+          now: () => new Date("2026-07-10T10:11:12.000Z"),
+          idFactory: () => `settle-failure-${++id}`,
+        });
+        placeOrderSpies.push(vi.spyOn(client, "placeOrder"));
+        return client;
+      },
+    };
+
+    render(
+      <CreatorXDataProvider config={config} dependencies={dependencies}>
+        {orderForm()}
+      </CreatorXDataProvider>,
+    );
+    await screen.findAllByRole("spinbutton");
+    enterQuantity("2");
+    submitBuy();
+
+    await waitFor(() =>
+      expect(vi.mocked(alert)).toHaveBeenCalledWith(
+        "Trade Executed: BUY 2 shares @ 1280",
+      ),
+    );
+    expect(placeOrderSpies[0]).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(
+      "CreatorX order was accepted, but attempt settlement was not persisted",
+      expect.objectContaining({ code: "STORAGE_UNAVAILABLE" }),
+    );
+    expect(browserStorage).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("reuses the selected native-store key after Provider and DemoDataClient recreation", async () => {
     const store = new CommitThenThrowDemoStore();
     const browserStorage = vi.fn(() => {

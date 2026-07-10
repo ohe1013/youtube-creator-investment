@@ -77,6 +77,20 @@ class CommitThenFailStore extends MemoryStore {
   }
 }
 
+function freshStoreAdapter(backing: AsyncKeyValueStore): AsyncKeyValueStore {
+  return {
+    async getItem(key) {
+      return await backing.getItem(key);
+    },
+    async setItem(key, value) {
+      await backing.setItem(key, value);
+    },
+    async removeItem(key) {
+      await backing.removeItem(key);
+    },
+  };
+}
+
 async function allowConcurrentMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
@@ -779,6 +793,124 @@ describe("DemoDataClient orders", () => {
 });
 
 describe("DemoDataClient concurrent mutations", () => {
+  it("serializes two orders across fresh adapters sharing one backing and namespace", async () => {
+    const backing = new ControlledWriteStore();
+    let id = 0;
+    const createClient = () =>
+      new DemoDataClient({
+        store: freshStoreAdapter(backing),
+        namespace: "device-a",
+        storageScope: "shared-backing-device-a",
+        now: () => FIXED_NOW,
+        idFactory: () => `fresh-wrapper-${++id}`,
+      });
+    const firstClient = createClient();
+    const secondClient = createClient();
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "LIMIT" as const,
+      price: 1,
+      quantity: 10,
+    };
+    const gate = backing.blockNextWrite();
+
+    const first = firstClient.placeOrder(input);
+    await gate.started;
+    const second = secondClient.placeOrder(input);
+    await allowConcurrentMicrotasks();
+    gate.release();
+    const orders = await Promise.all([first, second]);
+
+    const portfolio = await firstClient.getPortfolio();
+    expect(portfolio.balance).toBe(99_980);
+    expect(portfolio.openOrders.map(({ id: orderId }) => orderId).sort()).toEqual(
+      orders.map(({ id: orderId }) => orderId).sort(),
+    );
+  });
+
+  it("replays one idempotent order across fresh adapters sharing one backing", async () => {
+    const backing = new ControlledWriteStore();
+    let id = 0;
+    const createClient = () =>
+      new DemoDataClient({
+        store: freshStoreAdapter(backing),
+        namespace: "device-a",
+        storageScope: "shared-backing-device-a",
+        now: () => FIXED_NOW,
+        idFactory: () => `idempotent-wrapper-${++id}`,
+      });
+    const firstClient = createClient();
+    const secondClient = createClient();
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "MARKET" as const,
+      price: 1_280,
+      quantity: 2,
+    };
+    const gate = backing.blockNextWrite();
+
+    const first = firstClient.placeOrder(input, {
+      idempotencyKey: "shared-attempt-key",
+    });
+    await gate.started;
+    const second = secondClient.placeOrder(input, {
+      idempotencyKey: "shared-attempt-key",
+    });
+    await allowConcurrentMicrotasks();
+    gate.release();
+    const [left, right] = await Promise.all([first, second]);
+
+    expect(right).toEqual(left);
+    await expect(firstClient.getPortfolio()).resolves.toMatchObject({
+      balance: 97_440,
+      positions: [{ creatorId: CREATOR_ID, quantity: 2 }],
+      trades: [{ creatorId: CREATOR_ID, quantity: 2 }],
+    });
+  });
+
+  it("preserves a new order while a fresh adapter concurrently cancels an older order", async () => {
+    const backing = new ControlledWriteStore();
+    let id = 0;
+    const createClient = () =>
+      new DemoDataClient({
+        store: freshStoreAdapter(backing),
+        namespace: "device-a",
+        storageScope: "shared-backing-device-a",
+        now: () => FIXED_NOW,
+        idFactory: () => `cancel-wrapper-${++id}`,
+      });
+    const cancelClient = createClient();
+    const orderClient = createClient();
+    const existing = await cancelClient.placeOrder({
+      creatorId: CREATOR_ID,
+      side: "BUY",
+      orderType: "LIMIT",
+      price: 1,
+      quantity: 10,
+    });
+    const gate = backing.blockNextWrite();
+
+    const cancellation = cancelClient.cancelOrder(existing.id);
+    await gate.started;
+    const nextOrder = orderClient.placeOrder({
+      creatorId: CREATOR_ID,
+      side: "BUY",
+      orderType: "LIMIT",
+      price: 2,
+      quantity: 10,
+    });
+    await allowConcurrentMicrotasks();
+    gate.release();
+    const [, accepted] = await Promise.all([cancellation, nextOrder]);
+
+    await expect(cancelClient.getPortfolio()).resolves.toMatchObject({
+      balance: 99_980,
+      openOrders: [{ id: accepted.id }],
+    });
+  });
+
   it("serializes two open buys across clients sharing one store and namespace", async () => {
     const store = new ControlledWriteStore();
     let id = 0;

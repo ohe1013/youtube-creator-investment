@@ -11,15 +11,27 @@ import type {
   Order,
   PlaceOrderInput,
 } from "@/lib/data/contracts";
-import { CreatorXClientError } from "@/lib/data/errors";
+import {
+  CreatorXClientError,
+  type CreatorXErrorCode,
+} from "@/lib/data/errors";
 import {
   createMemoryOrderAttemptStore,
+  type OrderAttemptSettlement,
   type OrderAttemptStore,
 } from "@/lib/orders/order-attempt-store";
 import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
 const memoryAttempts = new WeakMap<CreatorXDataClient, OrderAttemptStore>();
-const inFlightSignatures = new WeakMap<CreatorXDataClient, Set<string>>();
+const DEFINITIVE_REJECTION_CODES = new Set<CreatorXErrorCode>([
+  "REQUEST_REJECTED",
+  "UNAUTHORIZED",
+  "NOT_FOUND",
+  "INSUFFICIENT_BALANCE",
+  "INSUFFICIENT_SHARES",
+  "ORDER_NOT_FOUND",
+  "IDEMPOTENCY_KEY_REUSED",
+]);
 
 function memoryAttemptsFor(client: CreatorXDataClient): OrderAttemptStore {
   let attempts = memoryAttempts.get(client);
@@ -40,22 +52,20 @@ function orderSignature(input: PlaceOrderInput): string {
   ]);
 }
 
-function acquireSubmission(client: CreatorXDataClient, signature: string): boolean {
-  let signatures = inFlightSignatures.get(client);
-  if (signatures === undefined) {
-    signatures = new Set();
-    inFlightSignatures.set(client, signatures);
-  }
-  if (signatures.has(signature)) return false;
-  signatures.add(signature);
-  return true;
+function isDefinitiveRejection(error: unknown): error is CreatorXClientError {
+  return (
+    error instanceof CreatorXClientError &&
+    DEFINITIVE_REJECTION_CODES.has(error.code)
+  );
 }
 
-function releaseSubmission(client: CreatorXDataClient, signature: string): void {
-  const signatures = inFlightSignatures.get(client);
-  if (signatures === undefined) return;
-  signatures.delete(signature);
-  if (signatures.size === 0) inFlightSignatures.delete(client);
+function reportSettlementConcern(
+  message: string,
+  settlement: OrderAttemptSettlement,
+): void {
+  if (settlement.storageConcern !== null) {
+    console.error(message, settlement.storageConcern);
+  }
 }
 
 export function useCreatorXOrderSubmission(): {
@@ -67,6 +77,7 @@ export function useCreatorXOrderSubmission(): {
   const session = useCreatorXSession();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const mounted = useRef(true);
+  const activeCount = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -78,10 +89,11 @@ export function useCreatorXOrderSubmission(): {
   const submit = useCallback(
     async (input: PlaceOrderInput): Promise<Order | null> => {
       const signature = orderSignature(input);
-      if (!acquireSubmission(client, signature)) return null;
-      if (mounted.current) setIsSubmitting(true);
-
       const attempts = persistentAttempts ?? memoryAttemptsFor(client);
+      const lease = await attempts.acquireLease(signature);
+      if (lease === null) return null;
+      activeCount.current += 1;
+      if (mounted.current) setIsSubmitting(true);
 
       try {
         const attempt = await attempts.resolve(signature, () =>
@@ -94,18 +106,25 @@ export function useCreatorXOrderSubmission(): {
             idempotencyKey: attempt.idempotencyKey,
           });
         } catch (error) {
-          if (!(error instanceof CreatorXClientError && error.retryable)) {
-            await attempts.clear(attempt).catch(() => undefined);
+          if (isDefinitiveRejection(error)) {
+            reportSettlementConcern(
+              "CreatorX definitive order rejection was not persisted",
+              await attempts.settle(attempt),
+            );
           }
           throw error;
         }
 
-        await attempts.clear(attempt).catch(() => undefined);
+        reportSettlementConcern(
+          "CreatorX order was accepted, but attempt settlement was not persisted",
+          await attempts.settle(attempt),
+        );
         await session.refresh().catch(() => undefined);
         return order;
       } finally {
-        releaseSubmission(client, signature);
-        if (mounted.current) setIsSubmitting(false);
+        lease.release();
+        activeCount.current = Math.max(0, activeCount.current - 1);
+        if (mounted.current) setIsSubmitting(activeCount.current > 0);
       }
     },
     [client, persistentAttempts, session],
