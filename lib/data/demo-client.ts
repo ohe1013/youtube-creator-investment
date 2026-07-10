@@ -69,6 +69,8 @@ const localStateSchema = z
     positions: z.array(localPositionSchema),
     openOrders: z.array(localOrderSchema),
     trades: z.array(localTradeSchema),
+    // Optional only for the targeted migration of pre-tombstone demo state.
+    usedIds: z.array(z.string().trim().min(1)).optional(),
   })
   .strict()
   .superRefine((state, context) => {
@@ -89,32 +91,44 @@ const localStateSchema = z
       positionCreators.add(position.creatorId);
     }
 
-    const orderIds = new Set<string>();
+    const knownIds = new Set<string>();
     for (const order of state.openOrders) {
-      if (orderIds.has(order.id)) {
+      if (knownIds.has(order.id)) {
         context.addIssue({
           code: "custom",
           path: ["openOrders"],
-          message: "Persisted open-order IDs must be unique",
+          message: "Persisted order and trade IDs must be unique",
         });
       }
-      orderIds.add(order.id);
+      knownIds.add(order.id);
     }
 
-    const tradeIds = new Set<string>();
     for (const trade of state.trades) {
-      if (tradeIds.has(trade.id)) {
+      if (knownIds.has(trade.id)) {
         context.addIssue({
           code: "custom",
           path: ["trades"],
-          message: "Persisted trade IDs must be unique",
+          message: "Persisted order and trade IDs must be unique",
         });
       }
-      tradeIds.add(trade.id);
+      knownIds.add(trade.id);
+    }
+
+    const usedIds = new Set<string>();
+    for (const id of state.usedIds ?? []) {
+      if (usedIds.has(id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["usedIds"],
+          message: "Persisted used IDs must be unique",
+        });
+      }
+      usedIds.add(id);
     }
   });
 
-type LocalState = z.infer<typeof localStateSchema>;
+type ParsedLocalState = z.infer<typeof localStateSchema>;
+type LocalState = Omit<ParsedLocalState, "usedIds"> & { usedIds: string[] };
 type LocalPosition = z.infer<typeof localPositionSchema>;
 type LocalOrder = z.infer<typeof localOrderSchema>;
 
@@ -215,6 +229,24 @@ function compareNewest(
     Date.parse(right.createdAt) - Date.parse(left.createdAt) ||
     compareText(left.id, right.id)
   );
+}
+
+function canonicalizeState(state: ParsedLocalState): LocalState {
+  for (const order of state.openOrders) {
+    if (order.type !== "SELL" || order.reservedAvgPrice !== undefined) {
+      continue;
+    }
+    const position = state.positions.find(
+      ({ creatorId }) => creatorId === order.creatorId,
+    );
+    if (!position) throw invalidStateError();
+    order.reservedAvgPrice = position.avgPrice;
+  }
+
+  const usedIds = new Set(state.usedIds ?? []);
+  for (const order of state.openOrders) usedIds.add(order.id);
+  for (const trade of state.trades) usedIds.add(trade.id);
+  return { ...state, usedIds: [...usedIds].sort(compareText) };
 }
 
 function cloneCreator(creator: Creator): Creator {
@@ -530,11 +562,14 @@ export class DemoDataClient implements CreatorXDataClient {
 
         const createdAt = this.getTimestamp();
         const orderId = this.getId("order");
-        if (state.openOrders.some(({ id }) => id === orderId)) {
+        if (state.usedIds.includes(orderId)) {
           throw identifierCollisionError();
         }
         const tradeId = shouldFill ? this.getId("trade") : null;
-        if (tradeId && state.trades.some(({ id }) => id === tradeId)) {
+        if (
+          tradeId &&
+          (tradeId === orderId || state.usedIds.includes(tradeId))
+        ) {
           throw identifierCollisionError();
         }
         const order: LocalOrder = {
@@ -552,6 +587,10 @@ export class DemoDataClient implements CreatorXDataClient {
               ? position?.avgPrice
               : undefined,
         };
+
+        state.usedIds.push(orderId);
+        if (tradeId) state.usedIds.push(tradeId);
+        state.usedIds.sort(compareText);
 
         if (parsed.side === "BUY") {
           state.balance -= total;
@@ -746,16 +785,21 @@ export class DemoDataClient implements CreatorXDataClient {
       throw storageError();
     }
     if (raw === null) {
-      return parseResponse(localStateSchema, {
-        balance: INITIAL_BALANCE,
-        positions: [],
-        openOrders: [],
-        trades: [],
-      });
+      return canonicalizeState(
+        parseResponse(localStateSchema, {
+          balance: INITIAL_BALANCE,
+          positions: [],
+          openOrders: [],
+          trades: [],
+          usedIds: [],
+        }),
+      );
     }
 
     try {
-      return parseResponse(localStateSchema, JSON.parse(raw));
+      return canonicalizeState(
+        parseResponse(localStateSchema, JSON.parse(raw)),
+      );
     } catch {
       throw invalidStateError();
     }

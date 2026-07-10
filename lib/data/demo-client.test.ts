@@ -442,6 +442,73 @@ describe("DemoDataClient orders", () => {
     });
   });
 
+  it("freezes a legacy sell basis before a later buy changes the free-position average", async () => {
+    const store = new MemoryStore();
+    const key = `${STATE_KEY_PREFIX}device-a`;
+    store.values.set(
+      key,
+      JSON.stringify({
+        balance: 100_000,
+        positions: [
+          {
+            id: `appintoss-position-${CREATOR_ID}`,
+            creatorId: CREATOR_ID,
+            quantity: 2,
+            avgPrice: 100,
+          },
+        ],
+        openOrders: [
+          {
+            id: "legacy-sell",
+            creatorId: CREATOR_ID,
+            type: "SELL",
+            price: 200,
+            quantity: 3,
+            filled: 0,
+            status: "OPEN",
+            createdAt: "2026-07-09T09:00:00.000Z",
+          },
+        ],
+        trades: [],
+      }),
+    );
+    const client = createDemoClient("device-a", store);
+
+    await client.placeOrder({
+      creatorId: CREATOR_ID,
+      side: "BUY",
+      orderType: "MARKET",
+      price: 1_280,
+      quantity: 2,
+    });
+
+    expect(await client.getPortfolio()).toMatchObject({
+      balance: 97_440,
+      positions: [{ creatorId: CREATOR_ID, quantity: 4, avgPrice: 690 }],
+      openOrders: [{ id: "legacy-sell" }],
+    });
+    const persisted = store.values.get(key);
+    expect(persisted).toBeDefined();
+    expect(JSON.parse(persisted ?? "")).toMatchObject({
+      openOrders: [
+        expect.objectContaining({
+          id: "legacy-sell",
+          reservedAvgPrice: 100,
+        }),
+      ],
+      usedIds: expect.arrayContaining([
+        "legacy-sell",
+        "appintoss-order-fixture-1",
+        "appintoss-trade-fixture-2",
+      ]),
+    });
+
+    await createDemoClient("device-a", store).cancelOrder("legacy-sell");
+    const portfolio = await client.getPortfolio();
+    expect(portfolio.positions[0].quantity).toBe(7);
+    expect(portfolio.positions[0].avgPrice).toBeCloseTo(3_060 / 7, 10);
+  });
+
   it("rejects a legacy sell refund when no cost basis can be trusted", async () => {
     const store = new MemoryStore();
     const key = `${STATE_KEY_PREFIX}device-a`;
@@ -502,15 +569,63 @@ describe("DemoDataClient orders", () => {
       code: "ORDER_NOT_FOUND",
     });
     expect((await client.getPortfolio()).balance).toBe(100_000);
-  });
 
-  it("rejects duplicate generated trade IDs before changing persisted assets", async () => {
-    const store = new MemoryStore();
-    const client = new DemoDataClient({
+    const restarted = new DemoDataClient({
       store,
       namespace: "device-a",
       now: () => FIXED_NOW,
       idFactory: () => "duplicate",
+    });
+    await expect(restarted.placeOrder(input)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      retryable: true,
+    });
+    await expect(restarted.cancelOrder(first.id)).rejects.toMatchObject({
+      code: "ORDER_NOT_FOUND",
+    });
+    expect(await restarted.getPortfolio()).toMatchObject({
+      balance: 100_000,
+      openOrders: [],
+    });
+  });
+
+  it("tombstones a filled order ID independently of its trade ID", async () => {
+    const store = new MemoryStore();
+    const ids = ["order-once", "trade-one", "order-once", "trade-two"];
+    const client = new DemoDataClient({
+      store,
+      namespace: "device-a",
+      now: () => FIXED_NOW,
+      idFactory: () => ids.shift() ?? "unexpected",
+    });
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "MARKET" as const,
+      price: 1_280,
+      quantity: 1,
+    };
+    await client.placeOrder(input);
+
+    await expect(client.placeOrder(input)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      retryable: true,
+    });
+    expect(await client.getPortfolio()).toMatchObject({
+      balance: 98_720,
+      positions: [{ quantity: 1 }],
+      trades: [{ id: "appintoss-trade-trade-one" }],
+    });
+  });
+
+  it("rejects duplicate generated trade IDs before changing persisted assets", async () => {
+    const store = new MemoryStore();
+    const ids = ["order-one", "duplicate", "order-two", "duplicate"];
+    const client = new DemoDataClient({
+      store,
+      namespace: "device-a",
+      now: () => FIXED_NOW,
+      idFactory: () => ids.shift() ?? "unexpected",
     });
     const input = {
       creatorId: CREATOR_ID,
