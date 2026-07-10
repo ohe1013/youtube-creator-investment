@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  creatorQuerySchema,
   creatorStatSchema,
   creatorSchema,
   creatorSummarySchema,
   creatorVideoSchema,
   orderSchema,
+  portfolioSchema,
   tradeSchema,
 } from "@/lib/data/contracts";
 import { appInTossDemoData } from "@/lib/appintoss-demo-data";
@@ -62,6 +64,52 @@ describe("CreatorX data contracts", () => {
     expect(() =>
       orderSchema.array().parse(Object.values(appInTossDemoData.orders).flat()),
     ).not.toThrow();
+  });
+
+  it("rejects a zero maximum subscriber filter", () => {
+    expect(creatorQuerySchema.safeParse({ maxSubs: 0 }).success).toBe(false);
+    expect(creatorQuerySchema.safeParse({ maxSubs: 1 }).success).toBe(true);
+  });
+
+  it("rejects creator page sizes above the route maximum", () => {
+    expect(creatorQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
+    expect(creatorQuerySchema.safeParse({ limit: 100 }).success).toBe(true);
+  });
+
+  it("allows only active order states in a portfolio's open orders", () => {
+    const order = {
+      id: "order-1",
+      creatorId: "creator-1",
+      type: "BUY",
+      orderType: "LIMIT",
+      price: 100,
+      quantity: 2,
+      filled: 0,
+      createdAt: "2026-07-10T00:00:00.000Z",
+    };
+    const portfolio = {
+      balance: 1_000,
+      positions: [],
+      trades: [],
+    };
+
+    for (const status of ["OPEN", "PARTIAL"] as const) {
+      expect(
+        portfolioSchema.safeParse({
+          ...portfolio,
+          openOrders: [{ ...order, status }],
+        }).success,
+      ).toBe(true);
+    }
+
+    for (const status of ["FILLED", "CANCELLED"] as const) {
+      expect(
+        portfolioSchema.safeParse({
+          ...portfolio,
+          openOrders: [{ ...order, status }],
+        }).success,
+      ).toBe(false);
+    }
   });
 });
 

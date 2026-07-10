@@ -121,6 +121,10 @@ export const orderSchema = z.object({
 
 export type Order = z.infer<typeof orderSchema>;
 
+const openOrderSchema = orderSchema.extend({
+  status: z.enum(["OPEN", "PARTIAL"]),
+});
+
 export const priceLevelSchema = z.object({
   price: finitePositiveNumber,
   quantity: finitePositiveNumber,
@@ -149,7 +153,7 @@ export const positionSchema = z.object({
 export const portfolioSchema = z.object({
   balance: finiteNonnegativeNumber,
   positions: z.array(positionSchema),
-  openOrders: z.array(orderSchema),
+  openOrders: z.array(openOrderSchema),
   trades: z.array(tradeSchema),
 });
 
@@ -199,10 +203,10 @@ export type Dashboard = z.infer<typeof dashboardSchema>;
 export const creatorQuerySchema = z.object({
   category: z.string().min(1).optional(),
   minSubs: finiteNonnegativeNumber.optional(),
-  maxSubs: finiteNonnegativeNumber.optional(),
+  maxSubs: finitePositiveNumber.optional(),
   sort: z.enum(["score", "subs", "price", "growth"]).optional(),
   page: z.number().int().positive().optional(),
-  limit: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(100).optional(),
 });
 
 export type CreatorQuery = z.infer<typeof creatorQuerySchema>;
