@@ -43,6 +43,7 @@ prisma_push_error.txt
 .vscode/
 .idea/
 .worktrees/
+.superpowers/
 *.swp
 *.swo
 
