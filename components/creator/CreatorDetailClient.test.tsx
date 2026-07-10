@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/components/runtime/CreatorXDataProvider", () => ({
   useCreatorXDataClient: () => mocks.client,
+  useCreatorXOrderAttemptStore: () => null,
 }));
 
 vi.mock("@/lib/session/CreatorXSessionProvider", () => ({

@@ -198,7 +198,6 @@ export function MarketDashboard({
               }`}
             >
               <OrderForm
-                key={`${selectedCreator.id}:${priceUpdate?.timestamp ?? 0}`}
                 creatorId={selectedCreator.id}
                 currentPrice={selectedCreator.currentPrice}
                 userBalance={userBalance}

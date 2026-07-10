@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OrderForm } from "@/components/market/OrderForm";
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/components/runtime/CreatorXDataProvider", () => ({
   useCreatorXDataClient: () => mocks.client,
+  useCreatorXOrderAttemptStore: () => null,
 }));
 
 vi.mock("@/lib/session/CreatorXSessionProvider", () => ({
@@ -118,9 +120,78 @@ describe("OrderForm", () => {
     submitBuy();
     submitBuy();
 
-    expect(placeOrder).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
     resolveOrder?.(acceptedOrder);
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps pending UI state active through StrictMode effect replay", async () => {
+    let resolveOrder: ((order: Order) => void) | undefined;
+    const placeOrder = vi.fn<CreatorXDataClient["placeOrder"]>().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOrder = resolve;
+        }),
+    );
+    mocks.client = { placeOrder } as unknown as CreatorXDataClient;
+    render(
+      <StrictMode>
+        <OrderForm
+          creatorId="creator-1"
+          currentPrice={125}
+          userBalance={1000}
+          userQuantity={4}
+        />
+      </StrictMode>,
+    );
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole("button", { name: "Processing..." })).toBeDisabled();
+
+    resolveOrder?.(acceptedOrder);
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    enterQuantity("2");
+    expect(screen.getAllByRole("button", { name: "common.buy" }).at(-1)).toBeEnabled();
+  });
+
+  it("keeps the shared lock through unmount and releases it when the POST settles", async () => {
+    let resolveFirst: ((order: Order) => void) | undefined;
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(acceptedOrder);
+    mocks.client = { placeOrder } as unknown as CreatorXDataClient;
+    const renderSharedClientForm = () =>
+      render(
+        <OrderForm
+          creatorId="creator-1"
+          currentPrice={125}
+          userBalance={1000}
+          userQuantity={4}
+        />,
+      );
+    const first = renderSharedClientForm();
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    renderSharedClientForm();
+    enterQuantity("2");
+    submitBuy();
+    expect(placeOrder).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.(acceptedOrder);
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
   });
 
   it("keeps duplicate submission blocked until the accepted balance refresh finishes", async () => {
@@ -195,6 +266,49 @@ describe("OrderForm", () => {
     submitBuy();
 
     await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
+    expect(placeOrder.mock.calls[0][1]?.idempotencyKey).toBe("key-1");
+    expect(placeOrder.mock.calls[1][1]?.idempotencyKey).toBe("key-2");
+  });
+
+  it("clears a confirmed attempt so the same input starts a new logical order", async () => {
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockResolvedValueOnce(acceptedOrder)
+      .mockResolvedValueOnce({ ...acceptedOrder, id: "order-2" });
+    renderForm(placeOrder);
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
+
+    expect(placeOrder.mock.calls[0][1]?.idempotencyKey).toBe("key-1");
+    expect(placeOrder.mock.calls[1][1]?.idempotencyKey).toBe("key-2");
+  });
+
+  it("clears a nonretryable attempt before a manual correction", async () => {
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockRejectedValueOnce(
+        new CreatorXClientError(
+          "INSUFFICIENT_BALANCE",
+          "Balance is too low",
+          false,
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(acceptedOrder);
+    renderForm(placeOrder);
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "common.buy" }).at(-1)).toBeEnabled(),
+    );
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
+
     expect(placeOrder.mock.calls[0][1]?.idempotencyKey).toBe("key-1");
     expect(placeOrder.mock.calls[1][1]?.idempotencyKey).toBe("key-2");
   });

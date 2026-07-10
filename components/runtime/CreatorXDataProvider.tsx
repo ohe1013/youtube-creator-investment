@@ -20,6 +20,10 @@ import {
   RemoteDataClient,
   type RemoteDataClientOptions,
 } from "@/lib/data/remote-client";
+import {
+  createPersistentOrderAttemptStore,
+  type OrderAttemptStore,
+} from "@/lib/orders/order-attempt-store";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
 import {
   createClientStorage,
@@ -48,6 +52,7 @@ export type CreatorXDataProviderDependencies = {
 
 export type CreatorXDataRuntimeValue = {
   client: CreatorXDataClient | null;
+  orderAttemptStore: OrderAttemptStore | null;
   subject: string | null;
   status: "loading" | "ready" | "error";
   error: CreatorXClientError | null;
@@ -80,6 +85,7 @@ type BootstrapDescriptor = {
 
 type BootstrapResult = {
   client: CreatorXDataClient;
+  orderAttemptStore: OrderAttemptStore | null;
   subject: string | null;
 };
 
@@ -286,6 +292,10 @@ async function bootstrapDemo(
         store,
         namespace: BROWSER_DEMO_SUBJECT,
       }),
+      orderAttemptStore: createPersistentOrderAttemptStore(
+        store,
+        BROWSER_DEMO_SUBJECT,
+      ),
       subject: BROWSER_DEMO_SUBJECT,
     };
   }
@@ -312,6 +322,7 @@ async function bootstrapDemo(
   if (subject === null) throw sessionError();
   return {
     client: dependencies.createDemoClient({ store, namespace: subject }),
+    orderAttemptStore: createPersistentOrderAttemptStore(store, subject),
     subject,
   };
 }
@@ -346,6 +357,7 @@ async function bootstrapRemote(
       baseUrl,
       getAccessToken: dependencies.getAccessToken,
     }),
+    orderAttemptStore: null,
     subject: null,
   };
 }
@@ -363,6 +375,7 @@ function loadingState(descriptor: BootstrapDescriptor): BootstrapState {
   return {
     descriptor,
     client: null,
+    orderAttemptStore: null,
     subject: null,
     status: "loading",
     error: null,
@@ -514,6 +527,7 @@ export function CreatorXDataProvider({
         setState({
           descriptor,
           client: result.client,
+          orderAttemptStore: result.orderAttemptStore,
           subject: result.subject,
           status: "ready",
           error: null,
@@ -529,6 +543,7 @@ export function CreatorXDataProvider({
         setState({
           descriptor,
           client: null,
+          orderAttemptStore: null,
           subject: null,
           status: "error",
           error: normalizeBootstrapError(error),
@@ -545,6 +560,7 @@ export function CreatorXDataProvider({
   const value = useMemo<CreatorXDataRuntimeValue>(
     () => ({
       client: currentState.client,
+      orderAttemptStore: currentState.orderAttemptStore,
       subject: currentState.subject,
       status: currentState.status,
       error: currentState.error,
@@ -597,4 +613,14 @@ export function useCreatorXDataClient(): CreatorXDataClient {
     throw new Error("CreatorX data client is not ready");
   }
   return value.client;
+}
+
+export function useCreatorXOrderAttemptStore(): OrderAttemptStore | null {
+  const value = useContext(CreatorXDataContext);
+  if (value === undefined) {
+    throw new Error(
+      "useCreatorXOrderAttemptStore must be used within CreatorXDataProvider",
+    );
+  }
+  return value.orderAttemptStore;
 }

@@ -17,14 +17,27 @@ interface OrderFormProps {
   };
 }
 
-export function OrderForm({
+export function OrderForm(props: OrderFormProps) {
+  const submission = useCreatorXOrderSubmission();
+  return (
+    <OrderFormFields
+      key={`${props.creatorId}:${props.externalPriceUpdate?.timestamp ?? 0}`}
+      {...props}
+      {...submission}
+    />
+  );
+}
+
+function OrderFormFields({
   creatorId,
   currentPrice,
   userBalance,
   userQuantity,
   onOrderAccepted,
   externalPriceUpdate,
-}: OrderFormProps) {
+  isSubmitting,
+  submit,
+}: OrderFormProps & ReturnType<typeof useCreatorXOrderSubmission>) {
   const [tab, setTab] = useState<"BUY" | "SELL">(
     externalPriceUpdate?.side ?? "BUY",
   );
@@ -36,7 +49,6 @@ export function OrderForm({
     (externalPriceUpdate?.price ?? currentPrice).toString(),
   );
   const { t } = useLanguage();
-  const { isSubmitting, submit } = useCreatorXOrderSubmission();
 
   const price =
     orderType === "MARKET" ? currentPrice : parseFloat(limitPrice) || 0;

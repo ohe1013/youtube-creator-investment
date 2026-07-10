@@ -1,27 +1,34 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeClientBoundaries } from "@/tests/architecture/client-boundary-analyzer";
+import {
+  analyzeClientBoundaries,
+  isProjectOwnedSourcePath,
+} from "@/tests/architecture/client-boundary-analyzer";
 
 const ROOT = process.cwd();
-const SOURCE_ROOTS = ["app", "components", "lib"];
+const SOURCE_ROOTS = ["app", "components", "hooks", "lib"];
 
 function sourceFiles(): string[] {
   const files: string[] = [];
   const visit = (path: string) => {
-    for (const entry of readdirSync(path)) {
-      const candidate = join(path, entry);
-      if (statSync(candidate).isDirectory()) {
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const candidate = join(path, entry.name);
+      if (entry.isDirectory()) {
         visit(candidate);
-      } else if (
-        /\.(?:ts|tsx)$/.test(entry) &&
-        !/\.(?:test|spec)\.(?:ts|tsx)$/.test(entry)
-      ) {
+      } else if (entry.isFile() && isProjectOwnedSourcePath(projectPath(candidate))) {
         files.push(candidate);
       }
     }
   };
-  for (const root of SOURCE_ROOTS) visit(join(ROOT, root));
+  for (const root of SOURCE_ROOTS) {
+    const candidate = join(ROOT, root);
+    if (existsSync(candidate)) visit(candidate);
+  }
+  for (const entry of readdirSync(ROOT, { withFileTypes: true })) {
+    if (!entry.isFile() || !isProjectOwnedSourcePath(entry.name)) continue;
+    files.push(join(ROOT, entry.name));
+  }
   return files;
 }
 
