@@ -73,12 +73,6 @@ button {
   );
 }
 
-.creatorx-detail-body {
-  height: calc(
-    var(--creatorx-viewport-height) - 104px - var(--creatorx-safe-top)
-  );
-}
-
 .creatorx-safe-top {
   padding-top: var(--creatorx-safe-top);
 }
@@ -106,6 +100,10 @@ button {
     padding-right: max(1.5rem, var(--creatorx-safe-right));
     padding-left: max(1.5rem, var(--creatorx-safe-left));
   }
+}
+
+.creatorx-navbar-native-inline {
+  padding-right: calc(var(--creatorx-safe-right) + 56px);
 }
 
 .mono {

@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useState, type AnchorHTMLAttributes } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type AnchorHTMLAttributes,
+} from "react";
 
 import { RuntimeIssueBanner } from "@/components/runtime/RuntimeIssueBanner";
 import {
@@ -22,6 +29,12 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "외부 링크를 열지 못했습니다.";
 }
 
+type ExternalLinkStatus = {
+  identity: object;
+  issue: string | null;
+  opening: boolean;
+};
+
 export function ExternalLink({
   href,
   appInToss = process.env.NEXT_PUBLIC_APP_IN_TOSS === "1",
@@ -31,23 +44,66 @@ export function ExternalLink({
   children,
   ...anchorProps
 }: ExternalLinkProps) {
-  const [issue, setIssue] = useState<string | null>(null);
-  const [opening, setOpening] = useState(false);
+  const identity = useMemo(
+    () => ({ appInToss, href, loadBridge }),
+    [appInToss, href, loadBridge],
+  );
+  const [status, setStatus] = useState<ExternalLinkStatus>({
+    identity,
+    issue: null,
+    opening: false,
+  });
+  const mountedRef = useRef(false);
+  const operationGenerationRef = useRef(0);
+  const inFlightIdentityRef = useRef<object | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationGenerationRef.current += 1;
+      inFlightIdentityRef.current = null;
+    };
+  }, []);
+
+  const visibleStatus =
+    status.identity === identity
+      ? status
+      : { identity, issue: null, opening: false };
 
   const openNative = useCallback(async () => {
-    if (opening) return;
-    setOpening(true);
-    setIssue(null);
+    if (inFlightIdentityRef.current === identity) return;
+    inFlightIdentityRef.current = identity;
+    const generation = operationGenerationRef.current + 1;
+    operationGenerationRef.current = generation;
+    setStatus({ identity, issue: null, opening: true });
     try {
       assertHttpsExternalUrl(href);
       const bridge = await loadBridge();
       await bridge.openExternal(href);
     } catch (error) {
-      setIssue(errorMessage(error));
+      if (
+        mountedRef.current &&
+        operationGenerationRef.current === generation
+      ) {
+        setStatus({ identity, issue: errorMessage(error), opening: false });
+      }
     } finally {
-      setOpening(false);
+      if (inFlightIdentityRef.current === identity) {
+        inFlightIdentityRef.current = null;
+      }
+      if (
+        mountedRef.current &&
+        operationGenerationRef.current === generation
+      ) {
+        setStatus((current) =>
+          current.identity === identity
+            ? { ...current, opening: false }
+            : current,
+        );
+      }
     }
-  }, [href, loadBridge, opening]);
+  }, [href, identity, loadBridge]);
 
   return (
     <>
@@ -56,7 +112,7 @@ export function ExternalLink({
         href={href}
         target={target}
         rel={rel}
-        aria-busy={appInToss && opening ? true : undefined}
+        aria-busy={appInToss && visibleStatus.opening ? true : undefined}
         onClick={
           appInToss
             ? (event) => {
@@ -68,11 +124,11 @@ export function ExternalLink({
       >
         {children}
       </a>
-      {issue !== null ? (
+      {visibleStatus.issue !== null ? (
         <RuntimeIssueBanner
-          message={issue}
+          message={visibleStatus.issue}
           onRetry={() => void openNative()}
-          retrying={opening}
+          retrying={visibleStatus.opening}
         />
       ) : null}
     </>

@@ -116,3 +116,33 @@ it("submits the inline order through the typed client with one idempotency key",
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(getCreator).toHaveBeenCalledTimes(2));
 });
+
+it("lets a wrapped header and bottom safe area shrink the remaining detail body", async () => {
+  mocks.client = {
+    getCreator: vi.fn().mockResolvedValue(creator),
+    getCreatorStats: vi.fn().mockResolvedValue([]),
+    getCreatorVideos: vi.fn().mockResolvedValue([]),
+    getCreatorHistory: vi.fn().mockResolvedValue([]),
+    getCreatorTrades: vi.fn().mockResolvedValue([]),
+    getOrderBook: vi.fn().mockResolvedValue({ asks: [], bids: [] }),
+  } as unknown as CreatorXDataClient;
+
+  render(<CreatorDetailClient id={creator.id} />);
+
+  const page = await screen.findByTestId("creator-detail-page");
+  expect(page).toHaveClass(
+    "creatorx-below-navbar",
+    "creatorx-safe-bottom",
+    "flex",
+    "flex-col",
+    "overflow-hidden",
+  );
+  expect(screen.getByTestId("creator-detail-header")).toHaveClass("shrink-0");
+  expect(screen.getByTestId("creator-detail-body")).toHaveClass(
+    "flex-1",
+    "min-h-0",
+  );
+  expect(screen.getByTestId("creator-detail-body")).not.toHaveClass(
+    "creatorx-detail-body",
+  );
+});

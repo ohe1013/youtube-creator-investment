@@ -186,8 +186,14 @@ export function CreatorDetailClient({ id }: { id: string }) {
   const isPositive = change24h >= 0;
 
   return (
-    <div className="creatorx-screen creatorx-safe-bottom creatorx-safe-inline bg-background text-foreground">
-      <div className="bg-card border-b border-border-exchange px-6 py-3 flex flex-wrap items-center gap-8">
+    <div
+      data-testid="creator-detail-page"
+      className="creatorx-below-navbar creatorx-safe-bottom creatorx-safe-inline flex flex-col overflow-hidden bg-background text-foreground"
+    >
+      <div
+        data-testid="creator-detail-header"
+        className="shrink-0 bg-card border-b border-border-exchange px-6 py-3 flex flex-wrap items-center gap-8"
+      >
         <div className="flex items-center gap-3">
           <Image
             src={creator.thumbnailUrl || "/globe.svg"}
@@ -245,7 +251,10 @@ export function CreatorDetailClient({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className="creatorx-detail-body flex flex-col lg:flex-row">
+      <div
+        data-testid="creator-detail-body"
+        className="flex-1 min-h-0 flex flex-col lg:flex-row"
+      >
         <div className="flex-1 border-r border-border-exchange overflow-hidden flex flex-col min-w-0">
           <div className="h-[450px] border-b border-border-exchange">
             <MarketChart data={history} />

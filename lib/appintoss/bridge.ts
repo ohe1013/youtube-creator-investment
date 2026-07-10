@@ -45,10 +45,18 @@ export interface CreatorXBridge {
 
 export type CreatorXBridgeLoader = () => Promise<CreatorXBridge>;
 
+type InstalledCreatorXFramework = typeof import("@apps-in-toss/web-framework");
+
+function ensureCreatorXFrameworkPort(
+  framework: InstalledCreatorXFramework,
+): CreatorXFrameworkPort {
+  return framework;
+}
+
 async function importCreatorXFramework(): Promise<CreatorXFrameworkPort> {
-  return (await import(
-    "@apps-in-toss/web-framework"
-  )) as unknown as CreatorXFrameworkPort;
+  return ensureCreatorXFrameworkPort(
+    await import("@apps-in-toss/web-framework"),
+  );
 }
 
 export function assertHttpsExternalUrl(value: string): URL {

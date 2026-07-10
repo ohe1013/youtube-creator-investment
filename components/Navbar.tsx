@@ -39,7 +39,11 @@ export default function Navbar() {
 
   return (
     <nav className="creatorx-safe-top sticky top-0 z-50 bg-gradient-to-r from-brand-blue to-brand-red dark:from-background dark:to-background border-b border-white/10 dark:border-border-exchange">
-      <div className="creatorx-navbar-inline container mx-auto">
+      <div
+        className={`creatorx-navbar-inline container mx-auto ${
+          appInTossMode ? "creatorx-navbar-native-inline" : ""
+        }`}
+      >
         <div className="flex justify-between items-center h-14">
           {/* Logo and Primary Nav */}
           <div className="flex items-center space-x-8">

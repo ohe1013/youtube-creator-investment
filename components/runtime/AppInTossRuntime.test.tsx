@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +21,16 @@ class FakeVisualViewport extends EventTarget {
   width = 390;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 function bridgeHarness(initialInsets: SafeAreaInsetsValue = {
   top: 10,
   right: 20,
@@ -29,8 +42,10 @@ function bridgeHarness(initialInsets: SafeAreaInsetsValue = {
   let onBackError: ((error: Error) => void) | undefined;
   const unsubscribeSafeArea = vi.fn();
   const unsubscribeBack = vi.fn();
-  const close = vi.fn(async () => undefined);
-  const openExternal = vi.fn(async () => undefined);
+  const close = vi.fn<() => Promise<void>>(async () => undefined);
+  const openExternal = vi.fn<(url: string) => Promise<void>>(
+    async () => undefined,
+  );
 
   const bridge: CreatorXBridge = {
     getAnonymousSubject: vi.fn(async () => "game-user"),
@@ -336,22 +351,39 @@ describe("AppInTossRuntime", () => {
     );
   });
 
-  it("surfaces an asynchronous root-close rejection", async () => {
+  it("retries a failed root close directly without reloading the bridge", async () => {
     const harness = bridgeHarness();
-    harness.close.mockRejectedValueOnce(new Error("close failed"));
-    render(
-      <AppInTossRuntime
-        enabled
-        loadBridge={async () => harness.bridge}
-      />,
-    );
+    const retriedClose = deferred<undefined>();
+    harness.close
+      .mockRejectedValueOnce(new Error("close failed"))
+      .mockImplementationOnce(() => retriedClose.promise);
+    const loadBridge = vi.fn(async () => harness.bridge);
+    render(<AppInTossRuntime enabled loadBridge={loadBridge} />);
     await waitFor(() =>
       expect(harness.bridge.subscribeBack).toHaveBeenCalledTimes(1),
     );
 
     act(() => harness.emitBack());
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("close failed");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("close failed");
+    const retry = screen.getByRole("button", { name: "다시 시도" });
+    act(() => {
+      retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => expect(harness.close).toHaveBeenCalledTimes(2));
+    expect(loadBridge).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("close failed");
+
+    await act(async () => {
+      retriedClose.resolve(undefined);
+      await retriedClose.promise;
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+    );
   });
 });
 
@@ -398,6 +430,84 @@ describe("ExternalLink", () => {
     );
   });
 
+  it("coalesces two native clicks dispatched in the same turn", async () => {
+    const harness = bridgeHarness();
+    const bridgeReady = deferred<CreatorXBridge>();
+    const loadBridge = vi.fn(() => bridgeReady.promise);
+    render(
+      <ExternalLink
+        href="https://example.com/once"
+        appInToss
+        loadBridge={loadBridge}
+      >
+        Open once
+      </ExternalLink>,
+    );
+    const link = screen.getByRole("link", { name: "Open once" });
+
+    act(() => {
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(loadBridge).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      bridgeReady.resolve(harness.bridge);
+      await bridgeReady.promise;
+    });
+    await waitFor(() =>
+      expect(harness.openExternal).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it("lets a new href succeed without a late old rejection restoring its error", async () => {
+    const oldOpen = deferred<undefined>();
+    const harness = bridgeHarness();
+    harness.openExternal.mockImplementation((url) =>
+      url.endsWith("/old") ? oldOpen.promise : Promise.resolve(undefined),
+    );
+    const loadBridge = vi.fn(async () => harness.bridge);
+    const view = render(
+      <ExternalLink
+        href="https://example.com/old"
+        appInToss
+        loadBridge={loadBridge}
+      >
+        Changing link
+      </ExternalLink>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Changing link" }));
+    await waitFor(() =>
+      expect(harness.openExternal).toHaveBeenCalledWith(
+        "https://example.com/old",
+      ),
+    );
+
+    view.rerender(
+      <ExternalLink
+        href="https://example.com/new"
+        appInToss
+        loadBridge={loadBridge}
+      >
+        Changing link
+      </ExternalLink>,
+    );
+    fireEvent.click(screen.getByRole("link", { name: "Changing link" }));
+    await waitFor(() =>
+      expect(harness.openExternal).toHaveBeenCalledWith(
+        "https://example.com/new",
+      ),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => {
+      oldOpen.reject(new Error("late old failure"));
+      await oldOpen.promise.catch(() => undefined);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("rejects non-HTTPS native URLs before loading the SDK bridge", async () => {
     const loadBridge = vi.fn(async () => bridgeHarness().bridge);
     render(
@@ -437,6 +547,18 @@ describe("ExternalLink", () => {
 });
 
 describe("loadCreatorXBridge", () => {
+  it("keeps the default adapter statically compatible with the installed SDK", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "lib/appintoss/bridge.ts"),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      'typeof import("@apps-in-toss/web-framework")',
+    );
+    expect(source).not.toContain("as unknown as CreatorXFrameworkPort");
+  });
+
   it("maps safe-area and back subscriptions to the exact SDK signatures", async () => {
     const safeCleanup = vi.fn();
     const backCleanup = vi.fn();

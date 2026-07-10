@@ -35,9 +35,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       forcedTheme={config.appInToss ? "light" : undefined}
     >
       <LanguageProvider>
+        <AppInTossRuntime enabled={config.appInToss} />
         <CreatorXDataProvider config={config}>
           <CreatorXSessionProvider config={config}>
-            <AppInTossRuntime enabled={config.appInToss} />
             {children}
           </CreatorXSessionProvider>
         </CreatorXDataProvider>

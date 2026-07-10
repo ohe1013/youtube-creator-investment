@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   session: {
     status: "authenticated" as const,
     subject: "browser-user",
-    identityKind: "browser" as const,
+    identityKind: "browser" as "browser" | "anonymous-device" | "guest",
     balance: 4321,
     error: null,
     refresh: vi.fn(),
@@ -35,6 +35,7 @@ vi.mock("next-themes", () => ({
 }));
 
 beforeEach(() => {
+  mocks.session.identityKind = "browser";
   mocks.session.signOut.mockReset().mockResolvedValue(undefined);
 });
 
@@ -47,4 +48,18 @@ it("shows normalized portfolio balance and delegates logout to the session adapt
   const logout = screen.getAllByRole("button", { name: "common.logout" })[0];
   fireEvent.click(logout);
   await waitFor(() => expect(mocks.session.signOut).toHaveBeenCalledTimes(1));
+  expect(
+    screen.getByRole("navigation").querySelector(".container"),
+  ).not.toHaveClass("creatorx-navbar-native-inline");
+});
+
+it("reserves a native close rail only in Apps-in-Toss mode", async () => {
+  mocks.session.identityKind = "anonymous-device";
+
+  render(<Navbar />);
+
+  await waitFor(() => expect(screen.getByRole("navigation")).toBeVisible());
+  expect(
+    screen.getByRole("navigation").querySelector(".container"),
+  ).toHaveClass("creatorx-navbar-native-inline");
 });

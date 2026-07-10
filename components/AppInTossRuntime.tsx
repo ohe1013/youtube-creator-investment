@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { RuntimeIssueBanner } from "@/components/runtime/RuntimeIssueBanner";
 import {
@@ -44,6 +44,11 @@ function issueMessage(error: unknown) {
     : "앱인토스 연결을 확인하지 못했습니다.";
 }
 
+type RuntimeIssue = {
+  message: string;
+  version: number;
+};
+
 function isRootRoute() {
   return (
     window.location.pathname === "/" &&
@@ -71,8 +76,23 @@ export function AppInTossRuntime({
   enabled: boolean;
   loadBridge?: CreatorXBridgeLoader;
 }) {
-  const [issue, setIssue] = useState<string | null>(null);
+  const [issue, setIssue] = useState<RuntimeIssue | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [retryGeneration, setRetryGeneration] = useState(0);
+  const mountedRef = useRef(false);
+  const issueVersionRef = useRef(0);
+  const retryActionRef = useRef<(() => Promise<void>) | null>(null);
+  const retryTokenRef = useRef<symbol | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      issueVersionRef.current += 1;
+      retryActionRef.current = null;
+      retryTokenRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -80,10 +100,38 @@ export function AppInTossRuntime({
     let disposed = false;
     let unsubscribeSafeArea: (() => void) | undefined;
     let unsubscribeBack: (() => void) | undefined;
+    let closePromise: Promise<void> | null = null;
     const viewport = window.visualViewport;
 
-    const reportIssue = (error: unknown) => {
-      if (!disposed) setIssue(issueMessage(error));
+    retryTokenRef.current = null;
+
+    const reportIssue = (
+      error: unknown,
+      retryAction: (() => Promise<void>) | null = null,
+    ) => {
+      if (disposed || !mountedRef.current) return;
+      const version = issueVersionRef.current + 1;
+      issueVersionRef.current = version;
+      retryActionRef.current = retryAction;
+      retryTokenRef.current = null;
+      setRetrying(false);
+      setIssue({ message: issueMessage(error), version });
+    };
+
+    let bridgeClose: () => Promise<void> = async () => undefined;
+    const closeOnce = () => {
+      if (closePromise !== null) return closePromise;
+      const operation = bridgeClose();
+      closePromise = operation;
+      void operation.then(
+        () => {
+          if (closePromise === operation) closePromise = null;
+        },
+        () => {
+          if (closePromise === operation) closePromise = null;
+        },
+      );
+      return operation;
     };
 
     const updateViewport = () => {
@@ -107,6 +155,7 @@ export function AppInTossRuntime({
       try {
         const bridge = await loadBridge();
         if (disposed) return;
+        bridgeClose = () => bridge.close();
 
         applySafeArea(bridge.getSafeAreaInsets());
         unsubscribeSafeArea = bridge.subscribeSafeArea((value) => {
@@ -119,7 +168,7 @@ export function AppInTossRuntime({
               window.history.back();
               return;
             }
-            void bridge.close().catch(reportIssue);
+            void closeOnce().catch((error) => reportIssue(error, closeOnce));
           },
           reportIssue,
         );
@@ -142,13 +191,46 @@ export function AppInTossRuntime({
 
   if (!enabled || issue === null) return null;
 
+  const retry = () => {
+    if (retryTokenRef.current !== null) return;
+    const retryToken = Symbol("runtime-retry");
+    retryTokenRef.current = retryToken;
+    const retryAction = retryActionRef.current;
+    if (retryAction === null) {
+      issueVersionRef.current += 1;
+      setIssue(null);
+      setRetryGeneration((generation) => generation + 1);
+      return;
+    }
+
+    const version = issue.version;
+    setRetrying(true);
+    void retryAction()
+      .then(() => {
+        if (!mountedRef.current || issueVersionRef.current !== version) return;
+        issueVersionRef.current += 1;
+        retryActionRef.current = null;
+        setIssue(null);
+      })
+      .catch((error) => {
+        if (!mountedRef.current || issueVersionRef.current !== version) return;
+        setIssue({ message: issueMessage(error), version });
+      })
+      .finally(() => {
+        if (retryTokenRef.current === retryToken) {
+          retryTokenRef.current = null;
+        }
+        if (mountedRef.current && issueVersionRef.current === version) {
+          setRetrying(false);
+        }
+      });
+  };
+
   return (
     <RuntimeIssueBanner
-      message={issue}
-      onRetry={() => {
-        setIssue(null);
-        setRetryGeneration((generation) => generation + 1);
-      }}
+      message={issue.message}
+      onRetry={retry}
+      retrying={retrying}
     />
   );
 }
