@@ -65,16 +65,89 @@ const localTradeSchema = tradeSchema.omit({ creator: true }).extend({
 });
 const localStateSchema = z
   .object({
-    balance: z.number().finite().nonnegative().default(INITIAL_BALANCE),
-    positions: z.array(localPositionSchema).default([]),
-    openOrders: z.array(localOrderSchema).default([]),
-    trades: z.array(localTradeSchema).default([]),
+    balance: z.number().finite().nonnegative(),
+    positions: z.array(localPositionSchema),
+    openOrders: z.array(localOrderSchema),
+    trades: z.array(localTradeSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((state, context) => {
+    const positionIds = new Set<string>();
+    const positionCreators = new Set<string>();
+    for (const position of state.positions) {
+      if (
+        positionIds.has(position.id) ||
+        positionCreators.has(position.creatorId)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["positions"],
+          message: "Persisted positions must be unique",
+        });
+      }
+      positionIds.add(position.id);
+      positionCreators.add(position.creatorId);
+    }
+
+    const orderIds = new Set<string>();
+    for (const order of state.openOrders) {
+      if (orderIds.has(order.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["openOrders"],
+          message: "Persisted open-order IDs must be unique",
+        });
+      }
+      orderIds.add(order.id);
+    }
+
+    const tradeIds = new Set<string>();
+    for (const trade of state.trades) {
+      if (tradeIds.has(trade.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["trades"],
+          message: "Persisted trade IDs must be unique",
+        });
+      }
+      tradeIds.add(trade.id);
+    }
+  });
 
 type LocalState = z.infer<typeof localStateSchema>;
 type LocalPosition = z.infer<typeof localPositionSchema>;
 type LocalOrder = z.infer<typeof localOrderSchema>;
+
+const mutationQueues = new WeakMap<
+  AsyncKeyValueStore,
+  Map<string, Promise<void>>
+>();
+
+function enqueueMutation<T>(
+  store: AsyncKeyValueStore,
+  stateKey: string,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  let storeQueues = mutationQueues.get(store);
+  if (!storeQueues) {
+    storeQueues = new Map();
+    mutationQueues.set(store, storeQueues);
+  }
+
+  const previous = storeQueues.get(stateKey) ?? Promise.resolve();
+  const result = previous.then(mutation);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  storeQueues.set(stateKey, tail);
+  void tail.then(() => {
+    if (storeQueues.get(stateKey) !== tail) return;
+    storeQueues.delete(stateKey);
+    if (storeQueues.size === 0) mutationQueues.delete(store);
+  });
+  return result;
+}
 
 export type DemoDataClientDependencies = {
   store: AsyncKeyValueStore;
@@ -116,6 +189,14 @@ function invalidStateError(): CreatorXClientError {
   return new CreatorXClientError(
     "INVALID_RESPONSE",
     "저장된 데이터를 읽을 수 없습니다. 다시 시도해 주세요.",
+    true,
+  );
+}
+
+function identifierCollisionError(): CreatorXClientError {
+  return new CreatorXClientError(
+    "INVALID_RESPONSE",
+    "새 주문 식별자를 만들 수 없습니다. 다시 시도해 주세요.",
     true,
   );
 }
@@ -413,104 +494,144 @@ export class DemoDataClient implements CreatorXDataClient {
     const total = parsed.price * parsed.quantity;
     if (!Number.isFinite(total)) throw requestError();
 
-    const state = await this.readState();
-    const shouldFill =
-      parsed.orderType === "MARKET" ||
-      (parsed.side === "BUY" && parsed.price >= creator.currentPrice) ||
-      (parsed.side === "SELL" && parsed.price <= creator.currentPrice);
-    const position = state.positions.find(
-      ({ creatorId }) => creatorId === creator.id,
+    return enqueueMutation(
+      this.dependencies.store,
+      this.stateKey,
+      async () => {
+        this.checkSignal(options);
+        const state = await this.readState();
+        const shouldFill =
+          parsed.orderType === "MARKET" ||
+          (parsed.side === "BUY" && parsed.price >= creator.currentPrice) ||
+          (parsed.side === "SELL" && parsed.price <= creator.currentPrice);
+        const position = state.positions.find(
+          ({ creatorId }) => creatorId === creator.id,
+        );
+
+        if (parsed.side === "BUY" && state.balance < total) {
+          throw new CreatorXClientError(
+            "INSUFFICIENT_BALANCE",
+            "보유 포인트가 부족합니다.",
+            false,
+            409,
+          );
+        }
+        if (
+          parsed.side === "SELL" &&
+          (!position || position.quantity < parsed.quantity)
+        ) {
+          throw new CreatorXClientError(
+            "INSUFFICIENT_SHARES",
+            "보유 수량이 부족합니다.",
+            false,
+            409,
+          );
+        }
+
+        const createdAt = this.getTimestamp();
+        const orderId = this.getId("order");
+        if (state.openOrders.some(({ id }) => id === orderId)) {
+          throw identifierCollisionError();
+        }
+        const tradeId = shouldFill ? this.getId("trade") : null;
+        if (tradeId && state.trades.some(({ id }) => id === tradeId)) {
+          throw identifierCollisionError();
+        }
+        const order: LocalOrder = {
+          id: orderId,
+          creatorId: creator.id,
+          type: parsed.side,
+          orderType: parsed.orderType,
+          price: parsed.price,
+          quantity: parsed.quantity,
+          filled: shouldFill ? parsed.quantity : 0,
+          status: shouldFill ? "FILLED" : "OPEN",
+          createdAt,
+          reservedAvgPrice:
+            parsed.side === "SELL" && !shouldFill
+              ? position?.avgPrice
+              : undefined,
+        };
+
+        if (parsed.side === "BUY") {
+          state.balance -= total;
+        } else {
+          if (!position) throw invalidStateError();
+          position.quantity -= parsed.quantity;
+        }
+
+        if (shouldFill) {
+          if (!tradeId) throw invalidStateError();
+          if (parsed.side === "BUY") {
+            this.addPosition(state, creator, parsed.quantity, parsed.price);
+          } else {
+            state.balance += total;
+          }
+          state.trades.unshift({
+            id: tradeId,
+            creatorId: creator.id,
+            userId: this.namespace,
+            price: parsed.price,
+            quantity: parsed.quantity,
+            type: parsed.side,
+            createdAt,
+          });
+        } else {
+          state.openOrders.unshift(order);
+        }
+
+        await this.writeState(state);
+        return parseResponse(orderSchema, order);
+      },
     );
-
-    if (parsed.side === "BUY") {
-      if (state.balance < total) {
-        throw new CreatorXClientError(
-          "INSUFFICIENT_BALANCE",
-          "보유 포인트가 부족합니다.",
-          false,
-          409,
-        );
-      }
-      state.balance -= total;
-    } else {
-      if (!position || position.quantity < parsed.quantity) {
-        throw new CreatorXClientError(
-          "INSUFFICIENT_SHARES",
-          "보유 수량이 부족합니다.",
-          false,
-          409,
-        );
-      }
-      position.quantity -= parsed.quantity;
-    }
-
-    const createdAt = this.getTimestamp();
-    const order: LocalOrder = {
-      id: this.getId("order"),
-      creatorId: creator.id,
-      type: parsed.side,
-      orderType: parsed.orderType,
-      price: parsed.price,
-      quantity: parsed.quantity,
-      filled: shouldFill ? parsed.quantity : 0,
-      status: shouldFill ? "FILLED" : "OPEN",
-      createdAt,
-      reservedAvgPrice:
-        parsed.side === "SELL" && !shouldFill ? position?.avgPrice : undefined,
-    };
-
-    if (shouldFill) {
-      if (parsed.side === "BUY") {
-        this.addPosition(state, creator, parsed.quantity, parsed.price);
-      } else {
-        state.balance += total;
-      }
-      state.trades.unshift({
-        id: this.getId("trade"),
-        creatorId: creator.id,
-        userId: this.namespace,
-        price: parsed.price,
-        quantity: parsed.quantity,
-        type: parsed.side,
-        createdAt,
-      });
-    } else {
-      state.openOrders.unshift(order);
-    }
-
-    await this.writeState(state);
-    return parseResponse(orderSchema, order);
   }
 
   async cancelOrder(id: string, options?: RequestOptions): Promise<void> {
     this.checkSignal(options);
     const orderId = parseRequest(idSchema, id);
-    const state = await this.readState();
-    const order = state.openOrders.find(({ id: candidate }) => candidate === orderId);
-    if (!order) {
-      throw new CreatorXClientError(
-        "ORDER_NOT_FOUND",
-        "취소할 주문을 찾을 수 없습니다.",
-        false,
-        404,
-      );
-    }
+    await enqueueMutation(
+      this.dependencies.store,
+      this.stateKey,
+      async () => {
+        this.checkSignal(options);
+        const state = await this.readState();
+        const orderIndex = state.openOrders.findIndex(
+          ({ id: candidate }) => candidate === orderId,
+        );
+        const order = state.openOrders[orderIndex];
+        if (!order) {
+          throw new CreatorXClientError(
+            "ORDER_NOT_FOUND",
+            "취소할 주문을 찾을 수 없습니다.",
+            false,
+            404,
+          );
+        }
 
-    const remaining = order.quantity - order.filled;
-    if (order.type === "BUY") {
-      state.balance += remaining * order.price;
-    } else {
-      this.addPosition(
-        state,
-        this.requireCreator(order.creatorId),
-        remaining,
-        order.reservedAvgPrice ?? order.price,
-      );
-    }
-    state.openOrders = state.openOrders.filter(
-      ({ id: candidate }) => candidate !== orderId,
+        const remaining = order.quantity - order.filled;
+        if (order.type === "BUY") {
+          const refund = remaining * order.price;
+          if (!Number.isFinite(refund + state.balance)) {
+            throw invalidStateError();
+          }
+          state.balance += refund;
+        } else {
+          const position = state.positions.find(
+            ({ creatorId }) => creatorId === order.creatorId,
+          );
+          const refundAvgPrice = order.reservedAvgPrice ?? position?.avgPrice;
+          if (refundAvgPrice === undefined) throw invalidStateError();
+          this.addPosition(
+            state,
+            this.requireCreator(order.creatorId),
+            remaining,
+            refundAvgPrice,
+          );
+        }
+        state.openOrders.splice(orderIndex, 1);
+        await this.writeState(state);
+      },
     );
-    await this.writeState(state);
   }
 
   private checkSignal(options?: RequestOptions): void {
@@ -624,7 +745,14 @@ export class DemoDataClient implements CreatorXDataClient {
     } catch {
       throw storageError();
     }
-    if (raw === null) return parseResponse(localStateSchema, {});
+    if (raw === null) {
+      return parseResponse(localStateSchema, {
+        balance: INITIAL_BALANCE,
+        positions: [],
+        openOrders: [],
+        trades: [],
+      });
+    }
 
     try {
       return parseResponse(localStateSchema, JSON.parse(raw));

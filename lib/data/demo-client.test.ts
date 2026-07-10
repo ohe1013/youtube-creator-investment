@@ -36,6 +36,45 @@ class MemoryStore implements AsyncKeyValueStore {
   }
 }
 
+class ControlledWriteStore extends MemoryStore {
+  private nextWriteGate: {
+    markStarted: () => void;
+    waitForRelease: Promise<void>;
+  } | null = null;
+
+  blockNextWrite() {
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    this.nextWriteGate = {
+      markStarted: () => started.resolve(),
+      waitForRelease: release.promise,
+    };
+    return {
+      started: started.promise,
+      release: () => release.resolve(),
+    };
+  }
+
+  async setItem(key: string, value: string) {
+    const gate = this.nextWriteGate;
+    if (gate) {
+      this.nextWriteGate = null;
+      gate.markStarted();
+      await gate.waitForRelease;
+    }
+    await super.setItem(key, value);
+  }
+}
+
+async function allowConcurrentMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function createDemoClient(
   namespace = "device-a",
   store: AsyncKeyValueStore = new MemoryStore(),
@@ -207,6 +246,33 @@ describe("DemoDataClient reads", () => {
     expect((await client.getPortfolio()).balance).toBe(100_000);
     expect([...store.values.keys()]).toEqual([key]);
   });
+
+  it.each(["balance", "positions", "openOrders", "trades"])(
+    "rejects persisted JSON missing %s without overwriting it",
+    async (missingField) => {
+      const store = new MemoryStore();
+      const key = `${STATE_KEY_PREFIX}device-a`;
+      const incomplete: Record<string, unknown> = {
+        balance: 100_000,
+        positions: [],
+        openOrders: [],
+        trades: [],
+      };
+      delete incomplete[missingField];
+      const raw = JSON.stringify(incomplete);
+      store.values.set(key, raw);
+      const setItem = vi.spyOn(store, "setItem");
+
+      await expect(
+        createDemoClient("device-a", store).getPortfolio(),
+      ).rejects.toMatchObject({
+        code: "INVALID_RESPONSE",
+        retryable: true,
+      });
+      expect(store.values.get(key)).toBe(raw);
+      expect(setItem).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("DemoDataClient orders", () => {
@@ -336,6 +402,136 @@ describe("DemoDataClient orders", () => {
     });
   });
 
+  it("restores a legacy reserved sell at the retained position average", async () => {
+    const store = new MemoryStore();
+    const key = `${STATE_KEY_PREFIX}device-a`;
+    store.values.set(
+      key,
+      JSON.stringify({
+        balance: 100_000,
+        positions: [
+          {
+            id: `appintoss-position-${CREATOR_ID}`,
+            creatorId: CREATOR_ID,
+            quantity: 2,
+            avgPrice: 100,
+          },
+        ],
+        openOrders: [
+          {
+            id: "legacy-sell",
+            creatorId: CREATOR_ID,
+            type: "SELL",
+            price: 200,
+            quantity: 3,
+            filled: 0,
+            status: "OPEN",
+            createdAt: "2026-07-09T09:00:00.000Z",
+          },
+        ],
+        trades: [],
+      }),
+    );
+    const client = createDemoClient("device-a", store);
+
+    await client.cancelOrder("legacy-sell");
+
+    expect(await client.getPortfolio()).toMatchObject({
+      positions: [{ creatorId: CREATOR_ID, quantity: 5, avgPrice: 100 }],
+      openOrders: [],
+    });
+  });
+
+  it("rejects a legacy sell refund when no cost basis can be trusted", async () => {
+    const store = new MemoryStore();
+    const key = `${STATE_KEY_PREFIX}device-a`;
+    const raw = JSON.stringify({
+      balance: 100_000,
+      positions: [],
+      openOrders: [
+        {
+          id: "legacy-sell",
+          creatorId: CREATOR_ID,
+          type: "SELL",
+          price: 200,
+          quantity: 3,
+          filled: 0,
+          status: "OPEN",
+          createdAt: "2026-07-09T09:00:00.000Z",
+        },
+      ],
+      trades: [],
+    });
+    store.values.set(key, raw);
+    const setItem = vi.spyOn(store, "setItem");
+
+    await expect(
+      createDemoClient("device-a", store).cancelOrder("legacy-sell"),
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE", retryable: true });
+    expect(store.values.get(key)).toBe(raw);
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate generated order IDs before changing persisted assets", async () => {
+    const store = new MemoryStore();
+    const client = new DemoDataClient({
+      store,
+      namespace: "device-a",
+      now: () => FIXED_NOW,
+      idFactory: () => "duplicate",
+    });
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "LIMIT" as const,
+      price: 1,
+      quantity: 10,
+    };
+    const first = await client.placeOrder(input);
+
+    await expect(client.placeOrder(input)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      retryable: true,
+    });
+    expect(await client.getPortfolio()).toMatchObject({
+      balance: 99_990,
+      openOrders: [{ id: first.id }],
+    });
+    await client.cancelOrder(first.id);
+    await expect(client.cancelOrder(first.id)).rejects.toMatchObject({
+      code: "ORDER_NOT_FOUND",
+    });
+    expect((await client.getPortfolio()).balance).toBe(100_000);
+  });
+
+  it("rejects duplicate generated trade IDs before changing persisted assets", async () => {
+    const store = new MemoryStore();
+    const client = new DemoDataClient({
+      store,
+      namespace: "device-a",
+      now: () => FIXED_NOW,
+      idFactory: () => "duplicate",
+    });
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "MARKET" as const,
+      price: 1_280,
+      quantity: 1,
+    };
+    await client.placeOrder(input);
+
+    await expect(client.placeOrder(input)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      retryable: true,
+    });
+    expect(await client.getPortfolio()).toMatchObject({
+      balance: 98_720,
+      positions: [{ creatorId: CREATOR_ID, quantity: 1 }],
+      trades: [{ id: "appintoss-trade-duplicate" }],
+    });
+  });
+
   it("rejects insufficient balance and shares without persisting", async () => {
     const store = new MemoryStore();
     const client = createDemoClient("device-a", store);
@@ -360,6 +556,136 @@ describe("DemoDataClient orders", () => {
     ).rejects.toMatchObject({ code: "INSUFFICIENT_SHARES" });
     expect(store.values.size).toBe(0);
   });
+});
+
+describe("DemoDataClient concurrent mutations", () => {
+  it("serializes two open buys across clients sharing one store and namespace", async () => {
+    const store = new ControlledWriteStore();
+    let id = 0;
+    const dependencies = {
+      store,
+      namespace: "device-a",
+      now: () => FIXED_NOW,
+      idFactory: () => `concurrent-${++id}`,
+    };
+    const firstClient = new DemoDataClient(dependencies);
+    const secondClient = new DemoDataClient(dependencies);
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "LIMIT" as const,
+      price: 1,
+      quantity: 10,
+    };
+    const gate = store.blockNextWrite();
+    const first = firstClient.placeOrder(input);
+    await gate.started;
+    const second = secondClient.placeOrder(input);
+    await allowConcurrentMicrotasks();
+    gate.release();
+
+    const orders = await Promise.all([first, second]);
+    expect(new Set(orders.map(({ id: orderId }) => orderId)).size).toBe(2);
+    const portfolio = await firstClient.getPortfolio();
+    expect(portfolio.balance).toBe(99_980);
+    expect(portfolio.openOrders.map(({ id: orderId }) => orderId)).toEqual(
+      orders.map(({ id: orderId }) => orderId).sort(),
+    );
+  });
+
+  it("allows exactly one concurrent cancel and refunds exactly once", async () => {
+    const store = new ControlledWriteStore();
+    const firstClient = createDemoClient("device-a", store);
+    const secondClient = createDemoClient("device-a", store);
+    const order = await firstClient.placeOrder({
+      creatorId: CREATOR_ID,
+      side: "BUY",
+      orderType: "LIMIT",
+      price: 1,
+      quantity: 10,
+    });
+    const gate = store.blockNextWrite();
+    const firstCancel = firstClient.cancelOrder(order.id);
+    await gate.started;
+    const secondCancel = secondClient.cancelOrder(order.id);
+    await allowConcurrentMicrotasks();
+    gate.release();
+
+    const results = await Promise.allSettled([firstCancel, secondCancel]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    expect(rejected?.reason).toMatchObject({ code: "ORDER_NOT_FOUND" });
+    expect(await firstClient.getPortfolio()).toMatchObject({
+      balance: 100_000,
+      openOrders: [],
+    });
+  });
+
+  it("continues the namespace queue after a rejected mutation", async () => {
+    const store = new MemoryStore();
+    const firstClient = createDemoClient("device-a", store);
+    const secondClient = createDemoClient("device-a", store);
+    const rejected = firstClient.placeOrder({
+      creatorId: CREATOR_ID,
+      side: "BUY",
+      orderType: "MARKET",
+      price: 100_001,
+      quantity: 1,
+    });
+    const accepted = secondClient.placeOrder({
+      creatorId: CREATOR_ID,
+      side: "BUY",
+      orderType: "LIMIT",
+      price: 1,
+      quantity: 10,
+    });
+
+    await expect(rejected).rejects.toMatchObject({
+      code: "INSUFFICIENT_BALANCE",
+    });
+    await expect(accepted).resolves.toMatchObject({ status: "OPEN" });
+    expect(await firstClient.getPortfolio()).toMatchObject({
+      balance: 99_990,
+      openOrders: [{ quantity: 10 }],
+    });
+  });
+
+  it.each([
+    ["another namespace", "device-b", false],
+    ["another store", "device-a", true],
+  ] as const)(
+    "does not block %s behind an unrelated mutation",
+    async (_label, secondNamespace, useAnotherStore) => {
+      const blockedStore = new ControlledWriteStore();
+      const secondStore = useAnotherStore ? new MemoryStore() : blockedStore;
+      const blockedClient = createDemoClient("device-a", blockedStore);
+      const unrelatedClient = createDemoClient(secondNamespace, secondStore);
+      const input = {
+        creatorId: CREATOR_ID,
+        side: "BUY" as const,
+        orderType: "LIMIT" as const,
+        price: 1,
+        quantity: 1,
+      };
+      const gate = blockedStore.blockNextWrite();
+      const blocked = blockedClient.placeOrder(input);
+      await gate.started;
+      const unrelated = unrelatedClient.placeOrder(input);
+      const timeout = Promise.withResolvers<"blocked">();
+      const timeoutId = setTimeout(() => timeout.resolve("blocked"), 250);
+      const outcome = await Promise.race([
+        unrelated.then(() => "completed" as const),
+        timeout.promise,
+      ]);
+      clearTimeout(timeoutId);
+      gate.release();
+      await Promise.all([blocked, unrelated]);
+
+      expect(outcome).toBe("completed");
+    },
+  );
 });
 
 describe("DemoDataClient validation and storage failures", () => {
