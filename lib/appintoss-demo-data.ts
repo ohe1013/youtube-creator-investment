@@ -1,36 +1,13 @@
-export type AppInTossCreator = {
-  id: string;
-  youtubeChannelId: string;
-  name: string;
-  thumbnailUrl: string | null;
-  category: string;
-  country: string | null;
-  currentSubs: number;
-  currentViews: number;
-  currentVideos: number;
-  currentScore: number;
-  initialPrice: number;
-  currentPrice: number;
-  totalSupply: number;
-  circulatingSupply: number;
-  reserveSupply: number;
-  liquidity: number;
-  isActive: boolean;
-  visibility: "PUBLIC";
-  avgLikes: number;
-  avgComments: number;
-  engagementRate: number;
-  viewsPerSubs: number;
-  createdAt: string;
-  lastSyncedAt: string;
-  _count?: { videos: number };
-};
+import type { Creator } from "@/lib/data/contracts";
+
+export type AppInTossCreator = Creator;
+type DemoCreator = Omit<AppInTossCreator, "_count">;
 
 const TODAY = "2026-07-09T09:00:00.000Z";
 const TOTAL_SUPPLY = 1_000_000;
 const CIRCULATING_SUPPLY = 200_000;
 
-const creators: AppInTossCreator[] = [
+const creators: DemoCreator[] = [
   {
     id: "creator-kpop-lab",
     youtubeChannelId: "UC_appintoss_kpop_lab",
@@ -56,6 +33,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 42.1,
     createdAt: "2026-06-11T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-foodie-seoul",
@@ -82,6 +60,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 36.7,
     createdAt: "2026-06-18T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-tech-under10",
@@ -108,6 +87,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 29.5,
     createdAt: "2026-06-25T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-run-day",
@@ -134,6 +114,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 24.3,
     createdAt: "2026-06-29T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-edu-signal",
@@ -160,6 +141,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 19.8,
     createdAt: "2026-07-01T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-vlog-nomad",
@@ -186,6 +168,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 31.2,
     createdAt: "2026-07-03T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-beauty-note",
@@ -212,6 +195,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 22.4,
     createdAt: "2026-07-05T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
   {
     id: "creator-game-meta",
@@ -238,6 +222,7 @@ const creators: AppInTossCreator[] = [
     viewsPerSubs: 21.7,
     createdAt: "2026-07-07T09:00:00.000Z",
     lastSyncedAt: TODAY,
+    updatedAt: TODAY,
   },
 ];
 
@@ -245,7 +230,7 @@ function day(offset: number) {
   return new Date(Date.UTC(2026, 6, 9 + offset, 9, 0, 0)).toISOString();
 }
 
-function makeStats(creator: AppInTossCreator) {
+function makeStats(creator: DemoCreator) {
   return Array.from({ length: 7 }, (_, index) => {
     const factor = index - 6;
     const subs = Math.round(creator.currentSubs * (1 + factor * 0.006));
@@ -267,7 +252,7 @@ function makeStats(creator: AppInTossCreator) {
   });
 }
 
-function makeTrades(creator: AppInTossCreator) {
+function makeTrades(creator: DemoCreator) {
   const prices = [0.96, 0.98, 1.01, 0.99, 1.03, 1.02, 1];
 
   return prices.map((ratio, index) => ({
@@ -281,7 +266,7 @@ function makeTrades(creator: AppInTossCreator) {
   }));
 }
 
-function makeVideos(creator: AppInTossCreator) {
+function makeVideos(creator: DemoCreator) {
   return [0, 1, 2].map((index) => ({
     id: `${creator.id}-video-${index}`,
     creatorId: creator.id,
@@ -313,41 +298,49 @@ export const appInTossDemoData = {
           id: `${creator.id}-ask-1`,
           creatorId: creator.id,
           type: "SELL",
+          orderType: "LIMIT",
           price: Math.round(creator.currentPrice * 1.01),
           quantity: 24,
           filled: 0,
           status: "OPEN",
           createdAt: day(-1),
+          updatedAt: day(-1),
         },
         {
           id: `${creator.id}-ask-2`,
           creatorId: creator.id,
           type: "SELL",
+          orderType: "LIMIT",
           price: Math.round(creator.currentPrice * 1.025),
           quantity: 42,
           filled: 0,
           status: "OPEN",
           createdAt: day(-1),
+          updatedAt: day(-1),
         },
         {
           id: `${creator.id}-bid-1`,
           creatorId: creator.id,
           type: "BUY",
+          orderType: "LIMIT",
           price: Math.round(creator.currentPrice * 0.99),
           quantity: 31,
           filled: 0,
           status: "OPEN",
           createdAt: day(-1),
+          updatedAt: day(-1),
         },
         {
           id: `${creator.id}-bid-2`,
           creatorId: creator.id,
           type: "BUY",
+          orderType: "LIMIT",
           price: Math.round(creator.currentPrice * 0.975),
           quantity: 55,
           filled: 0,
           status: "OPEN",
           createdAt: day(-1),
+          updatedAt: day(-1),
         },
       ],
     ])
