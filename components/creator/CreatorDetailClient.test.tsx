@@ -79,11 +79,12 @@ afterEach(() => {
 });
 
 it("submits the inline order through the typed client with one idempotency key", async () => {
+  const getCreator = vi.fn().mockResolvedValue(creator);
   const placeOrder = vi
     .fn<CreatorXDataClient["placeOrder"]>()
     .mockResolvedValue(acceptedOrder);
   mocks.client = {
-    getCreator: vi.fn().mockResolvedValue(creator),
+    getCreator,
     getCreatorStats: vi.fn().mockResolvedValue([]),
     getCreatorVideos: vi.fn().mockResolvedValue([]),
     getCreatorHistory: vi.fn().mockResolvedValue([]),
@@ -112,4 +113,5 @@ it("submits the inline order through the typed client with one idempotency key",
     { idempotencyKey: "inline-key" },
   );
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(getCreator).toHaveBeenCalledTimes(2));
 });

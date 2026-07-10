@@ -2,7 +2,9 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useLanguage } from "@/lib/LanguageContext";
+import { marketTickerHref } from "@/lib/routing/creator";
 
 interface MarketListProps {
   creators: Array<{
@@ -111,16 +113,19 @@ export function MarketList({ creators, selectedId }: MarketListProps) {
           return (
             <Link
               key={c.id}
-              href={`/?ticker=${c.id}`}
+              href={marketTickerHref(c.id)}
               className={`flex items-center px-4 py-3 hover:bg-card cursor-pointer transition-colors border-l-2 ${
                 isSelected ? "bg-card border-primary" : "border-transparent"
               }`}
             >
               <div className="mr-3 shrink-0">
                 {c.thumbnailUrl ? (
-                  <img
+                  <Image
                     src={c.thumbnailUrl}
                     alt={displayName}
+                    width={32}
+                    height={32}
+                    unoptimized
                     className="w-8 h-8 rounded-full border border-border-exchange object-cover"
                   />
                 ) : (

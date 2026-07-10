@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
 import Link from "next/link";
 import Image from "next/image";
@@ -15,49 +15,97 @@ export function PortfolioClient() {
   const { t } = useLanguage();
   const client = useCreatorXDataClient();
   const session = useCreatorXSession();
+  const canReadPortfolio = session.status === "authenticated";
   const [activeTab, setActiveTab] = useState<Tab>("HOLDINGS");
   const [data, setData] = useState<Portfolio | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cancellingOrders, setCancellingOrders] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const cancellingOrdersRef = useRef(new Set<string>());
+  const requestState = useRef({
+    generation: 0,
+    pollController: null as AbortController | null,
+  });
 
   const loadPortfolio = useCallback(async (signal?: AbortSignal) => {
+    const generation = ++requestState.current.generation;
     try {
       const portfolio = await client.getPortfolio({ signal });
-      if (signal?.aborted) return;
+      if (
+        signal?.aborted ||
+        requestState.current.generation !== generation
+      ) {
+        return;
+      }
       setData(portfolio);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return;
       console.error(error);
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (
+        !signal?.aborted &&
+        requestState.current.generation === generation
+      ) {
+        setLoading(false);
+      }
     }
   }, [client]);
 
   useEffect(() => {
+    if (!canReadPortfolio) return;
+    const requests = requestState.current;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | undefined;
     const poll = async () => {
-      controller = new AbortController();
+      const controller = new AbortController();
+      requests.pollController = controller;
       await loadPortfolio(controller.signal);
       if (!disposed) timer = setTimeout(poll, 5000);
     };
     void poll();
     return () => {
       disposed = true;
-      controller?.abort();
+      requests.generation += 1;
+      requests.pollController?.abort();
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [loadPortfolio]);
+  }, [canReadPortfolio, loadPortfolio]);
 
   const handleCancel = async (orderId: string) => {
+    if (cancellingOrdersRef.current.has(orderId)) return;
     if (!confirm(t("portfolio.confirmCancel"))) return;
+    cancellingOrdersRef.current.add(orderId);
+    setCancellingOrders(new Set(cancellingOrdersRef.current));
     try {
       await client.cancelOrder(orderId);
-      await Promise.all([loadPortfolio(), session.refresh()]);
+      requestState.current.pollController?.abort();
+      const refreshController = new AbortController();
+      await Promise.allSettled([
+        loadPortfolio(refreshController.signal),
+        session.refresh(),
+      ]);
     } catch {
       alert("Error cancelling order");
+    } finally {
+      cancellingOrdersRef.current.delete(orderId);
+      setCancellingOrders(new Set(cancellingOrdersRef.current));
     }
   };
+
+  if (!canReadPortfolio) {
+    return (
+      <div className="p-8 text-center text-muted">
+        <p className="mb-4">포트폴리오를 보려면 로그인해 주세요.</p>
+        <Link
+          href="/auth/signin"
+          className="inline-block px-4 py-2 rounded bg-primary text-background font-bold"
+        >
+          로그인하기
+        </Link>
+      </div>
+    );
+  }
 
   if (loading && !data)
     return (
@@ -283,6 +331,7 @@ export function PortfolioClient() {
                     <td className="px-6 py-4 text-center">
                       <button
                         onClick={() => handleCancel(o.id)}
+                        disabled={cancellingOrders.has(o.id)}
                         className="text-xs border border-border-exchange px-3 py-1 rounded hover:bg-down hover:text-white hover:border-down transition-colors"
                       >
                         {t("portfolio.cancel")}

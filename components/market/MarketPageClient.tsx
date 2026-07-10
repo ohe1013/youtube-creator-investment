@@ -1,6 +1,13 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "next/navigation";
 import { MarketDashboard } from "@/components/market/MarketDashboard";
 import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
@@ -13,6 +20,7 @@ import type {
   Portfolio,
   Trade,
 } from "@/lib/data/contracts";
+import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
 type Creator = CreatorSummary;
 type ChartPoint = { date: string; price: number; volume: number };
@@ -75,8 +83,14 @@ function MarketPageContent() {
   const searchParams = useSearchParams();
   const ticker = searchParams.get("ticker");
   const client = useCreatorXDataClient();
+  const session = useCreatorXSession();
+  const canReadPortfolio = session.status === "authenticated";
   const [state, setState] = useState<LoadState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const portfolioRequest = useRef<{
+    controller: AbortController | null;
+    generation: number;
+  }>({ controller: null, generation: 0 });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -98,11 +112,14 @@ function MarketPageContent() {
         );
         const creators = creatorsData.creators;
         const selectedCreator =
-          creators.find((creator) => creator.id === ticker) || creators[0];
+          ticker === null
+            ? creators[0]
+            : creators.find((creator) => creator.id === ticker);
 
         if (!selectedCreator) {
-          if (!controller.signal.aborted) setState(null);
-          return;
+          throw new Error(
+            ticker === null ? "No creators are available" : "Creator not found",
+          );
         }
 
         const [history, trades, statsData, videos, orderBook, portfolio] =
@@ -141,10 +158,22 @@ function MarketPageContent() {
               }),
               { asks: [], bids: [] } as CreatorXOrderBook,
             ),
-            optional(
-              client.getPortfolio({ signal: controller.signal }),
-              { balance: 0, positions: [], openOrders: [], trades: [] } as Portfolio,
-            ),
+            canReadPortfolio
+              ? optional(
+                  client.getPortfolio({ signal: controller.signal }),
+                  {
+                    balance: 0,
+                    positions: [],
+                    openOrders: [],
+                    trades: [],
+                  } as Portfolio,
+                )
+              : Promise.resolve({
+                  balance: 0,
+                  positions: [],
+                  openOrders: [],
+                  trades: [],
+                } as Portfolio),
           ]);
         if (controller.signal.aborted) return;
         const chartData = history.map(toChartPoint);
@@ -193,7 +222,48 @@ function MarketPageContent() {
     void loadMarket();
 
     return () => controller.abort();
-  }, [client, ticker]);
+  }, [canReadPortfolio, client, ticker]);
+
+  const selectedCreatorId = state?.selectedCreator.id ?? null;
+  const refreshPortfolio = useCallback(async () => {
+    if (!canReadPortfolio || selectedCreatorId === null) return;
+    portfolioRequest.current.controller?.abort();
+    const controller = new AbortController();
+    const generation = ++portfolioRequest.current.generation;
+    portfolioRequest.current.controller = controller;
+    try {
+      const portfolio = await client.getPortfolio({ signal: controller.signal });
+      if (
+        controller.signal.aborted ||
+        portfolioRequest.current.generation !== generation
+      ) {
+        return;
+      }
+      setState((current) => {
+        if (current?.selectedCreator.id !== selectedCreatorId) return current;
+        const position = portfolio.positions.find(
+          ({ creatorId }) => creatorId === selectedCreatorId,
+        );
+        return {
+          ...current,
+          userBalance: portfolio.balance,
+          userQuantity: position?.quantity ?? 0,
+        };
+      });
+    } finally {
+      if (portfolioRequest.current.generation === generation) {
+        portfolioRequest.current.controller = null;
+      }
+    }
+  }, [canReadPortfolio, client, selectedCreatorId]);
+
+  useEffect(
+    () => () => {
+      portfolioRequest.current.generation += 1;
+      portfolioRequest.current.controller?.abort();
+    },
+    [],
+  );
 
   const content = useMemo(() => {
     if (error) {
@@ -231,10 +301,11 @@ function MarketPageContent() {
           creators={state.creators}
           userBalance={state.userBalance}
           userQuantity={state.userQuantity}
+          onOrderAccepted={refreshPortfolio}
         />
       </main>
     );
-  }, [error, state]);
+  }, [error, refreshPortfolio, state]);
 
   return content;
 }

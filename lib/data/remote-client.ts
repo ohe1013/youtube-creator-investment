@@ -7,6 +7,7 @@ import {
   creatorVideoSchema,
   dashboardSchema,
   historyPointSchema,
+  identifierSchema,
   orderBookSchema,
   orderSchema,
   paginatedCreatorsSchema,
@@ -33,13 +34,6 @@ import {
   type CreatorXErrorCode,
 } from "@/lib/data/errors";
 
-const idSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .refine((value) => value !== "." && value !== "..", {
-    message: "Path dot segments are not valid identifiers",
-  });
 const daysQuerySchema = z.object({ days: z.number().int().positive() }).strict();
 const categoriesEnvelopeSchema = z
   .object({ categories: z.array(z.string().min(1)) })
@@ -409,7 +403,7 @@ export class RemoteDataClient implements CreatorXDataClient {
   }
 
   private encodedId(id: string): string {
-    return encodeURIComponent(parseRequest(idSchema, id));
+    return encodeURIComponent(parseRequest(identifierSchema, id));
   }
 
   private creatorPath(

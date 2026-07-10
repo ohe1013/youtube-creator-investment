@@ -10,7 +10,8 @@ export type CreatorXErrorCode =
   | "NOT_FOUND"
   | "INSUFFICIENT_BALANCE"
   | "INSUFFICIENT_SHARES"
-  | "ORDER_NOT_FOUND";
+  | "ORDER_NOT_FOUND"
+  | "IDEMPOTENCY_KEY_REUSED";
 
 export class CreatorXClientError extends Error {
   constructor(

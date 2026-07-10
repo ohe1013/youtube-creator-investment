@@ -228,9 +228,11 @@ function BrowserSessionAdapter({ children }: { children: ReactNode }) {
     await nextAuthSignOut();
   }, []);
   if (nextSession.status === "authenticated") {
+    const subject = nextSession.data?.user?.id ?? null;
     return (
       <AuthenticatedBrowserSession
-        subject={nextSession.data?.user?.id ?? null}
+        key={subject ?? "missing-browser-subject"}
+        subject={subject}
         signOut={signOut}
       >
         {children}

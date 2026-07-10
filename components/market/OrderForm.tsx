@@ -9,6 +9,7 @@ interface OrderFormProps {
   currentPrice: number;
   userBalance: number;
   userQuantity: number; // User's holding of this creator
+  onOrderAccepted?: () => Promise<void>;
   externalPriceUpdate?: {
     price: number;
     side?: "BUY" | "SELL";
@@ -21,6 +22,7 @@ export function OrderForm({
   currentPrice,
   userBalance,
   userQuantity,
+  onOrderAccepted,
   externalPriceUpdate,
 }: OrderFormProps) {
   const [tab, setTab] = useState<"BUY" | "SELL">(
@@ -199,6 +201,7 @@ export function OrderForm({
 
                 alert(msg);
                 setAmount("");
+                await onOrderAccepted?.().catch(() => undefined);
               } catch (e) {
                 console.error(e);
                 alert(e instanceof Error ? e.message : "Order Failed");

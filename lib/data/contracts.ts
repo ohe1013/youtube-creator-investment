@@ -4,13 +4,23 @@ const finiteNonnegativeNumber = z.number().finite().nonnegative();
 const finitePositiveNumber = z.number().finite().positive();
 const isoDateTime = z.string().datetime({ offset: true });
 
+export const identifierSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim() === value && value.trim() !== "", {
+    message: "Identifiers must be nonblank without boundary whitespace",
+  })
+  .refine((value) => value !== "." && value !== "..", {
+    message: "Path dot segments are not valid identifiers",
+  });
+
 const creatorCountSchema = z.object({
   videos: z.number().int().nonnegative(),
 });
 
 export const creatorSummarySchema = z.object({
-  id: z.string().min(1),
-  youtubeChannelId: z.string().min(1),
+  id: identifierSchema,
+  youtubeChannelId: identifierSchema,
   name: z.string().min(1),
   thumbnailUrl: z.string().min(1).nullable(),
   category: z.string().min(1).nullable(),
@@ -45,8 +55,8 @@ export const creatorSchema = creatorSummarySchema.extend({
 export type Creator = z.infer<typeof creatorSchema>;
 
 export const creatorStatSchema = z.object({
-  id: z.string().min(1).optional(),
-  creatorId: z.string().min(1).optional(),
+  id: identifierSchema.optional(),
+  creatorId: identifierSchema.optional(),
   date: isoDateTime,
   period: z.enum(["HOURLY", "DAILY"]).optional(),
   subs: finiteNonnegativeNumber,
@@ -61,8 +71,8 @@ export const creatorStatSchema = z.object({
 export type CreatorStat = z.infer<typeof creatorStatSchema>;
 
 export const creatorVideoSchema = z.object({
-  id: z.string().min(1),
-  creatorId: z.string().min(1).optional(),
+  id: identifierSchema,
+  creatorId: identifierSchema.optional(),
   title: z.string().min(1),
   thumbnailUrl: z.string().min(1).nullable(),
   publishedAt: isoDateTime,
@@ -86,15 +96,15 @@ export const historyPointSchema = z.object({
 export type HistoryPoint = z.infer<typeof historyPointSchema>;
 
 const creatorIdentitySchema = z.object({
-  id: z.string().min(1),
+  id: identifierSchema,
   name: z.string().min(1),
 });
 
 export const tradeSchema = z.object({
-  id: z.string().min(1),
-  creatorId: z.string().min(1).optional(),
-  userId: z.string().min(1).optional(),
-  orderId: z.string().min(1).nullable().optional(),
+  id: identifierSchema,
+  creatorId: identifierSchema.optional(),
+  userId: identifierSchema.optional(),
+  orderId: identifierSchema.nullable().optional(),
   price: finitePositiveNumber,
   quantity: finitePositiveNumber,
   type: z.enum(["BUY", "SELL"]),
@@ -105,9 +115,9 @@ export const tradeSchema = z.object({
 export type Trade = z.infer<typeof tradeSchema>;
 
 export const orderSchema = z.object({
-  id: z.string().min(1),
-  creatorId: z.string().min(1),
-  userId: z.string().min(1).optional(),
+  id: identifierSchema,
+  creatorId: identifierSchema,
+  userId: identifierSchema.optional(),
   type: z.enum(["BUY", "SELL"]),
   orderType: z.enum(["LIMIT", "MARKET"]),
   price: finitePositiveNumber,
@@ -143,8 +153,8 @@ const portfolioCreatorSchema = creatorIdentitySchema.extend({
 });
 
 export const positionSchema = z.object({
-  id: z.string().min(1),
-  creatorId: z.string().min(1),
+  id: identifierSchema,
+  creatorId: identifierSchema,
   quantity: finitePositiveNumber,
   avgPrice: finiteNonnegativeNumber,
   creator: portfolioCreatorSchema,
@@ -225,7 +235,7 @@ export type PaginatedCreators = z.infer<typeof paginatedCreatorsSchema>;
 
 export const placeOrderInputSchema = z
   .object({
-    creatorId: z.string().min(1),
+    creatorId: identifierSchema,
     side: z.enum(["BUY", "SELL"]),
     orderType: z.enum(["LIMIT", "MARKET"]),
     price: finitePositiveNumber,

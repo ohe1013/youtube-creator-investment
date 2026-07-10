@@ -207,6 +207,112 @@ describe("CreatorXSessionProvider", () => {
     expect(getPortfolio).not.toHaveBeenCalled();
   });
 
+  it("resets immediately and refetches when browser identity changes from A to B", async () => {
+    let resolveB: ((value: Portfolio) => void) | undefined;
+    const getPortfolio = vi
+      .fn<CreatorXDataClient["getPortfolio"]>()
+      .mockResolvedValueOnce(portfolio(100))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveB = resolve;
+          }),
+      );
+    mocks.dataClient = clientWithPortfolio(getPortfolio);
+    mocks.nextSession = {
+      data: { user: { id: "browser-A" } },
+      status: "authenticated",
+    };
+    const view = render(
+      <CreatorXSessionProvider
+        config={config({ appInToss: false, releaseChannel: "development" })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent('"balance":100'),
+    );
+
+    mocks.nextSession = {
+      data: { user: { id: "browser-B" } },
+      status: "authenticated",
+    };
+    view.rerender(
+      <CreatorXSessionProvider
+        config={config({ appInToss: false, releaseChannel: "development" })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+
+    expect(screen.queryByText(/"balance":100/)).toBeNull();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    await waitFor(() => expect(getPortfolio).toHaveBeenCalledTimes(2));
+    resolveB?.(portfolio(200));
+    await waitFor(() => {
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"subject":"browser-B"',
+      );
+      expect(screen.getByTestId("session")).toHaveTextContent('"balance":200');
+    });
+  });
+
+  it("ignores the stale A portfolio when A resolves after browser B", async () => {
+    let resolveA: ((value: Portfolio) => void) | undefined;
+    let resolveB: ((value: Portfolio) => void) | undefined;
+    const getPortfolio = vi
+      .fn<CreatorXDataClient["getPortfolio"]>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveB = resolve;
+          }),
+      );
+    mocks.dataClient = clientWithPortfolio(getPortfolio);
+    mocks.nextSession = {
+      data: { user: { id: "browser-A" } },
+      status: "authenticated",
+    };
+    const view = render(
+      <CreatorXSessionProvider
+        config={config({ appInToss: false, releaseChannel: "development" })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+    await waitFor(() => expect(getPortfolio).toHaveBeenCalledTimes(1));
+
+    mocks.nextSession = {
+      data: { user: { id: "browser-B" } },
+      status: "authenticated",
+    };
+    view.rerender(
+      <CreatorXSessionProvider
+        config={config({ appInToss: false, releaseChannel: "development" })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+    await waitFor(() => expect(getPortfolio).toHaveBeenCalledTimes(2));
+    resolveB?.(portfolio(200));
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent('"balance":200'),
+    );
+    resolveA?.(portfolio(100));
+    await Promise.resolve();
+    expect(screen.getByTestId("session")).toHaveTextContent('"balance":200');
+    expect(screen.getByTestId("session")).toHaveTextContent(
+      '"subject":"browser-B"',
+    );
+  });
+
   it("renders a retryable session failure and recovers without changing the subject", async () => {
     const getPortfolio = vi
       .fn<CreatorXDataClient["getPortfolio"]>()

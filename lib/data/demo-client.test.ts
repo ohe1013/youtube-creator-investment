@@ -66,6 +66,17 @@ class ControlledWriteStore extends MemoryStore {
   }
 }
 
+class CommitThenFailStore extends MemoryStore {
+  failAfterNextCommit = false;
+
+  async setItem(key: string, value: string) {
+    await super.setItem(key, value);
+    if (!this.failAfterNextCommit) return;
+    this.failAfterNextCommit = false;
+    throw new Error("response lost after durable commit");
+  }
+}
+
 async function allowConcurrentMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
@@ -276,6 +287,100 @@ describe("DemoDataClient reads", () => {
 });
 
 describe("DemoDataClient orders", () => {
+  it("replays one persisted order for the same key and request across client instances", async () => {
+    const store = new MemoryStore();
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "MARKET" as const,
+      price: 1_280,
+      quantity: 2,
+    };
+    const first = await createDemoClient("device-a", store).placeOrder(input, {
+      idempotencyKey: "idem-order-1",
+    });
+    const replay = await createDemoClient("device-a", store).placeOrder(input, {
+      idempotencyKey: "idem-order-1",
+    });
+
+    expect(replay).toEqual(first);
+    expect(await createDemoClient("device-a", store).getPortfolio()).toMatchObject({
+      balance: 97_440,
+      positions: [{ creatorId: CREATOR_ID, quantity: 2 }],
+      trades: [{ quantity: 2 }],
+    });
+    expect(
+      JSON.parse(store.values.get(`${STATE_KEY_PREFIX}device-a`) ?? "{}"),
+    ).toMatchObject({
+      idempotencyRecords: [
+        {
+          key: "idem-order-1",
+          fingerprint: expect.any(String),
+          response: { id: first.id },
+        },
+      ],
+    });
+  });
+
+  it("rejects reuse of one key with a different order fingerprint", async () => {
+    const store = new MemoryStore();
+    const client = createDemoClient("device-a", store);
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "LIMIT" as const,
+      price: 1,
+      quantity: 10,
+    };
+    await client.placeOrder(input, { idempotencyKey: "idem-order-2" });
+
+    await expect(
+      createDemoClient("device-a", store).placeOrder(
+        { ...input, quantity: 11 },
+        { idempotencyKey: "idem-order-2" },
+      ),
+    ).rejects.toMatchObject({
+      code: "IDEMPOTENCY_KEY_REUSED",
+      retryable: false,
+      status: 409,
+    });
+    expect(await client.getPortfolio()).toMatchObject({
+      balance: 99_990,
+      openOrders: [{ quantity: 10 }],
+    });
+  });
+
+  it("replays after storage commits the order and then reports a retryable failure", async () => {
+    const store = new CommitThenFailStore();
+    const setItem = vi.spyOn(store, "setItem");
+    const input = {
+      creatorId: CREATOR_ID,
+      side: "BUY" as const,
+      orderType: "MARKET" as const,
+      price: 1_280,
+      quantity: 2,
+    };
+    store.failAfterNextCommit = true;
+    await expect(
+      createDemoClient("device-a", store).placeOrder(input, {
+        idempotencyKey: "idem-order-3",
+      }),
+    ).rejects.toMatchObject({ code: "STORAGE_UNAVAILABLE", retryable: true });
+
+    const restarted = createDemoClient("device-a", store);
+    const replay = await restarted.placeOrder(input, {
+      idempotencyKey: "idem-order-3",
+    });
+    expect(replay.id).toBe("appintoss-order-fixture-1");
+    expect(replay.status).toBe("FILLED");
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(await restarted.getPortfolio()).toMatchObject({
+      balance: 97_440,
+      positions: [{ creatorId: CREATOR_ID, quantity: 2 }],
+      trades: [{ quantity: 2 }],
+    });
+  });
+
   it("fills a market buy and calls now once for the logical order", async () => {
     const store = new MemoryStore();
     const now = vi.fn(() => FIXED_NOW);

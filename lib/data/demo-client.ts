@@ -9,6 +9,7 @@ import {
   creatorVideoSchema,
   dashboardSchema,
   historyPointSchema,
+  identifierSchema,
   orderBookSchema,
   orderSchema,
   paginatedCreatorsSchema,
@@ -37,12 +38,11 @@ const INITIAL_BALANCE = 100_000;
 const STATE_KEY_PREFIX = "creatorx:appintoss:state:";
 const ALL_CATEGORY = "전체";
 
-const idSchema = z.string().trim().min(1);
 const daysQuerySchema = z.object({ days: z.number().int().positive() }).strict();
 const localPositionSchema = z
   .object({
-    id: z.string().min(1),
-    creatorId: z.string().min(1),
+    id: identifierSchema,
+    creatorId: identifierSchema,
     quantity: z.number().finite().nonnegative(),
     avgPrice: z.number().finite().nonnegative(),
   })
@@ -60,17 +60,26 @@ const localOrderSchema = orderSchema
     { message: "Persisted open orders must be active with valid fill data" },
   );
 const localTradeSchema = tradeSchema.omit({ creator: true }).extend({
-  creatorId: z.string().min(1),
-  userId: z.string().min(1),
+  creatorId: identifierSchema,
+  userId: identifierSchema,
 });
+const localIdempotencyRecordSchema = z
+  .object({
+    key: z.string(),
+    fingerprint: z.string().min(1),
+    response: orderSchema.omit({ creator: true }).strict(),
+  })
+  .strict();
 const localStateSchema = z
   .object({
     balance: z.number().finite().nonnegative(),
     positions: z.array(localPositionSchema),
     openOrders: z.array(localOrderSchema),
     trades: z.array(localTradeSchema),
+    // Optional only while migrating state written before idempotent demo orders.
+    idempotencyRecords: z.array(localIdempotencyRecordSchema).optional(),
     // Optional only for the targeted migration of pre-tombstone demo state.
-    usedIds: z.array(z.string().trim().min(1)).optional(),
+    usedIds: z.array(identifierSchema).optional(),
   })
   .strict()
   .superRefine((state, context) => {
@@ -125,10 +134,28 @@ const localStateSchema = z
       }
       usedIds.add(id);
     }
+
+    const idempotencyKeys = new Set<string>();
+    for (const record of state.idempotencyRecords ?? []) {
+      if (idempotencyKeys.has(record.key)) {
+        context.addIssue({
+          code: "custom",
+          path: ["idempotencyRecords"],
+          message: "Persisted idempotency keys must be unique",
+        });
+      }
+      idempotencyKeys.add(record.key);
+    }
   });
 
 type ParsedLocalState = z.infer<typeof localStateSchema>;
-type LocalState = Omit<ParsedLocalState, "usedIds"> & { usedIds: string[] };
+type LocalState = Omit<
+  ParsedLocalState,
+  "idempotencyRecords" | "usedIds"
+> & {
+  idempotencyRecords: Array<z.infer<typeof localIdempotencyRecordSchema>>;
+  usedIds: string[];
+};
 type LocalPosition = z.infer<typeof localPositionSchema>;
 type LocalOrder = z.infer<typeof localOrderSchema>;
 
@@ -215,6 +242,25 @@ function identifierCollisionError(): CreatorXClientError {
   );
 }
 
+function idempotencyKeyReusedError(): CreatorXClientError {
+  return new CreatorXClientError(
+    "IDEMPOTENCY_KEY_REUSED",
+    "같은 요청 키를 다른 주문에 사용할 수 없습니다.",
+    false,
+    409,
+  );
+}
+
+function orderFingerprint(input: PlaceOrderInput): string {
+  return JSON.stringify([
+    input.creatorId,
+    input.side,
+    input.orderType,
+    input.price,
+    input.quantity,
+  ]);
+}
+
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
@@ -246,7 +292,16 @@ function canonicalizeState(state: ParsedLocalState): LocalState {
   const usedIds = new Set(state.usedIds ?? []);
   for (const order of state.openOrders) usedIds.add(order.id);
   for (const trade of state.trades) usedIds.add(trade.id);
-  return { ...state, usedIds: [...usedIds].sort(compareText) };
+  for (const record of state.idempotencyRecords ?? []) {
+    usedIds.add(record.response.id);
+  }
+  return {
+    ...state,
+    idempotencyRecords: [...(state.idempotencyRecords ?? [])].sort((left, right) =>
+      compareText(left.key, right.key),
+    ),
+    usedIds: [...usedIds].sort(compareText),
+  };
 }
 
 function cloneCreator(creator: Creator): Creator {
@@ -260,7 +315,7 @@ export class DemoDataClient implements CreatorXDataClient {
   private readonly idFactory: () => string;
 
   constructor(private readonly dependencies: DemoDataClientDependencies) {
-    const namespace = parseRequest(idSchema, dependencies.namespace);
+    const namespace = parseRequest(identifierSchema, dependencies.namespace);
     this.namespace = namespace;
     this.stateKey = `${STATE_KEY_PREFIX}${namespace}`;
     this.now = dependencies.now ?? (() => new Date());
@@ -522,7 +577,11 @@ export class DemoDataClient implements CreatorXDataClient {
   ): Promise<Order> {
     this.checkSignal(options);
     const parsed = parseRequest(placeOrderInputSchema, input);
-    const creator = this.requireCreator(parsed.creatorId);
+    const idempotencyKey =
+      options?.idempotencyKey === undefined
+        ? null
+        : parseRequest(z.string(), options.idempotencyKey);
+    const fingerprint = orderFingerprint(parsed);
     const total = parsed.price * parsed.quantity;
     if (!Number.isFinite(total)) throw requestError();
 
@@ -532,6 +591,18 @@ export class DemoDataClient implements CreatorXDataClient {
       async () => {
         this.checkSignal(options);
         const state = await this.readState();
+        if (idempotencyKey !== null) {
+          const existing = state.idempotencyRecords.find(
+            ({ key }) => key === idempotencyKey,
+          );
+          if (existing) {
+            if (existing.fingerprint !== fingerprint) {
+              throw idempotencyKeyReusedError();
+            }
+            return parseResponse(orderSchema, existing.response);
+          }
+        }
+        const creator = this.requireCreator(parsed.creatorId);
         const shouldFill =
           parsed.orderType === "MARKET" ||
           (parsed.side === "BUY" && parsed.price >= creator.currentPrice) ||
@@ -619,15 +690,26 @@ export class DemoDataClient implements CreatorXDataClient {
           state.openOrders.unshift(order);
         }
 
+        const response = parseResponse(orderSchema, order);
+        if (idempotencyKey !== null) {
+          state.idempotencyRecords.push({
+            key: idempotencyKey,
+            fingerprint,
+            response,
+          });
+          state.idempotencyRecords.sort((left, right) =>
+            compareText(left.key, right.key),
+          );
+        }
         await this.writeState(state);
-        return parseResponse(orderSchema, order);
+        return response;
       },
     );
   }
 
   async cancelOrder(id: string, options?: RequestOptions): Promise<void> {
     this.checkSignal(options);
-    const orderId = parseRequest(idSchema, id);
+    const orderId = parseRequest(identifierSchema, id);
     await enqueueMutation(
       this.dependencies.store,
       this.stateKey,
@@ -678,7 +760,7 @@ export class DemoDataClient implements CreatorXDataClient {
   }
 
   private requireCreator(id: string): Creator {
-    const creatorId = parseRequest(idSchema, id);
+    const creatorId = parseRequest(identifierSchema, id);
     const creator = appInTossDemoData.creators.find(
       ({ id: candidate }) => candidate === creatorId,
     );
@@ -791,6 +873,7 @@ export class DemoDataClient implements CreatorXDataClient {
           positions: [],
           openOrders: [],
           trades: [],
+          idempotencyRecords: [],
           usedIds: [],
         }),
       );
@@ -821,7 +904,7 @@ export class DemoDataClient implements CreatorXDataClient {
   }
 
   private getId(kind: "order" | "trade"): string {
-    const value = parseRequest(idSchema, this.idFactory());
+    const value = parseRequest(identifierSchema, this.idFactory());
     return `appintoss-${kind}-${value}`;
   }
 }

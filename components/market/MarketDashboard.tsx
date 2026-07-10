@@ -41,6 +41,7 @@ interface MarketDashboardProps {
   creators: CreatorSummary[];
   userBalance: number;
   userQuantity: number;
+  onOrderAccepted: () => Promise<void>;
 }
 
 export function MarketDashboard({
@@ -54,6 +55,7 @@ export function MarketDashboard({
   creators,
   userBalance,
   userQuantity,
+  onOrderAccepted,
 }: MarketDashboardProps) {
   // Mobile Tab State: 'CHART' | 'ORDER' | 'TRADES' | 'LIST'
   const [mobileTab, setMobileTab] = useState<MobileTab>("CHART");
@@ -201,6 +203,7 @@ export function MarketDashboard({
                 currentPrice={selectedCreator.currentPrice}
                 userBalance={userBalance}
                 userQuantity={userQuantity}
+                onOrderAccepted={onOrderAccepted}
                 externalPriceUpdate={priceUpdate}
               />
             </div>

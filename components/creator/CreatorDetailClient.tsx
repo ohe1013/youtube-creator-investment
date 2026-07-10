@@ -40,6 +40,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
   const [orderType, setOrderType] = useState<"LIMIT" | "MARKET">("LIMIT");
   const [inputPrice, setInputPrice] = useState("");
   const [inputQuantity, setInputQuantity] = useState("");
+  const [reloadGeneration, setReloadGeneration] = useState(0);
 
   useEffect(() => {
     if (!id) return;
@@ -116,7 +117,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
       controller?.abort();
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [client, id]);
+  }, [client, id, reloadGeneration]);
 
   const { change24h, high24h, low24h, volume24h } = useMemo(() => {
     if (history.length === 0)
@@ -176,6 +177,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
       if (order === null) return;
       alert(`Order Placed: ${side} ${inputQuantity} @ ${order.price}`);
       setInputQuantity("");
+      setReloadGeneration((generation) => generation + 1);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Trade failed");
     }

@@ -37,14 +37,18 @@ const acceptedOrder: Order = {
   createdAt: "2026-07-10T00:00:00.000Z",
 };
 
-function renderForm(placeOrder: CreatorXDataClient["placeOrder"]) {
+function renderForm(
+  placeOrder: CreatorXDataClient["placeOrder"],
+  onOrderAccepted: () => Promise<void> = vi.fn().mockResolvedValue(undefined),
+) {
   mocks.client = { placeOrder } as unknown as CreatorXDataClient;
-  render(
+  return render(
     <OrderForm
       creatorId="creator-1"
       currentPrice={125}
       userBalance={1000}
       userQuantity={4}
+      onOrderAccepted={onOrderAccepted}
     />,
   );
 }
@@ -80,7 +84,8 @@ describe("OrderForm", () => {
     const placeOrder = vi.fn<CreatorXDataClient["placeOrder"]>().mockResolvedValue(
       acceptedOrder,
     );
-    renderForm(placeOrder);
+    const onOrderAccepted = vi.fn().mockResolvedValue(undefined);
+    renderForm(placeOrder, onOrderAccepted);
     enterQuantity("2");
     submitBuy();
 
@@ -96,6 +101,7 @@ describe("OrderForm", () => {
       { idempotencyKey: "key-1" },
     );
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
+    expect(onOrderAccepted).toHaveBeenCalledTimes(1);
     expect(mocks.randomUUID).toHaveBeenCalledTimes(1);
   });
 
@@ -191,5 +197,70 @@ describe("OrderForm", () => {
     await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
     expect(placeOrder.mock.calls[0][1]?.idempotencyKey).toBe("key-1");
     expect(placeOrder.mock.calls[1][1]?.idempotencyKey).toBe("key-2");
+  });
+
+  it("keeps the ambiguous key across a UI remount for identical input", async () => {
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockRejectedValueOnce(
+        new CreatorXClientError(
+          "NETWORK_UNAVAILABLE",
+          "Network interrupted",
+          true,
+        ),
+      )
+      .mockResolvedValueOnce(acceptedOrder);
+    mocks.client = { placeOrder } as unknown as CreatorXDataClient;
+    const first = render(
+      <OrderForm
+        creatorId="creator-1"
+        currentPrice={125}
+        userBalance={1000}
+        userQuantity={4}
+      />,
+    );
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "common.buy" }).at(-1)).toBeEnabled(),
+    );
+    first.unmount();
+
+    render(
+      <OrderForm
+        creatorId="creator-1"
+        currentPrice={125}
+        userBalance={1000}
+        userQuantity={4}
+      />,
+    );
+    enterQuantity("2");
+    submitBuy();
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
+    expect(placeOrder.mock.calls[0][1]?.idempotencyKey).toBe("key-1");
+    expect(placeOrder.mock.calls[1][1]?.idempotencyKey).toBe("key-1");
+  });
+
+  it("reports an accepted order even when session and parent refreshes fail", async () => {
+    mocks.refresh.mockRejectedValueOnce(new Error("session refresh failed"));
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockResolvedValue(acceptedOrder);
+    const onOrderAccepted = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValue(new Error("parent refresh failed"));
+    renderForm(placeOrder, onOrderAccepted);
+    enterQuantity("2");
+    submitBuy();
+
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(vi.mocked(alert)).toHaveBeenCalledWith(
+        "Trade Executed: BUY 2 shares @ 125",
+      ),
+    );
+    expect(onOrderAccepted).toHaveBeenCalledTimes(1);
+    expect(placeOrder).toHaveBeenCalledTimes(1);
   });
 });
