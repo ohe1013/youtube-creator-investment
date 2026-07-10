@@ -1,6 +1,13 @@
 @import "tailwindcss";
 
 :root {
+  --creatorx-safe-top: 0px;
+  --creatorx-safe-right: 0px;
+  --creatorx-safe-bottom: 0px;
+  --creatorx-safe-left: 0px;
+  --creatorx-viewport-height: 100dvh;
+  --creatorx-keyboard-height: 0px;
+
   /* Brand Colors */
   --brand-blue: #2563eb;
   --brand-red: #dc2626;
@@ -54,6 +61,51 @@ body {
 }
 button {
   cursor: pointer;
+}
+
+.creatorx-screen {
+  min-height: var(--creatorx-viewport-height);
+}
+
+.creatorx-below-navbar {
+  height: calc(
+    var(--creatorx-viewport-height) - 56px - var(--creatorx-safe-top)
+  );
+}
+
+.creatorx-detail-body {
+  height: calc(
+    var(--creatorx-viewport-height) - 104px - var(--creatorx-safe-top)
+  );
+}
+
+.creatorx-safe-top {
+  padding-top: var(--creatorx-safe-top);
+}
+
+.creatorx-safe-bottom {
+  padding-bottom: max(var(--creatorx-safe-bottom), 12px);
+}
+
+.creatorx-safe-inline {
+  padding-right: var(--creatorx-safe-right);
+  padding-left: var(--creatorx-safe-left);
+}
+
+.creatorx-navbar-placeholder {
+  height: calc(56px + var(--creatorx-safe-top));
+}
+
+.creatorx-navbar-inline {
+  padding-right: max(1rem, var(--creatorx-safe-right));
+  padding-left: max(1rem, var(--creatorx-safe-left));
+}
+
+@media (min-width: 64rem) {
+  .creatorx-navbar-inline {
+    padding-right: max(1.5rem, var(--creatorx-safe-right));
+    padding-left: max(1.5rem, var(--creatorx-safe-left));
+  }
 }
 
 .mono {

@@ -134,6 +134,7 @@ function OrderFormFields({
           </label>
           <div className="relative">
             <input
+              data-creatorx-keyboard-target="true"
               type="number"
               value={orderType === "MARKET" ? currentPrice : limitPrice}
               onChange={(e) => setLimitPrice(e.target.value)}
@@ -157,6 +158,7 @@ function OrderFormFields({
           </label>
           <div className="relative">
             <input
+              data-creatorx-keyboard-target="true"
               type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}

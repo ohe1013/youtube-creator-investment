@@ -33,13 +33,13 @@ export default function Navbar() {
 
   if (!mounted) {
     return (
-      <nav className="bg-background border-b border-border-exchange sticky top-0 z-50 h-14" />
+      <nav className="creatorx-navbar-placeholder bg-background border-b border-border-exchange sticky top-0 z-50" />
     );
   }
 
   return (
-    <nav className="sticky top-0 z-50 bg-gradient-to-r from-brand-blue to-brand-red dark:from-background dark:to-background border-b border-white/10 dark:border-border-exchange">
-      <div className="container mx-auto px-4 lg:px-6">
+    <nav className="creatorx-safe-top sticky top-0 z-50 bg-gradient-to-r from-brand-blue to-brand-red dark:from-background dark:to-background border-b border-white/10 dark:border-border-exchange">
+      <div className="creatorx-navbar-inline container mx-auto">
         <div className="flex justify-between items-center h-14">
           {/* Logo and Primary Nav */}
           <div className="flex items-center space-x-8">

@@ -52,7 +52,7 @@ export function DashboardClient() {
 
   if (loading && !data)
     return (
-      <div className="h-screen flex items-center justify-center">
+      <div className="creatorx-screen flex items-center justify-center">
         {t("channel.collectingData")}...
       </div>
     );
@@ -61,7 +61,7 @@ export function DashboardClient() {
   }
 
   return (
-    <div className="h-[calc(100vh-56px)] overflow-hidden flex flex-col bg-background text-foreground font-sans">
+    <div className="creatorx-below-navbar creatorx-safe-bottom creatorx-safe-inline overflow-hidden flex flex-col bg-background text-foreground font-sans">
       {/* 1. Header Hero Ticker */}
       <div className="bg-card border-b border-border-exchange px-6 py-4 flex flex-wrap items-center justify-between gap-4 flex-shrink-0 animate-in fade-in duration-500">
         <div className="flex items-center gap-2">

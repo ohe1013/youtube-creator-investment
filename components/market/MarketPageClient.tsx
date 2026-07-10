@@ -268,7 +268,7 @@ function MarketPageContent() {
   const content = useMemo(() => {
     if (error) {
       return (
-        <div className="flex items-center justify-center min-h-screen bg-background text-foreground">
+        <div className="creatorx-screen flex items-center justify-center bg-background text-foreground">
           <div className="text-center">
             <h1 className="text-2xl font-bold mb-4">Market unavailable</h1>
             <p className="text-muted">{error}</p>
@@ -279,7 +279,7 @@ function MarketPageContent() {
 
     if (!state) {
       return (
-        <div className="flex items-center justify-center min-h-screen bg-background text-foreground">
+        <div className="creatorx-screen flex items-center justify-center bg-background text-foreground">
           <div className="text-center">
             <h1 className="text-2xl font-bold mb-4">Loading market...</h1>
             <p className="text-muted">크리에이터 데이터를 불러오고 있어요.</p>
@@ -289,7 +289,7 @@ function MarketPageContent() {
     }
 
     return (
-      <main className="h-[calc(100vh-56px)] bg-background text-foreground flex flex-col overflow-hidden">
+      <main className="creatorx-below-navbar creatorx-safe-bottom creatorx-safe-inline bg-background text-foreground flex flex-col overflow-hidden">
         <MarketDashboard
           selectedCreator={state.selectedCreator}
           stats={state.stats}
@@ -314,7 +314,7 @@ export function MarketPageClient() {
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center min-h-screen bg-background text-foreground">
+        <div className="creatorx-screen flex items-center justify-center bg-background text-foreground">
           Loading market...
         </div>
       }

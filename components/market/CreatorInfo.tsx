@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Image from "next/image";
 import {
   XAxis,
   YAxis,
@@ -13,6 +14,7 @@ import {
   ComposedChart,
 } from "recharts";
 import { useLanguage } from "@/lib/LanguageContext";
+import { ExternalLink } from "@/components/runtime/ExternalLink";
 
 interface CreatorStat {
   date: string;
@@ -58,6 +60,22 @@ interface CreatorInfoProps {
   creator: Creator;
   stats?: CreatorStat[];
   videos?: Video[];
+}
+
+interface MomentumCardProps {
+  label: string;
+  value: number;
+  subValue: string;
+  isPositive: boolean;
+  loading: boolean;
+  t: (key: string) => string;
+}
+
+function formatTooltipNumber(value: unknown, locale: "ko" | "en") {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return new Intl.NumberFormat(locale === "ko" ? "ko-KR" : "en-US").format(
+    Number.isFinite(parsed) ? parsed : 0,
+  );
 }
 
 export function CreatorInfo({
@@ -250,10 +268,8 @@ export function CreatorInfo({
           </button>
         </div>
 
-        <a
+        <ExternalLink
           href={`https://youtube.com/channel/${creator.youtubeChannelId}`}
-          target="_blank"
-          rel="noopener noreferrer"
           className="flex items-center gap-2 text-xs font-bold text-muted hover:text-primary transition-colors bg-card hover:bg-slate-50 px-3 py-1.5 rounded border border-border-exchange shadow-sm group"
         >
           <svg
@@ -264,7 +280,7 @@ export function CreatorInfo({
             <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
           </svg>
           {t("channel.visitYoutube")}
-        </a>
+        </ExternalLink>
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
@@ -435,10 +451,8 @@ export function CreatorInfo({
                         color: "var(--muted)",
                         marginBottom: "4px",
                       }}
-                      formatter={(value: any) => [
-                        new Intl.NumberFormat(
-                          locale === "ko" ? "ko-KR" : "en-US"
-                        ).format(value),
+                      formatter={(value) => [
+                        formatTooltipNumber(value, locale),
                         chartMode === "subs"
                           ? t("channel.subscribers")
                           : t("channel.totalViews"),
@@ -621,9 +635,12 @@ export function CreatorInfo({
                     className="flex gap-4 p-3 bg-card/20 rounded-lg border border-border-exchange hover:border-muted transition-all group"
                   >
                     <div className="relative w-32 h-20 flex-shrink-0 overflow-hidden rounded">
-                      <img
+                      <Image
                         src={video.thumbnailUrl}
                         alt=""
+                        width={128}
+                        height={80}
+                        unoptimized
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       />
                       <div className="absolute bottom-1 right-1 bg-black/80 text-[10px] px-1 rounded font-mono text-white">
@@ -675,7 +692,14 @@ export function CreatorInfo({
   );
 }
 
-function MomentumCard({ label, value, subValue, isPositive, loading, t }: any) {
+function MomentumCard({
+  label,
+  value,
+  subValue,
+  isPositive,
+  loading,
+  t,
+}: MomentumCardProps) {
   if (loading)
     return (
       <div className="bg-card/40 p-4 rounded border border-border-exchange opacity-60">

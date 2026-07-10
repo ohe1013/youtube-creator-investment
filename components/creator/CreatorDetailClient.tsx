@@ -137,7 +137,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="creatorx-screen bg-background flex items-center justify-center">
         <div className="text-foreground text-2xl">로딩 중...</div>
       </div>
     );
@@ -145,7 +145,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
 
   if (error || !creator) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="creatorx-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="text-down text-2xl mb-4">에러 발생</div>
           <p className="text-muted mb-4">
@@ -186,7 +186,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
   const isPositive = change24h >= 0;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="creatorx-screen creatorx-safe-bottom creatorx-safe-inline bg-background text-foreground">
       <div className="bg-card border-b border-border-exchange px-6 py-3 flex flex-wrap items-center gap-8">
         <div className="flex items-center gap-3">
           <Image
@@ -245,7 +245,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row h-[calc(100vh-104px)]">
+      <div className="creatorx-detail-body flex flex-col lg:flex-row">
         <div className="flex-1 border-r border-border-exchange overflow-hidden flex flex-col min-w-0">
           <div className="h-[450px] border-b border-border-exchange">
             <MarketChart data={history} />
