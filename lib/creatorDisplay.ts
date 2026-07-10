@@ -22,7 +22,23 @@ export type CreatorDisplay = {
   currentPrice: number;
 };
 
-export const toCreatorDisplay = (c: any): CreatorDisplay => ({
+type CreatorDisplaySource = {
+  id: string;
+  youtubeChannelId: string;
+  name: string;
+  nameKo?: string | null;
+  thumbnailUrl?: string | null;
+  category?: string | null;
+  country?: string | null;
+  currentSubs?: number | null;
+  currentViews?: number | null;
+  currentVideos?: number | null;
+  currentPrice?: number | null;
+};
+
+export const toCreatorDisplay = (
+  c: CreatorDisplaySource
+): CreatorDisplay => ({
   id: c.id,
   youtubeChannelId: c.youtubeChannelId,
 

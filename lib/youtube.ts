@@ -1,32 +1,109 @@
 import * as dotenv from "dotenv";
+import { z } from "zod";
+
+import type { CreatorVideo } from "@/lib/data/contracts";
 
 dotenv.config();
 
-interface YouTubeChannelStats {
-  subscriberCount?: string;
-  viewCount?: string;
-  videoCount?: string;
-}
+const thumbnailSchema = z.object({
+  url: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
 
-type Thumbnail = { url: string; width?: number; height?: number };
-type Thumbnails = {
-  default?: Thumbnail;
-  medium?: Thumbnail;
-  high?: Thumbnail;
-  standard?: Thumbnail;
-  maxres?: Thumbnail;
-};
+const thumbnailsSchema = z.object({
+  default: thumbnailSchema.optional(),
+  medium: thumbnailSchema.optional(),
+  high: thumbnailSchema.optional(),
+  standard: thumbnailSchema.optional(),
+  maxres: thumbnailSchema.optional(),
+});
 
-interface YouTubeChannel {
-  id: string;
-  snippet: {
-    title: string;
-    description?: string;
-    thumbnails?: Thumbnails;
-    country?: string;
-  };
-  statistics: YouTubeChannelStats;
-}
+type Thumbnails = z.infer<typeof thumbnailsSchema>;
+
+const countSchema = z.coerce
+  .number()
+  .finite()
+  .nonnegative()
+  .optional()
+  .default(0);
+
+const channelListResponseSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string(),
+        snippet: z
+          .object({
+            title: z.string().optional(),
+            thumbnails: thumbnailsSchema.optional(),
+            country: z.string().optional(),
+          })
+          .optional(),
+        statistics: z
+          .object({
+            subscriberCount: countSchema,
+            viewCount: countSchema,
+            videoCount: countSchema,
+          })
+          .optional(),
+      })
+    )
+    .optional(),
+});
+
+const channelSearchResponseSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z
+          .object({
+            channelId: z.string().optional(),
+          })
+          .optional(),
+      })
+    )
+    .optional(),
+});
+
+const playlistResponseSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        contentDetails: z
+          .object({
+            videoId: z.string(),
+          })
+          .optional(),
+      })
+    )
+    .optional(),
+});
+
+const videoDetailsResponseSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string(),
+        snippet: z.object({
+          title: z.string(),
+          thumbnails: thumbnailsSchema.optional(),
+          publishedAt: z.string(),
+        }),
+        statistics: z
+          .object({
+            viewCount: countSchema,
+            likeCount: countSchema,
+            commentCount: countSchema,
+          })
+          .optional(),
+        contentDetails: z.object({
+          duration: z.string(),
+        }),
+      })
+    )
+    .optional(),
+});
 
 export interface ChannelData {
   channelId: string;
@@ -37,6 +114,19 @@ export interface ChannelData {
   views: number;
   videos: number;
 }
+
+export type RecentVideo = Pick<
+  CreatorVideo,
+  | "id"
+  | "title"
+  | "thumbnailUrl"
+  | "publishedAt"
+  | "viewCount"
+  | "likeCount"
+  | "commentCount"
+  | "duration"
+  | "type"
+>;
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const BASE_URL = "https://www.googleapis.com/youtube/v3";
@@ -92,17 +182,18 @@ export async function getChannelsStats(
       const response = await fetch(url);
       if (!response.ok) continue;
 
-      const data = await response.json();
-      if (!data.items) continue;
+      const data: unknown = await response.json();
+      const parsed = channelListResponseSchema.safeParse(data);
+      if (!parsed.success) continue;
 
-      const mapped = data.items.map((channel: any) => ({
+      const mapped = (parsed.data.items ?? []).map((channel) => ({
         channelId: channel.id,
         name: channel.snippet?.title ?? "",
         thumbnailUrl: pickBestThumbnailUrl(channel.snippet?.thumbnails),
         country: channel.snippet?.country,
-        subs: Number(channel.statistics?.subscriberCount ?? 0),
-        views: Number(channel.statistics?.viewCount ?? 0),
-        videos: Number(channel.statistics?.videoCount ?? 0),
+        subs: channel.statistics?.subscriberCount ?? 0,
+        views: channel.statistics?.viewCount ?? 0,
+        videos: channel.statistics?.videoCount ?? 0,
       }));
 
       allResults.push(...mapped);
@@ -133,11 +224,14 @@ export async function searchChannels(
 
     const response = await fetch(url);
     if (!response.ok) return [];
-    const data = await response.json();
-    return (
-      data.items?.map((item: any) => item.id?.channelId).filter(Boolean) || []
+    const data: unknown = await response.json();
+    const parsed = channelSearchResponseSchema.safeParse(data);
+    if (!parsed.success) return [];
+
+    return (parsed.data.items ?? []).flatMap((item) =>
+      item.id?.channelId ? [item.id.channelId] : []
     );
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -149,7 +243,7 @@ export async function searchChannels(
 export async function getRecentVideos(
   channelId: string,
   maxResults: number = 20
-): Promise<any[]> {
+): Promise<RecentVideo[]> {
   if (!YOUTUBE_API_KEY) throw new Error("YOUTUBE_API_KEY is not configured");
 
   try {
@@ -164,9 +258,14 @@ export async function getRecentVideos(
     const plResponse = await fetch(playlistUrl);
     if (!plResponse.ok) return [];
 
-    const plData = await plResponse.json();
-    const videoIds = plData.items
-      ?.map((item: any) => item.contentDetails.videoId)
+    const playlistData: unknown = await plResponse.json();
+    const parsedPlaylist = playlistResponseSchema.safeParse(playlistData);
+    if (!parsedPlaylist.success) return [];
+
+    const videoIds = (parsedPlaylist.data.items ?? [])
+      .flatMap((item) =>
+        item.contentDetails?.videoId ? [item.contentDetails.videoId] : []
+      )
       .join(",");
 
     if (!videoIds) return [];
@@ -177,26 +276,26 @@ export async function getRecentVideos(
     const detailsResponse = await fetch(detailsUrl);
     if (!detailsResponse.ok) return [];
 
-    const detailsData = await detailsResponse.json();
+    const detailsData: unknown = await detailsResponse.json();
+    const parsedDetails = videoDetailsResponseSchema.safeParse(detailsData);
+    if (!parsedDetails.success) return [];
 
-    return (
-      detailsData.items?.map((video: any) => {
-        const durationStr = video.contentDetails.duration;
-        const durationSec = parseDurationInSeconds(durationStr);
+    return (parsedDetails.data.items ?? []).map((video) => {
+      const durationStr = video.contentDetails.duration;
+      const durationSec = parseDurationInSeconds(durationStr);
 
-        return {
-          id: video.id,
-          title: video.snippet.title,
-          thumbnailUrl: pickBestThumbnailUrl(video.snippet.thumbnails),
-          publishedAt: video.snippet.publishedAt,
-          viewCount: Number(video.statistics.viewCount || 0),
-          likeCount: Number(video.statistics.likeCount || 0),
-          commentCount: Number(video.statistics.commentCount || 0),
-          duration: durationStr,
-          type: durationSec <= 60 ? "SHORTS" : "LONG",
-        };
-      }) || []
-    );
+      return {
+        id: video.id,
+        title: video.snippet.title,
+        thumbnailUrl: pickBestThumbnailUrl(video.snippet.thumbnails) ?? null,
+        publishedAt: video.snippet.publishedAt,
+        viewCount: video.statistics?.viewCount ?? 0,
+        likeCount: video.statistics?.likeCount ?? 0,
+        commentCount: video.statistics?.commentCount ?? 0,
+        duration: durationStr,
+        type: durationSec <= 60 ? "SHORTS" : "LONG",
+      };
+    });
   } catch (error) {
     console.error("Error fetching recent videos:", error);
     return [];

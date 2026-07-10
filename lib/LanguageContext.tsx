@@ -1,15 +1,36 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState } from "react";
 import { locales, LocaleType } from "./locales";
 
-type DeepKeyof<T> = T extends object
-  ? {
-      [K in keyof T]: K extends string ? K | `${K}.${DeepKeyof<T[K]>}` : never;
-    }[keyof T]
-  : never;
+type TranslationRecord = Record<string, unknown>;
 
-type TranslationKey = DeepKeyof<typeof locales.en>;
+const isLocale = (value: string | null): value is LocaleType =>
+  value === "en" || value === "ko";
+
+const getInitialLocale = (): LocaleType => {
+  if (typeof window === "undefined") return "ko";
+
+  const savedLocale = window.localStorage.getItem("locale");
+  return isLocale(savedLocale) ? savedLocale : "ko";
+};
+
+const isTranslationRecord = (value: unknown): value is TranslationRecord =>
+  typeof value === "object" && value !== null;
+
+const getNestedTranslation = (
+  root: unknown,
+  keys: string[]
+): unknown => {
+  let result = root;
+
+  for (const key of keys) {
+    if (!isTranslationRecord(result) || !result[key]) return undefined;
+    result = result[key];
+  }
+
+  return result;
+};
 
 interface LanguageContextType {
   locale: LocaleType;
@@ -22,18 +43,13 @@ const LanguageContext = createContext<LanguageContextType | undefined>(
 );
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<LocaleType>("ko");
-
-  useEffect(() => {
-    const savedLocale = localStorage.getItem("locale") as LocaleType;
-    if (savedLocale && (savedLocale === "en" || savedLocale === "ko")) {
-      setLocaleState(savedLocale);
-    }
-  }, []);
+  const [locale, setLocaleState] = useState<LocaleType>(getInitialLocale);
 
   const setLocale = (newLocale: LocaleType) => {
     setLocaleState(newLocale);
-    localStorage.setItem("locale", newLocale);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("locale", newLocale);
+    }
   };
 
   const t = (key: string): string => {
@@ -41,16 +57,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
     // 1. Try exact path if it has dots
     if (key.includes(".")) {
-      const keys = key.split(".");
-      let result: any = localeData;
-      for (const k of keys) {
-        if (result && result[k]) {
-          result = result[k];
-        } else {
-          result = undefined;
-          break;
-        }
-      }
+      const result = getNestedTranslation(localeData, key.split("."));
       if (typeof result === "string") return result;
     }
 
@@ -60,9 +67,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     const searchKey = key.includes(".") ? key.split(".").pop()! : key;
 
     for (const ns of namespaces) {
-      const nsData = (localeData as any)[ns];
-      if (nsData && nsData[searchKey]) {
-        return nsData[searchKey];
+      const nsData: unknown = localeData[ns];
+      if (isTranslationRecord(nsData)) {
+        const result = nsData[searchKey];
+        if (typeof result === "string" && result.length > 0) return result;
       }
     }
 

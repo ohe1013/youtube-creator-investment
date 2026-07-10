@@ -1,21 +1,9 @@
 import { prisma } from "./prisma";
 import { placeOrder } from "./matching-engine";
 
-const BOT_CONFIG = {
-  MAX_TRADE_AMOUNT_CAP: 2000,
-  TRADE_AMOUNT_PCT: 0.02,
-  MAX_POSITION_PCT: 0.2,
-  COOLDOWN_MIN: 1, // Reduced for testing
-  COOLDOWN_MAX: 10,
-};
-
 export async function spawnBots(count: number) {
   const bots = [];
   for (let i = 0; i < count; i++) {
-    const existing = await prisma.user.findFirst({
-      where: { name: { startsWith: "MarketBot_" } },
-    });
-    // To ensure unique names if many exist, though random substring is robust enough usually
     const suffix = Math.random().toString(36).substring(7);
     const bot = await prisma.user.create({
       data: {
@@ -156,7 +144,7 @@ export async function executeBotTrade() {
         console.log(`Bot ${randomBot.name} TAKER BUY: ${quantity} @ ${price}`);
       }
     }
-  } catch (error) {
-    // console.error("Bot trade failed:", error); // Suppress expected errors like "Insufficient balance"
+  } catch {
+    // Expected order-validation failures are ignored for autonomous bot ticks.
   }
 }

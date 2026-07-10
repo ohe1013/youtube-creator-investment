@@ -1,5 +1,5 @@
 
-import { calculateP0, calculateNewPrice, MARKET_CONFIG } from "../lib/market";
+import { calculateP0, calculateNewPrice } from "../lib/market";
 
 function testP0Scaling() {
   console.log("=== Testing P0 Scaling ===");
@@ -32,7 +32,6 @@ function testPriceImpact() {
   
   const currentPrice = 100;
   const liquidity = 10000;
-  const k = MARKET_CONFIG.DEFAULT_LIQUIDITY_K; // 0.1
 
   // Buy 100 shares (Value = 10000)
   // Impact = 0.1 * 10000 / 10000 = 0.1 (10%)

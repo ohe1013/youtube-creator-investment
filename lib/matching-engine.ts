@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { TradeType, OrderType, OrderStatus, Prisma } from "@prisma/client";
+import { TradeType, OrderType, Prisma } from "@prisma/client";
 
 /**
  * Places a new order and attempts to match it immediately.
@@ -94,7 +94,6 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
   });
 
   let remainingQty = order.quantity - order.filled;
-  let totalCost = 0; // For refunds if BUY order filled at better price
 
   for (const match of candidates) {
     if (remainingQty <= 0) break;

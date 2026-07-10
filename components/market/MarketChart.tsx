@@ -2,20 +2,23 @@
 
 import { useEffect, useRef, useMemo, useState } from "react";
 import {
+  type CandlestickData,
+  type HistogramData,
+  type IChartApi,
+  type ISeriesApi,
+  type LineData,
+  type MouseEventParams,
+  type Time,
+  type UTCTimestamp,
   createChart,
   ColorType,
-  ISeriesApi,
-  Time,
-  UTCTimestamp,
   CrosshairMode,
-  MouseEventParams,
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
 } from "lightweight-charts";
-import { generateCandles, CandleData, VolumeData } from "@/lib/candle-utils";
+import { generateCandles } from "@/lib/candle-utils";
 import { useTheme } from "next-themes";
-import { useLanguage } from "@/lib/LanguageContext";
 
 interface MarketChartProps {
   data: Array<{
@@ -25,22 +28,77 @@ interface MarketChartProps {
   }>;
 }
 
+const LIGHT_CHART_COLORS = {
+  up: "#d24f45",
+  down: "#1261c4",
+  background: "#ffffff",
+  text: "#666666",
+  grid: "#f1f1f4",
+} as const;
+
+function calculateMA(data: readonly CandlestickData[], count: number): LineData[] {
+  const result: LineData[] = [];
+
+  for (let i = count - 1; i < data.length; i += 1) {
+    const sum = data
+      .slice(i - count + 1, i + 1)
+      .reduce((acc, value) => acc + value.close, 0);
+    result.push({ time: data[i].time, value: sum / count });
+  }
+
+  return result;
+}
+
+function isOhlcData(
+  value: unknown,
+): value is Pick<CandlestickData, "open" | "high" | "low" | "close"> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "open" in value &&
+    typeof value.open === "number" &&
+    "high" in value &&
+    typeof value.high === "number" &&
+    "low" in value &&
+    typeof value.low === "number" &&
+    "close" in value &&
+    typeof value.close === "number"
+  );
+}
+
+function isHistogramData(
+  value: unknown,
+): value is Pick<HistogramData, "value"> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "value" in value &&
+    typeof value.value === "number"
+  );
+}
+
+function formatCrosshairTime(time: Time): string {
+  if (typeof time === "number") {
+    return new Date(time * 1000).toLocaleString();
+  }
+
+  if (typeof time === "string") {
+    return time;
+  }
+
+  return new Date(Date.UTC(time.year, time.month - 1, time.day)).toLocaleString();
+}
+
 export function MarketChart({ data }: MarketChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<any>(null); // Store chart instance
+  const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const ma5SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const ma20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
-  // 0. Hydration Fix
-  const [mounted, setMounted] = useState(false);
   const { theme } = useTheme();
   const [showVolume, setShowVolume] = useState(true);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   const [tooltip, setTooltip] = useState<{
     visible: boolean;
@@ -53,54 +111,57 @@ export function MarketChart({ data }: MarketChartProps) {
 
   // 1. Transform Data using Utils
   const { processedCandles, processedVolume } = useMemo(() => {
-    if (!mounted) return { processedCandles: [], processedVolume: [] };
     const result = generateCandles(data, 1); // 1 minute candles for smoother MVP look
-    return { processedCandles: result.candles, processedVolume: result.volume };
-  }, [data, mounted]);
+    const processedCandles: CandlestickData[] = result.candles.map(
+      ({ time, ...candle }) => ({
+        ...candle,
+        time: time as UTCTimestamp,
+      }),
+    );
+    const processedVolume: HistogramData[] = result.volume.map(
+      ({ time, ...volume }) => ({
+        ...volume,
+        time: time as UTCTimestamp,
+      }),
+    );
+
+    return { processedCandles, processedVolume };
+  }, [data]);
 
   const isDark = theme === "dark";
 
   // Theme-aware Colors (Upbit Refined)
-  const UP_COLOR = isDark ? "#0ecb81" : "#d24f45";
-  const DOWN_COLOR = isDark ? "#f6465d" : "#1261c4";
-  const BG_COLOR = isDark ? "#0b0e11" : "#ffffff";
-  const TEXT_COLOR = isDark ? "#848e9c" : "#666666";
-  const GRID_COLOR = isDark ? "#2b3139" : "#f1f1f4";
-
-  // Helper for MA
-  const calculateMA = (data: any[], count: number) => {
-    const result = [];
-    for (let i = 0; i < data.length; i++) {
-      if (i < count - 1) continue;
-      const sum = data
-        .slice(i - count + 1, i + 1)
-        .reduce((acc, val) => acc + val.close, 0);
-      result.push({ time: data[i].time, value: sum / count });
-    }
-    return result;
-  };
+  const UP_COLOR = isDark ? "#0ecb81" : LIGHT_CHART_COLORS.up;
+  const DOWN_COLOR = isDark ? "#f6465d" : LIGHT_CHART_COLORS.down;
+  const BG_COLOR = isDark ? "#0b0e11" : LIGHT_CHART_COLORS.background;
+  const TEXT_COLOR = isDark ? "#848e9c" : LIGHT_CHART_COLORS.text;
+  const GRID_COLOR = isDark ? "#2b3139" : LIGHT_CHART_COLORS.grid;
 
   // 2. Initialize Chart (Run Once)
   useEffect(() => {
-    if (!mounted || !chartContainerRef.current) return;
+    const container = chartContainerRef.current;
+    if (!container) return;
     if (chartRef.current) return;
 
-    const chart = createChart(chartContainerRef.current, {
+    const chart = createChart(container, {
       layout: {
-        background: { type: ColorType.Solid, color: BG_COLOR },
-        textColor: TEXT_COLOR,
+        background: {
+          type: ColorType.Solid,
+          color: LIGHT_CHART_COLORS.background,
+        },
+        textColor: LIGHT_CHART_COLORS.text,
       },
       grid: {
-        vertLines: { color: GRID_COLOR },
-        horzLines: { color: GRID_COLOR },
+        vertLines: { color: LIGHT_CHART_COLORS.grid },
+        horzLines: { color: LIGHT_CHART_COLORS.grid },
       },
-      width: chartContainerRef.current.clientWidth,
-      height: chartContainerRef.current.clientHeight,
+      width: container.clientWidth,
+      height: container.clientHeight,
       crosshair: {
         mode: CrosshairMode.Normal,
       },
       rightPriceScale: {
-        borderColor: GRID_COLOR,
+        borderColor: LIGHT_CHART_COLORS.grid,
         scaleMargins: {
           top: 0.1,
           bottom: 0.1, // Reduced margin to minimize empty space at bottom
@@ -108,23 +169,23 @@ export function MarketChart({ data }: MarketChartProps) {
         autoScale: true,
       },
       timeScale: {
-        borderColor: GRID_COLOR,
+        borderColor: LIGHT_CHART_COLORS.grid,
         timeVisible: true,
         secondsVisible: false,
         barSpacing: 12,
       },
-    }) as any;
+    });
 
     chartRef.current = chart;
 
     // 1. Candlestick Series
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: UP_COLOR,
-      downColor: DOWN_COLOR,
-      borderUpColor: UP_COLOR,
-      borderDownColor: DOWN_COLOR,
-      wickUpColor: UP_COLOR,
-      wickDownColor: DOWN_COLOR,
+      upColor: LIGHT_CHART_COLORS.up,
+      downColor: LIGHT_CHART_COLORS.down,
+      borderUpColor: LIGHT_CHART_COLORS.up,
+      borderDownColor: LIGHT_CHART_COLORS.down,
+      wickUpColor: LIGHT_CHART_COLORS.up,
+      wickDownColor: LIGHT_CHART_COLORS.down,
     });
     candleSeriesRef.current = candleSeries;
 
@@ -151,7 +212,7 @@ export function MarketChart({ data }: MarketChartProps) {
           type: "volume",
         },
         priceScaleId: "",
-        visible: showVolume,
+        visible: true,
     });
     volumeSeries.priceScale().applyOptions({
         scaleMargins: {
@@ -167,32 +228,27 @@ export function MarketChart({ data }: MarketChartProps) {
         param.point === undefined ||
         !param.time ||
         param.point.x < 0 ||
-        param.point.x > chartContainerRef.current!.clientWidth ||
+        param.point.x > container.clientWidth ||
         param.point.y < 0 ||
-        param.point.y > chartContainerRef.current!.clientHeight
+        param.point.y > container.clientHeight
       ) {
         setTooltip(null);
       } else {
-        const dateStr = new Date(
-          (param.time as number) * 1000
-        ).toLocaleString();
+        const dateStr = formatCrosshairTime(param.time);
 
         const cSeries = candleSeriesRef.current;
         const vSeries = volumeSeriesRef.current;
 
-        const candleData = cSeries ? param.seriesData.get(cSeries) as any : null;
-        let volumeData = null;
-        if (vSeries && param.seriesData.get(vSeries)) {
-             volumeData = param.seriesData.get(vSeries) as any;
-        }
+        const candleData = cSeries ? param.seriesData.get(cSeries) : null;
+        const volumeData = vSeries ? param.seriesData.get(vSeries) : null;
 
-        if (candleData) {
+        if (isOhlcData(candleData)) {
           setTooltip({
             visible: true,
             x: param.point.x,
             y: param.point.y,
             ohlc: candleData,
-            volume: volumeData ? volumeData.value : null,
+            volume: isHistogramData(volumeData) ? volumeData.value : null,
             timeStr: dateStr,
           });
         }
@@ -210,15 +266,14 @@ export function MarketChart({ data }: MarketChartProps) {
         ma20SeriesRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted]);
+  }, []);
 
   // 3. Update Data Effect
   useEffect(() => {
     if (!chartRef.current) return;
     
     if (candleSeriesRef.current) {
-        candleSeriesRef.current.setData(processedCandles as any);
+        candleSeriesRef.current.setData(processedCandles);
     }
     if (ma5SeriesRef.current) {
         ma5SeriesRef.current.setData(calculateMA(processedCandles, 5));
@@ -227,7 +282,7 @@ export function MarketChart({ data }: MarketChartProps) {
         ma20SeriesRef.current.setData(calculateMA(processedCandles, 20));
     }
     if (volumeSeriesRef.current) {
-        volumeSeriesRef.current.setData(processedVolume as any);
+        volumeSeriesRef.current.setData(processedVolume);
     }
     
     chartRef.current.timeScale().fitContent();
@@ -288,14 +343,6 @@ export function MarketChart({ data }: MarketChartProps) {
       window.removeEventListener("resize", handleResize);
     };
   }, []);
-
-  if (!mounted) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-card text-muted min-h-[400px]">
-        Loading Chart...
-      </div>
-    );
-  }
 
   return (
     <div className="flex-1 relative bg-card min-h-[400px] w-full h-full flex flex-col">

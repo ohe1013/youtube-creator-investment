@@ -1,4 +1,5 @@
-const { PrismaClient } = require("@prisma/client");
+import { PrismaClient } from "@prisma/client";
+
 const prisma = new PrismaClient();
 
 async function inspect() {
@@ -8,9 +9,9 @@ async function inspect() {
     take: 10,
   });
   console.log(`Found ${orders.length} recent orders.`);
-  orders.forEach((o) => {
+  orders.forEach((order) => {
     console.log(
-      `Order ${o.id}: ${o.type} ${o.orderType} Qty:${o.quantity} Filled:${o.filled} Price:${o.price} Status:${o.status} Creator:${o.creatorId}`
+      `Order ${order.id}: ${order.type} ${order.orderType} Qty:${order.quantity} Filled:${order.filled} Price:${order.price} Status:${order.status} Creator:${order.creatorId}`
     );
   });
 
@@ -20,9 +21,9 @@ async function inspect() {
     take: 10,
   });
   console.log(`Found ${trades.length} recent trades.`);
-  trades.forEach((t) => {
+  trades.forEach((trade) => {
     console.log(
-      `Trade ${t.id}: ${t.type} Qty:${t.quantity} Price:${t.price} Creator:${t.creatorId}`
+      `Trade ${trade.id}: ${trade.type} Qty:${trade.quantity} Price:${trade.price} Creator:${trade.creatorId}`
     );
   });
 
@@ -37,13 +38,13 @@ async function inspect() {
       where: { isBot: true },
     })})`
   );
-  bots.forEach((b) => {
+  bots.forEach((bot) => {
     console.log(
-      `Bot ${b.name}: Balance ${b.balance}, Positions: ${b.positions.length}`
+      `Bot ${bot.name}: Balance ${bot.balance}, Positions: ${bot.positions.length}`
     );
   });
 }
 
 inspect()
-  .catch((e) => console.error(e))
+  .catch((error) => console.error(error))
   .finally(async () => await prisma.$disconnect());

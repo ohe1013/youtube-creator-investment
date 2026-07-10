@@ -2,15 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { placeOrder } from "@/lib/matching-engine";
-import { z } from "zod";
-
-const tradeSchema = z.object({
-  creatorId: z.string(),
-  side: z.enum(["BUY", "SELL"]),
-  price: z.number().positive(),
-  quantity: z.number().positive(),
-  orderType: z.enum(["LIMIT", "MARKET"]).optional().default("LIMIT"),
-});
+import { placeOrderInputSchema } from "@/lib/data/contracts";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -19,12 +11,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    const json = await req.json();
-    const { creatorId, side, price, quantity, orderType } =
-      tradeSchema.parse(json);
+    const json: unknown = await req.json();
+    const tradeResult = placeOrderInputSchema.safeParse(json);
+
+    if (!tradeResult.success) {
+      return NextResponse.json(
+        { error: tradeResult.error.message },
+        { status: 400 }
+      );
+    }
+
+    const { creatorId, side, price, quantity, orderType } = tradeResult.data;
 
     const order = await placeOrder(
-      (session.user as any).id,
+      session.user.id,
       creatorId,
       side,
       price,
@@ -33,10 +33,10 @@ export async function POST(req: Request) {
     );
 
     return NextResponse.json({ order });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Trade error:", error);
     return NextResponse.json(
-      { error: error.message || "Trade failed" },
+      { error: error instanceof Error ? error.message : "Trade failed" },
       { status: 400 }
     );
   }

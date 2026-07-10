@@ -18,12 +18,7 @@ export async function GET(
     const orderbookParam = searchParams.get("orderbook");
 
     if (orderbookParam === "true") {
-      // Check if Order model exists on prisma client (it might not if generation failed)
-      if (!(prisma as any).order) {
-        return NextResponse.json({ asks: [], bids: [] });
-      }
-
-      const orders = await (prisma as any).order.findMany({
+      const orders = await prisma.order.findMany({
         where: { creatorId: id, status: { in: ["OPEN", "PARTIAL"] } },
         select: { type: true, price: true, quantity: true, filled: true },
       });
@@ -31,14 +26,20 @@ export async function GET(
       const askMap = new Map<number, number>();
       const bidMap = new Map<number, number>();
 
-      orders.forEach((o: any) => {
-        const remaining = o.quantity - o.filled;
+      orders.forEach((order) => {
+        const remaining = order.quantity - order.filled;
         if (remaining <= 0) return;
 
-        if (o.type === "SELL") {
-          askMap.set(o.price, (askMap.get(o.price) || 0) + remaining);
+        if (order.type === "SELL") {
+          askMap.set(
+            order.price,
+            (askMap.get(order.price) || 0) + remaining
+          );
         } else {
-          bidMap.set(o.price, (bidMap.get(o.price) || 0) + remaining);
+          bidMap.set(
+            order.price,
+            (bidMap.get(order.price) || 0) + remaining
+          );
         }
       });
 
@@ -60,21 +61,13 @@ export async function GET(
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
 
-      // 1. Fetch Daily Stats
-      const stats = await prisma.creatorStat.findMany({
-        where: { creatorId: id, date: { gte: startDate } },
-        orderBy: { date: "asc" },
-        select: { date: true, subs: true, views: true, videos: true },
-      });
-
-      // 2. Fetch All Trades in that period (for price movements)
+      // Fetch all trades in that period for price movements.
       const trades = await prisma.trade.findMany({
         where: { creatorId: id, createdAt: { gte: startDate } },
         orderBy: { createdAt: "asc" },
         select: { createdAt: true, price: true, quantity: true },
       });
 
-      // 3. Map to HistoryPoints
       // We assume initialPrice was the price before the first trade or the first stat
       const creator = await prisma.creator.findUnique({
         where: { id },

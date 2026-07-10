@@ -6,14 +6,6 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const period = searchParams.get("period") || "all"; // all, 30days
 
-    // Calculate date filter
-    let dateFilter: any = {};
-    if (period === "30days") {
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      dateFilter = { gte: thirtyDaysAgo };
-    }
-
     // Get all users with their trades
     const users = await prisma.user.findMany({
       select: {

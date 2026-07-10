@@ -59,7 +59,7 @@ export function generateCandles(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
 
-    let open = points[0].price;
+    const open = points[0].price;
     let close = points[points.length - 1].price;
     const prices = points.map((p) => p.price);
     let high = Math.max(...prices);
@@ -86,7 +86,7 @@ export function generateCandles(
     const timeSeconds = time / 1000;
 
     candles.push({
-      time: timeSeconds as any,
+      time: timeSeconds,
       open,
       high,
       low,
@@ -95,8 +95,6 @@ export function generateCandles(
 
     // Upbit uses Red for Up, Blue for Down
     const isUp = close >= open;
-    const color = isUp ? "#dd3c44" : "#003597";
-
     // Dynamic Volume Generation
     let vol = 0;
     if (points[0].volume !== undefined) {
@@ -108,7 +106,7 @@ export function generateCandles(
     }
 
     volumes.push({
-      time: timeSeconds as any,
+      time: timeSeconds,
       value: vol,
       color: isUp ? "#dd3c4455" : "#00359755", // Transparent volume colors
     });

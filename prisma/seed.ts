@@ -245,7 +245,7 @@ async function main() {
             );
 
             await new Promise((resolve) => setTimeout(resolve, 50));
-          } catch (innerError: any) {
+          } catch {
             // duplicates / transient errors 무시
           }
         }

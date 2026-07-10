@@ -1,7 +1,11 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
+
+type OrderLevel = { price: number; quantity: number };
+
+const EMPTY_ORDER_LEVELS: OrderLevel[] = [];
 
 interface OrderBookProps {
   currentPrice: number;
@@ -13,21 +17,15 @@ interface OrderBookProps {
 
 export function OrderBook({
   currentPrice,
-  liquidity,
   asks: propAsks,
   bids: propBids,
   onPriceClick,
 }: OrderBookProps) {
   const { t } = useLanguage();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   // Use props directly, default to empty arrays if undefined
-  const asks = propAsks || [];
-  const bids = propBids || [];
+  const asks = propAsks ?? EMPTY_ORDER_LEVELS;
+  const bids = propBids ?? EMPTY_ORDER_LEVELS;
 
   const maxQty = useMemo(() => {
     const all = [...asks, ...bids].map((o) => o.quantity);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import Image from "next/image";
 import { useLanguage } from "@/lib/LanguageContext";
 
 interface MarketHeaderProps {
@@ -30,7 +30,7 @@ export function MarketHeader({
   chartTab,
   setChartTab,
 }: MarketHeaderProps) {
-  const { t, locale } = useLanguage();
+  const { t } = useLanguage();
 
   if (!creator)
     return (
@@ -46,9 +46,12 @@ export function MarketHeader({
     <div className="h-24 bg-card border-b border-border-exchange flex items-center px-6 justify-between text-foreground">
       <div className="flex items-center gap-4">
         {creator.thumbnailUrl ? (
-          <img
+          <Image
             src={creator.thumbnailUrl}
             alt={displayName}
+            width={40}
+            height={40}
+            unoptimized
             className="w-10 h-10 rounded-full border border-border-exchange object-cover"
           />
         ) : (

@@ -1,9 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import {
-  getChannelStats,
-  getChannelsStats,
-  getRecentVideos,
-} from "../lib/youtube";
+import { getChannelsStats, getRecentVideos } from "../lib/youtube";
 
 const prisma = new PrismaClient();
 
@@ -54,10 +50,10 @@ async function refreshAllStats() {
       const dailySubsChange = stats.subs - creator.currentSubs;
       const dailyViewsChange = stats.views - creator.currentViews;
 
-      let engagementRate = (creator as any).engagementRate || 0;
-      let viewsPerSubs = (creator as any).viewsPerSubs || 0;
-      let avgLikes = (creator as any).avgLikes || 0;
-      let avgComments = (creator as any).avgComments || 0;
+      let engagementRate = creator.engagementRate || 0;
+      let viewsPerSubs = creator.viewsPerSubs || 0;
+      let avgLikes = creator.avgLikes || 0;
+      let avgComments = creator.avgComments || 0;
 
       // 2. Fetch Recent Videos & Calculate Engagement (Only in FULL mode)
       if (!isBasicMode) {

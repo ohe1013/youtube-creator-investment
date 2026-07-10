@@ -1,11 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
 
@@ -28,12 +28,6 @@ export async function GET(request: NextRequest) {
     const oneDayAgo = new Date();
     oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-    const volumeData = await prisma.trade.aggregate({
-      where: { createdAt: { gte: oneDayAgo } },
-      _sum: { price: true, quantity: true }, // Simplified, really needs price * quantity per trade
-    });
-
-    // Better volume calc
     const last24hTrades = await prisma.trade.findMany({
       where: { createdAt: { gte: oneDayAgo } },
       select: { price: true, quantity: true },
@@ -72,7 +66,7 @@ export async function GET(request: NextRequest) {
     let userSnapshot = null;
     if (session?.user) {
       const user = await prisma.user.findUnique({
-        where: { id: (session.user as any).id },
+        where: { id: session.user.id },
         include: {
           positions: {
             include: { creator: true },

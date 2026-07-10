@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getChannelStats, getChannelsStats } from "@/lib/youtube";
-import { updateCreatorScoreAndPrice } from "@/lib/scoring";
+import { getChannelsStats } from "@/lib/youtube";
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,7 +42,7 @@ export async function POST(request: NextRequest) {
     // 2. Update each creator using batched data
     for (const creator of creators) {
       try {
-        const stats = statsMap.get(creator.youtubeChannelId) as any;
+        const stats = statsMap.get(creator.youtubeChannelId);
 
         if (!stats) {
           results.failed++;
