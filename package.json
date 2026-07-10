@@ -20,6 +20,12 @@
     "test:coverage": "vitest run --coverage",
     "build:ait": "ait build",
     "verify:artifact": "node scripts/verify-ait-artifact.mjs",
+    "sandbox:android:install-tools": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android/install-platform-tools.ps1",
+    "sandbox:android:doctor": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android/doctor.ps1",
+    "sandbox:android:reverse": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android/reverse.ps1",
+    "sandbox:android:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android/dev.ps1",
+    "sandbox:android:logcat": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android/logcat.ps1",
+    "sandbox:android:screenshot": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android/screenshot.ps1",
     "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run build:ait && npm run verify:artifact",
     "postinstall": "prisma generate"
   },
