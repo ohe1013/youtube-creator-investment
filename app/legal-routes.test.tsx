@@ -13,7 +13,13 @@ import { LegalFooter } from "@/components/legal/LegalFooter";
 import { locales } from "@/lib/locales";
 import { createGraniteConfig } from "../granite.config";
 
+const navigationMocks = vi.hoisted(() => ({ pathname: "/terms" }));
+
 vi.mock("next-auth/react", () => ({ signIn: vi.fn() }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => navigationMocks.pathname,
+}));
 
 vi.mock("@/lib/session/CreatorXSessionProvider", () => ({
   useCreatorXSession: () => ({
@@ -27,7 +33,11 @@ vi.mock("@/lib/session/CreatorXSessionProvider", () => ({
   }),
 }));
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  navigationMocks.pathname = "/terms";
+  vi.unstubAllEnvs();
+});
 
 const validProductionEnvironment = {
   NEXT_PUBLIC_APP_IN_TOSS: "1",
@@ -104,6 +114,23 @@ describe("CreatorX legal routes", () => {
     );
   });
 
+  it("uses only the configured support channel in production copy", () => {
+    for (const [key, value] of Object.entries(validProductionEnvironment)) {
+      vi.stubEnv(key, value);
+    }
+
+    render(<SupportPage />);
+
+    expect(screen.queryByText(/샌드박스/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/저장소 이슈 트래커/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/GitHub Issues/)).not.toBeInTheDocument();
+    expect(screen.getByText(/운영 환경의 지원 채널/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "지원 요청 열기" })).toHaveAttribute(
+      "href",
+      "https://support.creatorx.example",
+    );
+  });
+
   it("links sign-in and the global footer to every legal route", () => {
     const { unmount } = render(<SignInPage />);
 
@@ -131,6 +158,30 @@ describe("CreatorX legal routes", () => {
     );
     expect(screen.getByText(/포인트는 현금 가치가 없/)).toBeVisible();
   });
+});
+
+describe("route-aware legal footer", () => {
+  it.each(["/", "/dashboard", "/creator"])(
+    "does not add document flow below the fixed-height route %s",
+    (pathname) => {
+      navigationMocks.pathname = pathname;
+
+      render(<LegalFooter />);
+
+      expect(screen.queryByRole("contentinfo")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["/terms", "/privacy", "/support", "/auth/signin", "/creators"])(
+    "keeps the legal footer on the normal-flow route %s",
+    (pathname) => {
+      navigationMocks.pathname = pathname;
+
+      render(<LegalFooter />);
+
+      expect(screen.getByRole("contentinfo")).toBeVisible();
+    },
+  );
 });
 
 describe("CreatorX release identity", () => {

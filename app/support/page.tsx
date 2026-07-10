@@ -29,11 +29,18 @@ export default function SupportPage() {
         </dl>
       </LegalSection>
       <LegalSection title="지원 요청">
-        <p>
-          샌드박스 단계의 지원 채널은 저장소 이슈 트래커입니다. 문제 화면,
-          재현 순서, 사용 환경을 함께 남기고 개인 식별키나 비밀값은 게시하지
-          마세요.
-        </p>
+        {config.releaseChannel === "production" ? (
+          <p>
+            운영 환경의 지원 채널로 문제 화면, 재현 순서, 사용 환경을 함께
+            보내주세요. 개인 식별키나 비밀값은 포함하지 마세요.
+          </p>
+        ) : (
+          <p>
+            샌드박스 단계의 지원 채널은 저장소 이슈 트래커입니다. 문제 화면,
+            재현 순서, 사용 환경을 함께 남기고 개인 식별키나 비밀값은 게시하지
+            마세요.
+          </p>
+        )}
         <ExternalLink
           href={legal.supportUrl}
           appInToss={config.appInToss}

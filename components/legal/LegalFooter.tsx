@@ -1,6 +1,14 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const fixedHeightRoutes = new Set(["/", "/dashboard", "/creator"]);
 
 export function LegalFooter() {
+  const pathname = usePathname();
+  if (fixedHeightRoutes.has(pathname)) return null;
+
   return (
     <footer className="border-t border-border-exchange bg-background px-4 py-6 text-foreground">
       <div className="mx-auto flex max-w-6xl flex-col gap-3 text-xs text-muted md:flex-row md:items-center md:justify-between">

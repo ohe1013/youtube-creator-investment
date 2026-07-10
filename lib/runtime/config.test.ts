@@ -139,4 +139,84 @@ describe("parseRuntimeConfig", () => {
       effectiveDate: "2026-07-10",
     });
   });
+
+  const nonRemoteProductionUrls = [
+    "https://localhost./asset",
+    "https://x.localhost./asset",
+    "https://device.local/asset",
+    "https://service.internal/asset",
+    "https://router.lan/asset",
+    "https://machine.localdomain/asset",
+    "https://device.home.arpa/asset",
+    "https://home.arpa/asset",
+    "https://[::ffff:7f00:1]/asset",
+    "https://[::ffff:a00:1]/asset",
+  ];
+
+  it.each(
+    ([
+      ["NEXT_PUBLIC_CREATORX_API_BASE_URL", "remote HTTPS API URL"],
+      ["NEXT_PUBLIC_CREATORX_SUPPORT_URL", "remote HTTPS support URL"],
+      ["NEXT_PUBLIC_CREATORX_ICON_URL", "remote HTTPS URL"],
+    ] as const).flatMap(([field, message]) =>
+      nonRemoteProductionUrls.map((url) => [field, url, message] as const),
+    ),
+  )("rejects canonical local URL in %s: %s", (field, url, message) => {
+    expect(() =>
+      parseRuntimeConfig({
+        ...validProductionEnvironment,
+        [field]: url,
+      }),
+    ).toThrow(message);
+  });
+
+  it.each([
+    "https://static.toss.im/icons/icon-toss%2dlogo.png",
+    "https://static.toss.im/icons/icon%2dtoss%2dlogo.png",
+    "https://static.toss.im/icons/icon%252dtoss%252dlogo.png",
+  ])("rejects encoded Toss logo paths: %s", (iconUrl) => {
+    expect(() =>
+      parseRuntimeConfig({
+        ...validProductionEnvironment,
+        NEXT_PUBLIC_CREATORX_ICON_URL: iconUrl,
+      }),
+    ).toThrow("CreatorX-owned");
+  });
+
+  it("allows a non-Toss-logo CreatorX console asset on the Toss CDN", () => {
+    const iconUrl =
+      "https://static.toss.im/apps/creatorx/creatorx-icon-512.png";
+
+    expect(
+      parseRuntimeConfig({
+        ...validProductionEnvironment,
+        NEXT_PUBLIC_CREATORX_ICON_URL: iconUrl,
+      }).brandIconUrl,
+    ).toBe(iconUrl);
+  });
+
+  it.each([
+    ["NEXT_PUBLIC_CREATORX_OPERATOR_NAME", "CreatorX 개발팀", "verified operator"],
+    [
+      "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
+      "https://github.com/ohe1013/youtube-creator-investment/issues",
+      "verified support",
+    ],
+    [
+      "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
+      "https://github.com/ohe1013/youtube-creator-investment/issues/",
+      "verified support",
+    ],
+    ["NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT", "GitHub Issues", "verified privacy"],
+  ] as const)(
+    "rejects the sandbox placeholder in %s",
+    (field, placeholder, message) => {
+      expect(() =>
+        parseRuntimeConfig({
+          ...validProductionEnvironment,
+          [field]: placeholder,
+        }),
+      ).toThrow(message);
+    },
+  );
 });

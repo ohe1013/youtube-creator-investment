@@ -7,45 +7,113 @@ const optionalUrl = z.preprocess(
 
 const legacyTossLogoUrl =
   "https://static.toss.im/icons/png/4x/icon-toss-logo.png";
+const sandboxOperatorName = "CreatorX 개발팀";
+const sandboxSupportUrl =
+  "https://github.com/ohe1013/youtube-creator-investment/issues";
+const sandboxPrivacyContact = "GitHub Issues";
+const localHostnameSuffixes = [
+  ".local",
+  ".internal",
+  ".lan",
+  ".localdomain",
+  ".home.arpa",
+] as const;
+
+function canonicalHostname(url: URL) {
+  return url.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.+$/g, "");
+}
+
+function decodePathname(pathname: string) {
+  let decoded = pathname;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  return decoded.normalize("NFKC").toLowerCase();
+}
 
 function isTossBrandIcon(value: string) {
   const url = new URL(value);
+  if (value === legacyTossLogoUrl) return true;
+  if (canonicalHostname(url) !== "static.toss.im") return false;
+
+  const compactPathname = decodePathname(url.pathname).replace(
+    /[^a-z0-9]+/g,
+    "",
+  );
+  return compactPathname.includes("tosslogo");
+}
+
+function parseIpv4(hostname: string) {
+  const parts = hostname.split(".").map(Number);
+  return parts.length === 4 &&
+    parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    ? parts
+    : null;
+}
+
+function mappedIpv4(hostname: string) {
+  const match = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(
+    hostname,
+  );
+  if (!match) return null;
+
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return [high >>> 8, high & 0xff, low >>> 8, low & 0xff];
+}
+
+function isPrivateIpv4(parts: number[] | null) {
+  if (!parts) return false;
   return (
-    value === legacyTossLogoUrl ||
-    (url.hostname.toLowerCase() === "static.toss.im" &&
-      url.pathname.toLowerCase().includes("toss-logo"))
+    parts[0] === 0 ||
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168)
+  );
+}
+
+function isSandboxSupportPlaceholder(value: string) {
+  const url = new URL(value);
+  const pathname = url.pathname.replace(/\/+$/g, "");
+  return (
+    url.protocol === "https:" &&
+    canonicalHostname(url) === "github.com" &&
+    pathname === "/ohe1013/youtube-creator-investment/issues"
   );
 }
 
 function isRemoteHttpsUrl(value: string) {
   try {
     const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
-    const normalizedHostname = hostname.replace(/^\[|\]$/g, "");
-    const ipv4 = normalizedHostname.split(".").map(Number);
-    const isIpv4 =
-      ipv4.length === 4 &&
-      ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
-    const isPrivateIpv4 =
-      isIpv4 &&
-      (ipv4[0] === 0 ||
-        ipv4[0] === 10 ||
-        ipv4[0] === 127 ||
-        (ipv4[0] === 100 && ipv4[1] >= 64 && ipv4[1] <= 127) ||
-        (ipv4[0] === 169 && ipv4[1] === 254) ||
-        (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31) ||
-        (ipv4[0] === 192 && ipv4[1] === 168));
+    const hostname = canonicalHostname(url);
+    const ipv4 = parseIpv4(hostname);
+    const mapped = mappedIpv4(hostname);
     const isPrivateIpv6 =
-      normalizedHostname === "::" ||
-      normalizedHostname === "::1" ||
-      /^(?:fc|fd|fe[89ab])/i.test(normalizedHostname);
+      hostname === "::" ||
+      hostname === "::1" ||
+      /^(?:fc|fd|fe[89ab])/i.test(hostname);
+    const isLocalNamespace = localHostnameSuffixes.some(
+      (suffix) => hostname === suffix.slice(1) || hostname.endsWith(suffix),
+    );
     const isLocal =
       hostname === "localhost" ||
       hostname.endsWith(".localhost") ||
-      (!isIpv4 &&
-        !normalizedHostname.includes(".") &&
-        !normalizedHostname.includes(":")) ||
-      isPrivateIpv4 ||
+      (!ipv4 && !hostname.includes(".") && !hostname.includes(":")) ||
+      isLocalNamespace ||
+      isPrivateIpv4(ipv4) ||
+      isPrivateIpv4(mapped) ||
       isPrivateIpv6;
 
     return url.protocol === "https:" && !isLocal;
@@ -97,6 +165,33 @@ const schema = z
         code: "custom",
         path: ["NEXT_PUBLIC_CREATORX_SUPPORT_URL"],
         message: "production requires a remote HTTPS support URL",
+      });
+    }
+    if (value.NEXT_PUBLIC_CREATORX_OPERATOR_NAME === sandboxOperatorName) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CREATORX_OPERATOR_NAME"],
+        message: "production requires a verified operator name",
+      });
+    }
+    if (
+      value.NEXT_PUBLIC_CREATORX_SUPPORT_URL &&
+      isSandboxSupportPlaceholder(value.NEXT_PUBLIC_CREATORX_SUPPORT_URL)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CREATORX_SUPPORT_URL"],
+        message: "production requires a verified support URL",
+      });
+    }
+    if (
+      value.NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT?.toLowerCase() ===
+      sandboxPrivacyContact.toLowerCase()
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT"],
+        message: "production requires a verified privacy contact",
       });
     }
     for (const key of [
@@ -162,12 +257,11 @@ export function parseRuntimeConfig(
     brandIconUrl: value.NEXT_PUBLIC_CREATORX_ICON_URL ?? null,
     legal: {
       operatorName:
-        value.NEXT_PUBLIC_CREATORX_OPERATOR_NAME ?? "CreatorX 개발팀",
+        value.NEXT_PUBLIC_CREATORX_OPERATOR_NAME ?? sandboxOperatorName,
       supportUrl:
-        value.NEXT_PUBLIC_CREATORX_SUPPORT_URL ??
-        "https://github.com/ohe1013/youtube-creator-investment/issues",
+        value.NEXT_PUBLIC_CREATORX_SUPPORT_URL ?? sandboxSupportUrl,
       privacyContact:
-        value.NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT ?? "GitHub Issues",
+        value.NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT ?? sandboxPrivacyContact,
       effectiveDate:
         value.NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE ?? "2026-07-10",
     },
