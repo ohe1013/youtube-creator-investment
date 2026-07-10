@@ -210,6 +210,21 @@ function attempt(signature: string, idempotencyKey: string): OrderAttempt {
   return orderAttemptSchema.parse({ signature, idempotencyKey });
 }
 
+type SettlementRecordState =
+  | "absent"
+  | "different"
+  | "exact-pending"
+  | "exact-settled";
+
+function settlementRecordState(
+  record: PersistedAttempt | null,
+  idempotencyKey: string,
+): SettlementRecordState {
+  if (record === null) return "absent";
+  if (record.idempotencyKey !== idempotencyKey) return "different";
+  return record.status === "settled" ? "exact-settled" : "exact-pending";
+}
+
 export function createMemoryOrderAttemptStore(): OrderAttemptStore {
   const records = new Map<string, PersistedAttempt>();
   const leases = new Set<string>();
@@ -361,37 +376,97 @@ export function createPersistentOrderAttemptStore(
           volatileSettledKeys.set(key, expected.idempotencyKey);
           return { storageConcern: storageConcern(error) };
         }
-        if (
-          current === null ||
-          current.idempotencyKey !== expected.idempotencyKey
-        ) {
+        const initialState = settlementRecordState(
+          current,
+          expected.idempotencyKey,
+        );
+        if (initialState === "absent" || initialState === "different") {
           return { storageConcern: null };
         }
 
         let concern: CreatorXClientError | null = null;
-        if (current.status === "pending") {
-          try {
-            await write(key, {
-              status: "settled",
-              idempotencyKey: expected.idempotencyKey,
-            });
-          } catch (error) {
-            concern = storageConcern(error);
-            let stored: PersistedAttempt | null = null;
+        let durableBarrier = initialState === "exact-settled";
+        let lastReadState: SettlementRecordState = initialState;
+
+        if (!durableBarrier) {
+          for (let writeAttempt = 0; writeAttempt < 2; writeAttempt += 1) {
             try {
-              stored = await read(key);
-            } catch {
-              // The in-memory barrier below remains authoritative in this runtime.
-            }
-            if (
-              stored?.status !== "settled" ||
-              stored.idempotencyKey !== expected.idempotencyKey
-            ) {
-              if (
-                stored?.status !== "pending" ||
-                stored.idempotencyKey === expected.idempotencyKey
-              ) {
+              await write(key, {
+                status: "settled",
+                idempotencyKey: expected.idempotencyKey,
+              });
+              durableBarrier = true;
+              break;
+            } catch (error) {
+              concern ??= storageConcern(error);
+              try {
+                lastReadState = settlementRecordState(
+                  await read(key),
+                  expected.idempotencyKey,
+                );
+              } catch (readError) {
                 volatileSettledKeys.set(key, expected.idempotencyKey);
+                concern ??= storageConcern(readError);
+                return { storageConcern: concern };
+              }
+              if (lastReadState === "exact-settled") {
+                durableBarrier = true;
+                break;
+              }
+              if (lastReadState === "absent") {
+                volatileSettledKeys.delete(key);
+                return { storageConcern: concern };
+              }
+              if (lastReadState === "different") {
+                return { storageConcern: concern };
+              }
+            }
+          }
+
+          if (!durableBarrier) {
+            try {
+              lastReadState = settlementRecordState(
+                await read(key),
+                expected.idempotencyKey,
+              );
+            } catch (error) {
+              volatileSettledKeys.set(key, expected.idempotencyKey);
+              concern ??= storageConcern(error);
+              return { storageConcern: concern };
+            }
+            if (lastReadState === "exact-settled") {
+              durableBarrier = true;
+            } else if (lastReadState === "absent") {
+              volatileSettledKeys.delete(key);
+              return { storageConcern: concern };
+            } else if (lastReadState === "different") {
+              return { storageConcern: concern };
+            } else {
+              try {
+                await remove(key);
+              } catch (error) {
+                volatileSettledKeys.set(key, expected.idempotencyKey);
+                concern ??= storageConcern(error);
+                return { storageConcern: concern };
+              }
+              try {
+                lastReadState = settlementRecordState(
+                  await read(key),
+                  expected.idempotencyKey,
+                );
+              } catch (error) {
+                volatileSettledKeys.set(key, expected.idempotencyKey);
+                concern ??= storageConcern(error);
+                return { storageConcern: concern };
+              }
+              if (
+                lastReadState === "absent" ||
+                lastReadState === "exact-settled"
+              ) {
+                volatileSettledKeys.delete(key);
+              } else if (lastReadState === "exact-pending") {
+                volatileSettledKeys.set(key, expected.idempotencyKey);
+                concern ??= storageError();
               }
               return { storageConcern: concern };
             }
@@ -403,6 +478,20 @@ export function createPersistentOrderAttemptStore(
           await remove(key);
         } catch (error) {
           concern ??= storageConcern(error);
+          return { storageConcern: concern };
+        }
+        try {
+          lastReadState = settlementRecordState(
+            await read(key),
+            expected.idempotencyKey,
+          );
+        } catch (error) {
+          concern ??= storageConcern(error);
+          return { storageConcern: concern };
+        }
+        if (lastReadState === "exact-pending") {
+          volatileSettledKeys.set(key, expected.idempotencyKey);
+          concern ??= storageError();
         }
         return { storageConcern: concern };
       });

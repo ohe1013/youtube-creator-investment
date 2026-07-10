@@ -176,6 +176,119 @@ describe("persistent order attempt store", () => {
     });
   });
 
+  it("survives a module restart after a one-shot precommit settled-write failure", async () => {
+    const backing: SharedBacking = new Map();
+    let failSettledWrite = true;
+    const firstView = createPersistentOrderAttemptStore(
+      adapter(backing, {
+        async setItem(key, value) {
+          const next = JSON.parse(value) as { status?: string };
+          if (next.status === "settled" && failSettledWrite) {
+            failSettledWrite = false;
+            throw new Error("native settled write failed before commit");
+          }
+          backing.set(key, value);
+        },
+      }),
+      "restart-precommit-device",
+    );
+    const first = await firstView.resolve(
+      SIGNATURE_A,
+      keyFactory("attempt-key-1"),
+    );
+
+    await expect(firstView.settle(first)).resolves.toMatchObject({
+      storageConcern: { code: "STORAGE_UNAVAILABLE" },
+    });
+
+    vi.resetModules();
+    const restartedModule = await import("@/lib/orders/order-attempt-store");
+    const restartedView = restartedModule.createPersistentOrderAttemptStore(
+      adapter(backing),
+      "restart-precommit-device",
+    );
+    await expect(
+      restartedView.resolve(SIGNATURE_A, keyFactory("attempt-key-2")),
+    ).resolves.toMatchObject({ idempotencyKey: "attempt-key-2" });
+  });
+
+  it("removes an exact pending record as a durable fallback after bounded settled-write retries", async () => {
+    const backing: SharedBacking = new Map();
+    const settledWrites = vi.fn();
+    const removeItem = vi.fn(async (key: string) => {
+      backing.delete(key);
+    });
+    const firstView = createPersistentOrderAttemptStore(
+      adapter(backing, {
+        async setItem(key, value) {
+          const next = JSON.parse(value) as { status?: string };
+          if (next.status === "settled") {
+            settledWrites();
+            throw new Error("native settled writes unavailable");
+          }
+          backing.set(key, value);
+        },
+        removeItem,
+      }),
+      "restart-remove-fallback-device",
+    );
+    const first = await firstView.resolve(
+      SIGNATURE_A,
+      keyFactory("attempt-key-1"),
+    );
+
+    await expect(firstView.settle(first)).resolves.toMatchObject({
+      storageConcern: { code: "STORAGE_UNAVAILABLE" },
+    });
+    expect(settledWrites).toHaveBeenCalledTimes(2);
+    expect(removeItem).toHaveBeenCalledTimes(1);
+    expect(record(backing, "attempt-key-1")).toBeNull();
+
+    vi.resetModules();
+    const restartedModule = await import("@/lib/orders/order-attempt-store");
+    const restartedView = restartedModule.createPersistentOrderAttemptStore(
+      adapter(backing),
+      "restart-remove-fallback-device",
+    );
+    await expect(
+      restartedView.resolve(SIGNATURE_A, keyFactory("attempt-key-2")),
+    ).resolves.toMatchObject({ idempotencyKey: "attempt-key-2" });
+  });
+
+  it("retains a runtime barrier when settled writes and exact pending removal all fail", async () => {
+    const backing: SharedBacking = new Map();
+    const firstView = createPersistentOrderAttemptStore(
+      adapter(backing, {
+        async setItem(key, value) {
+          const next = JSON.parse(value) as { status?: string };
+          if (next.status === "settled") {
+            throw new Error("native settled writes unavailable");
+          }
+          backing.set(key, value);
+        },
+        async removeItem() {
+          throw new Error("native removal unavailable");
+        },
+      }),
+      "runtime-barrier-device",
+    );
+    const first = await firstView.resolve(
+      SIGNATURE_A,
+      keyFactory("attempt-key-1"),
+    );
+
+    await expect(firstView.settle(first)).resolves.toMatchObject({
+      storageConcern: { code: "STORAGE_UNAVAILABLE" },
+    });
+    const freshView = createPersistentOrderAttemptStore(
+      adapter(backing),
+      "runtime-barrier-device",
+    );
+    await expect(
+      freshView.resolve(SIGNATURE_A, keyFactory("attempt-key-2")),
+    ).resolves.toMatchObject({ idempotencyKey: "attempt-key-2" });
+  });
+
   it("reads back a settled barrier when native storage commits and then throws", async () => {
     const backing: SharedBacking = new Map();
     const commitThenThrow = adapter(backing, {
