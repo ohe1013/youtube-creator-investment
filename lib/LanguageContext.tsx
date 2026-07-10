@@ -1,18 +1,56 @@
 "use client";
 
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useSyncExternalStore } from "react";
 import { locales, LocaleType } from "./locales";
 
 type TranslationRecord = Record<string, unknown>;
+type LocaleStoreListener = () => void;
+
+const DEFAULT_LOCALE: LocaleType = "ko";
+const LOCALE_STORAGE_KEY = "locale";
+const LOCALE_CHANGE_EVENT = "creatorx:locale-change";
 
 const isLocale = (value: string | null): value is LocaleType =>
   value === "en" || value === "ko";
 
-const getInitialLocale = (): LocaleType => {
-  if (typeof window === "undefined") return "ko";
+const getServerLocale = (): LocaleType => DEFAULT_LOCALE;
 
-  const savedLocale = window.localStorage.getItem("locale");
-  return isLocale(savedLocale) ? savedLocale : "ko";
+const getClientLocale = (): LocaleType => {
+  if (typeof window === "undefined") return getServerLocale();
+
+  try {
+    const savedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    return isLocale(savedLocale) ? savedLocale : DEFAULT_LOCALE;
+  } catch {
+    return DEFAULT_LOCALE;
+  }
+};
+
+const subscribeToLocale = (listener: LocaleStoreListener): (() => void) => {
+  if (typeof window === "undefined") return () => undefined;
+
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === LOCALE_STORAGE_KEY || event.key === null) listener();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(LOCALE_CHANGE_EVENT, listener);
+
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(LOCALE_CHANGE_EVENT, listener);
+  };
+};
+
+const setStoredLocale = (newLocale: LocaleType) => {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, newLocale);
+  } catch {
+    return;
+  }
+
+  window.dispatchEvent(new window.Event(LOCALE_CHANGE_EVENT));
 };
 
 const isTranslationRecord = (value: unknown): value is TranslationRecord =>
@@ -43,14 +81,11 @@ const LanguageContext = createContext<LanguageContextType | undefined>(
 );
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<LocaleType>(getInitialLocale);
-
-  const setLocale = (newLocale: LocaleType) => {
-    setLocaleState(newLocale);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("locale", newLocale);
-    }
-  };
+  const locale = useSyncExternalStore(
+    subscribeToLocale,
+    getClientLocale,
+    getServerLocale,
+  );
 
   const t = (key: string): string => {
     const localeData = locales[locale];
@@ -79,7 +114,9 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <LanguageContext.Provider value={{ locale, setLocale, t }}>
+    <LanguageContext.Provider
+      value={{ locale, setLocale: setStoredLocale, t }}
+    >
       {children}
     </LanguageContext.Provider>
   );
