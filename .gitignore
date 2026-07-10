@@ -42,6 +42,7 @@ prisma_push_error.txt
 # local ide settings
 .vscode/
 .idea/
+.worktrees/
 *.swp
 *.swo
 
