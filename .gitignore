@@ -30,6 +30,8 @@
 .env.development.local
 .env.test.local
 .env.production.local
+!.env.example
+!.env.test.example
 
 # debug and logs
 *.log

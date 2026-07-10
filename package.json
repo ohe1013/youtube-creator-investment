@@ -2,18 +2,30 @@
   "name": "youtube-creator-investment",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": "24.18.x",
+    "npm": "11.16.x"
+  },
   "scripts": {
     "dev": "next dev",
     "dev:appintoss": "node scripts/appintoss-dev.mjs",
     "build": "next build",
     "build:appintoss": "node scripts/appintoss-build.mjs",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "build:ait": "ait build",
+    "verify:artifact": "node scripts/verify-ait-artifact.mjs",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run build:ait && npm run verify:artifact",
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@auth/prisma-adapter": "^2.11.1",
     "@apps-in-toss/web-framework": "^2.0.0",
+    "@auth/prisma-adapter": "^2.11.1",
     "@prisma/client": "^5.21.1",
     "date-fns": "^4.1.0",
     "lightweight-charts": "^5.1.0",
@@ -27,17 +39,24 @@
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@apps-in-toss/ait-format": "1.0.0",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
     "@types/node": "^20.19.27",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "4.1.10",
     "babel-plugin-react-compiler": "1.0.0",
     "dotenv": "^17.2.3",
     "eslint": "^9",
     "eslint-config-next": "16.0.10",
+    "jsdom": "29.1.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "4.1.10"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
