@@ -7,10 +7,10 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$adbPath = Join-Path $projectRoot '.tools\android\platform-tools\adb.exe'
 $evidenceRoot = Join-Path $projectRoot '.artifacts\android'
 Import-Module (Join-Path $PSScriptRoot 'CreatorX.Android.psm1') -Force -ErrorAction Stop
 
+$adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
 $deviceResult = Invoke-CreatorXAdb -AdbPath $adbPath -Arguments @('devices', '-l')
 if ($deviceResult.ExitCode -ne 0) {
     throw "ADB_COMMAND_FAILED $($deviceResult.Output -join ' ')"
@@ -24,6 +24,7 @@ $outputPath = Join-Path $evidenceRoot "logcat-$timestamp.txt"
 $adbArguments = @('-s', [string] $device.Serial, 'logcat', '-v', 'threadtime')
 
 Write-Output "[PASS] LOGCAT_CAPTURING $outputPath"
+$adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
 & $adbPath @adbArguments 2>&1 |
     ForEach-Object { [string] $_ } |
     Tee-Object -FilePath $outputPath

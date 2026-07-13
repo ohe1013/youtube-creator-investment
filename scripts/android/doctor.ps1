@@ -18,7 +18,6 @@ $script:HasBlocked = $false
 $requiredPorts = @(8081, 5173, 3000)
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $modulePath = Join-Path $PSScriptRoot 'CreatorX.Android.psm1'
-$adbPath = Join-Path $projectRoot '.tools\android\platform-tools\adb.exe'
 $graniteConfigPath = Join-Path $projectRoot 'granite.config.ts'
 
 Import-Module $modulePath -Force -ErrorAction Stop
@@ -117,10 +116,26 @@ try {
     }
 
     $selectedDevice = $null
-    if (-not (Test-Path -LiteralPath $adbPath -PathType Leaf)) {
-        Write-CreatorXDoctorResult FAIL ADB_MISSING "Run sandbox:android:install-tools; adb is missing at '$adbPath'."
-    } else {
-        Write-CreatorXDoctorResult PASS ADB_READY "Project-local adb found at '$adbPath'."
+    $adbPath = $null
+    try {
+        $adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
+        Write-CreatorXDoctorResult PASS ADB_READY "Project-local adb integrity validated at '$adbPath'."
+    } catch {
+        $adbFailure = $_.Exception.Message
+        if ($adbFailure.StartsWith('ADB_MISSING')) {
+            Write-CreatorXDoctorResult FAIL ADB_MISSING $adbFailure
+        } elseif (
+            $adbFailure.StartsWith('ADB_INTEGRITY_MISMATCH') -or
+            $adbFailure.StartsWith('UNSAFE_REPARSE_POINT') -or
+            $adbFailure.StartsWith('UNSAFE_PATH')
+        ) {
+            Write-CreatorXDoctorResult FAIL ADB_INTEGRITY_MISMATCH $adbFailure
+        } else {
+            throw
+        }
+    }
+
+    if ($null -ne $adbPath) {
         $deviceResult = Invoke-CreatorXAdb -AdbPath $adbPath -Arguments @('devices', '-l')
         if ($deviceResult.ExitCode -ne 0) {
             Write-CreatorXDoctorResult FAIL ADB_COMMAND_FAILED ($deviceResult.Output -join ' ')

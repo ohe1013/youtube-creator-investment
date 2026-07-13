@@ -182,6 +182,88 @@ exit 7
     }
 }
 
+Describe 'Project-local adb integrity' {
+    BeforeEach {
+        $script:PlatformToolsPath = Join-Path $TestDrive 'platform-tools'
+        $script:AdbPath = Join-Path $script:PlatformToolsPath 'adb.exe'
+        New-Item -ItemType Directory -Path $script:PlatformToolsPath -Force | Out-Null
+        [System.IO.File]::WriteAllBytes(
+            $script:AdbPath,
+            [System.Text.Encoding]::UTF8.GetBytes('trusted-adb-content')
+        )
+        'Pkg.Revision=37.0.1' |
+            Set-Content -LiteralPath (Join-Path $script:PlatformToolsPath 'source.properties') -Encoding ASCII
+        $script:TrustedAdbSha256 = (
+            Get-FileHash -LiteralPath $script:AdbPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+    }
+
+    It 'accepts a normal installation only when revision and adb hash match' {
+        Test-CreatorXPlatformToolsInstallation `
+            -PlatformToolsPath $script:PlatformToolsPath `
+            -Revision '37.0.1' `
+            -AdbSha256 $script:TrustedAdbSha256 |
+            Should -BeTrue
+    }
+
+    It 'rejects an installation after adb content no longer matches the pinned hash' {
+        [System.IO.File]::AppendAllText($script:AdbPath, '-tampered')
+
+        Test-CreatorXPlatformToolsInstallation `
+            -PlatformToolsPath $script:PlatformToolsPath `
+            -Revision '37.0.1' `
+            -AdbSha256 $script:TrustedAdbSha256 |
+            Should -BeFalse
+    }
+
+    It 'returns the validated project-local adb path and emits a stable mismatch code' {
+        $projectRoot = Join-Path $TestDrive 'project'
+        $installedPath = Join-Path $projectRoot '.tools\android\platform-tools'
+        New-Item -ItemType Directory -Path $installedPath -Force | Out-Null
+        Copy-Item -LiteralPath $script:AdbPath -Destination (Join-Path $installedPath 'adb.exe')
+        Copy-Item `
+            -LiteralPath (Join-Path $script:PlatformToolsPath 'source.properties') `
+            -Destination (Join-Path $installedPath 'source.properties')
+        $pinPath = Join-Path $TestDrive 'platform-tools.test.json'
+        @{
+            revision = '37.0.1'
+            adbSha256 = $script:TrustedAdbSha256
+        } | ConvertTo-Json | Set-Content -LiteralPath $pinPath -Encoding UTF8
+
+        Get-CreatorXAdbPath -ProjectRoot $projectRoot -PinPath $pinPath |
+            Should -Be (Join-Path $installedPath 'adb.exe')
+
+        [System.IO.File]::AppendAllText((Join-Path $installedPath 'adb.exe'), '-tampered')
+        {
+            Get-CreatorXAdbPath -ProjectRoot $projectRoot -PinPath $pinPath
+        } | Should -Throw -ExpectedMessage '*ADB_INTEGRITY_MISMATCH*'
+    }
+}
+
+Describe 'Android tools mutation safety' {
+    It 'rejects a junction beneath .tools without touching its target' {
+        $projectRoot = Join-Path $TestDrive 'project'
+        $toolsParent = Join-Path $projectRoot '.tools'
+        $junctionPath = Join-Path $toolsParent 'android'
+        $outsideTarget = Join-Path $TestDrive 'outside-target'
+        $outsidePlatformTools = Join-Path $outsideTarget 'platform-tools'
+        $sentinel = Join-Path $outsidePlatformTools 'keep.txt'
+        New-Item -ItemType Directory -Path $toolsParent -Force | Out-Null
+        New-Item -ItemType Directory -Path $outsidePlatformTools -Force | Out-Null
+        'must-survive' | Set-Content -LiteralPath $sentinel -Encoding ASCII
+        New-Item -ItemType Junction -Path $junctionPath -Target $outsideTarget | Out-Null
+
+        {
+            Remove-CreatorXAndroidPath `
+                -Path (Join-Path $junctionPath 'platform-tools') `
+                -ProjectRoot $projectRoot
+        } | Should -Throw -ExpectedMessage '*UNSAFE_REPARSE_POINT*'
+
+        Test-Path -LiteralPath $sentinel -PathType Leaf | Should -BeTrue
+        Get-Content -LiteralPath $sentinel -Raw | Should -Match '^must-survive'
+    }
+}
+
 Describe 'Pinned platform-tools installer contract' {
     It 'pins the approved Android Platform Tools archive' {
         $pinPath = Join-Path $script:AndroidRoot 'platform-tools.json'
@@ -191,6 +273,7 @@ Describe 'Pinned platform-tools installer contract' {
         $pin.uri | Should -Be 'https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip'
         [long] $pin.size | Should -Be 8044994
         $pin.sha1 | Should -Be '10f2ef5325bc5705d48d38a0aa900c7babda24fa'
+        $pin.adbSha256 | Should -Be '7c1249b9fcec9a29d520c42d48e4b99db7f0e36a2b17e90ae32aa6be6c19c627'
     }
 
     It 'refuses installation without explicit license acceptance' {
@@ -201,15 +284,6 @@ Describe 'Pinned platform-tools installer contract' {
         ($output -join "`n") | Should -Match 'ACCEPT_LICENSE_REQUIRED'
     }
 
-    It 'contains integrity, revision, atomic move, and guarded cleanup checks' {
-        $installer = Get-Content -LiteralPath (Join-Path $script:AndroidRoot 'install-platform-tools.ps1') -Raw
-
-        $installer | Should -Match 'Get-FileHash'
-        $installer | Should -Match 'source\.properties'
-        $installer | Should -Match 'Move-Item'
-        $installer | Should -Match 'Assert-CreatorXChildPath'
-        $installer | Should -Not -Match 'Invoke-Expression'
-    }
 }
 
 Describe 'Android command scripts' {
@@ -222,6 +296,7 @@ Describe 'Android command scripts' {
         foreach ($code in @(
             'NODE_VERSION_MISMATCH',
             'ADB_MISSING',
+            'ADB_INTEGRITY_MISMATCH',
             'DEVICE_MISSING',
             'DEVICE_UNAUTHORIZED',
             'DEVICE_OFFLINE',
@@ -234,6 +309,7 @@ Describe 'Android command scripts' {
         )) {
             $doctor | Should -Match $code
         }
+        $doctor | Should -Match 'Get-CreatorXAdbPath'
         $doctor | Should -Not -Match 'Stop-Process'
     }
 
@@ -243,6 +319,7 @@ Describe 'Android command scripts' {
         foreach ($port in @(8081, 5173, 3000)) {
             $reverse | Should -Match ([string] $port)
         }
+        $reverse | Should -Match 'Get-CreatorXAdbPath'
         $reverse | Should -Match 'Test-CreatorXReverseRules'
     }
 
@@ -262,7 +339,9 @@ Describe 'Android command scripts' {
 
         $logcat | Should -Match '\.artifacts'
         $logcat | Should -Match 'android'
+        $logcat | Should -Match 'Get-CreatorXAdbPath'
         $screenshot | Should -Match '\.artifacts'
+        $screenshot | Should -Match 'Get-CreatorXAdbPath'
         $screenshot | Should -Match 'screencap'
         $screenshot | Should -Match "'pull'"
         $screenshot | Should -Not -Match 'exec-out.*[>]'
