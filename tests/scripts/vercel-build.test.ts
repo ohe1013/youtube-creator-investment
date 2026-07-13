@@ -57,7 +57,7 @@ describe("Vercel build gate", () => {
     expect([...log.mock.calls, ...warn.mock.calls, ...error.mock.calls].join(" ")).not.toContain(secret);
   });
 
-  it.each(["preview", "development", undefined])(
+  it.each(["preview", "development"])(
     "runs only the normal build for VERCEL_ENV=%s",
     async (vercelEnv) => {
       const { runVercelBuild } = await loadRunner();
@@ -76,6 +76,27 @@ describe("Vercel build gate", () => {
       expect(status).toBe(0);
       expect(spawn).toHaveBeenCalledTimes(1);
       expect(spawn).toHaveBeenCalledWith("npm", ["run", "build"], expect.any(Object));
+    },
+  );
+
+  it.each([undefined, "", "staging", "Production"])(
+    "fails closed without spawning a build for VERCEL_ENV=%s",
+    async (vercelEnv) => {
+      const { runVercelBuild } = await loadRunner();
+      const spawn = vi.fn().mockReturnValue({ status: 0 });
+
+      const status = runVercelBuild({
+        cwd: "/workspace",
+        env: {
+          NODE_ENV: "test",
+          ...(vercelEnv === undefined ? {} : { VERCEL_ENV: vercelEnv }),
+        },
+        platform: "linux",
+        spawn,
+      });
+
+      expect(status).toBe(1);
+      expect(spawn).not.toHaveBeenCalled();
     },
   );
 
@@ -104,5 +125,32 @@ describe("Vercel build gate", () => {
 
     expect(npmExecutable("win32")).toBe("npm.cmd");
     expect(npmExecutable("linux")).toBe("npm");
+  });
+
+  it("uses a Windows shell command for fixed npm script names", async () => {
+    const { runVercelBuild } = await loadRunner();
+    const spawn = vi.fn().mockReturnValue({ status: 0 });
+    const env = { NODE_ENV: "test" as const, VERCEL_ENV: "production" };
+
+    const status = runVercelBuild({
+      cwd: "C:\\workspace",
+      env,
+      platform: "win32",
+      spawn,
+    });
+
+    expect(status).toBe(0);
+    expect(spawn).toHaveBeenNthCalledWith(
+      1,
+      "npm.cmd run production:preflight",
+      [],
+      { cwd: "C:\\workspace", env, shell: true, stdio: "inherit" },
+    );
+    expect(spawn).toHaveBeenNthCalledWith(
+      2,
+      "npm.cmd run build",
+      [],
+      { cwd: "C:\\workspace", env, shell: true, stdio: "inherit" },
+    );
   });
 });

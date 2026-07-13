@@ -6,22 +6,44 @@ export function npmExecutable(platform = process.platform) {
   return platform === "win32" ? "npm.cmd" : "npm";
 }
 
+function scriptsForVercelEnvironment(vercelEnv) {
+  switch (vercelEnv) {
+    case "production":
+      return ["production:preflight", "build"];
+    case "preview":
+    case "development":
+      return ["build"];
+    default:
+      return null;
+  }
+}
+
 export function runVercelBuild({
   cwd = process.cwd(),
   env = process.env,
   platform = process.platform,
   spawn = spawnSync,
 } = {}) {
-  const scripts = env.VERCEL_ENV === "production"
-    ? ["production:preflight", "build"]
-    : ["build"];
+  const scripts = scriptsForVercelEnvironment(env.VERCEL_ENV);
+
+  if (!scripts) {
+    return 1;
+  }
+
+  const isWindows = platform === "win32";
+  const npm = npmExecutable(platform);
 
   for (const script of scripts) {
-    const result = spawn(npmExecutable(platform), ["run", script], {
-      cwd,
-      env,
-      stdio: "inherit",
-    });
+    const result = spawn(
+      isWindows ? `${npm} run ${script}` : npm,
+      isWindows ? [] : ["run", script],
+      {
+        cwd,
+        env,
+        ...(isWindows ? { shell: true } : {}),
+        stdio: "inherit",
+      },
+    );
 
     if (result.error) {
       throw result.error;

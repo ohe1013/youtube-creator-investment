@@ -4,7 +4,7 @@
 
 This runbook prepares a production deployment; it does not create a Vercel project, Supabase project, database, domain, Toss credential, or secret. Store production values only in the Vercel Production environment scope (or an equivalent managed secret store). Do not commit them to `.env*`, `vercel.json`, shell history, screenshots, release evidence, or tickets.
 
-Vercel deploys the server/API with `npm run build`. Do not use `build:appintoss` as Vercel's build command: that command intentionally hides `app/api` to create a static App-in-Toss bundle.
+Vercel's configured build command runs `node scripts/vercel-build.mjs`. Explicitly expose Vercel's system `VERCEL_ENV` variable to the build environment: exact `production` runs `production:preflight` before the normal build, exact `preview` and `development` run the normal build, and an absent or unsupported value fails closed before any build starts. Do not use `build:appintoss` as Vercel's build command: that command intentionally hides `app/api` to create a static App-in-Toss bundle.
 
 ## Production environment mapping
 
