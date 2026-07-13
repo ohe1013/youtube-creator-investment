@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import {
   placeOrderRequestSchema,
+  type CancelOrderResult as TradingCancelOrderResult,
+  type PlaceOrderResult as TradingPlaceOrderResult,
 } from "@/lib/contracts/trading";
 import { decimalStringSchema } from "@/lib/contracts/decimal";
 
@@ -139,6 +141,81 @@ export const orderSchema = z.object({
 });
 
 export type Order = z.infer<typeof orderSchema>;
+
+export const tradingOrderSchema = z
+  .object({
+    id: identifierSchema,
+    userId: identifierSchema,
+    creatorId: identifierSchema,
+    side: z.enum(["BUY", "SELL"]),
+    orderType: z.enum(["LIMIT", "MARKET"]),
+    price: decimalStringSchema,
+    quantity: decimalStringSchema,
+    filled: decimalStringSchema,
+    reservedQuote: decimalStringSchema,
+    reservedQuantity: decimalStringSchema,
+    status: z.enum(["OPEN", "PARTIAL", "FILLED", "CANCELLED"]),
+    completedAt: isoDateTime.nullable(),
+    cancelReason: z.string().nullable(),
+    createdAt: isoDateTime,
+    updatedAt: isoDateTime,
+  })
+  .strict();
+
+const tradingPositionSchema = z
+  .object({
+    id: identifierSchema,
+    creatorId: identifierSchema,
+    quantity: decimalStringSchema,
+    reservedQuantity: decimalStringSchema,
+    avgPrice: decimalStringSchema,
+    createdAt: isoDateTime,
+    updatedAt: isoDateTime,
+  })
+  .strict();
+
+const tradingExecutionSchema = z
+  .object({
+    id: identifierSchema,
+    creatorId: identifierSchema,
+    side: z.enum(["BUY", "SELL"]),
+    price: decimalStringSchema,
+    quantity: decimalStringSchema,
+    quoteAmount: decimalStringSchema,
+    executedAt: isoDateTime,
+  })
+  .strict();
+
+export const tradingPortfolioSchema = z
+  .object({
+    balance: decimalStringSchema,
+    reservedBalance: decimalStringSchema,
+    availableBalance: decimalStringSchema,
+    positions: z.array(tradingPositionSchema),
+    openOrders: z.array(tradingOrderSchema),
+    executions: z.array(tradingExecutionSchema),
+  })
+  .strict();
+
+export const placeOrderResultSchema = z
+  .object({
+    responseStatus: z.literal(201),
+    order: tradingOrderSchema,
+    portfolio: tradingPortfolioSchema,
+  })
+  .strict();
+
+export type PlaceOrderResult = TradingPlaceOrderResult;
+
+export const cancelOrderResultSchema = z
+  .object({
+    responseStatus: z.literal(200),
+    order: tradingOrderSchema,
+    portfolio: tradingPortfolioSchema,
+  })
+  .strict();
+
+export type CancelOrderResult = TradingCancelOrderResult;
 
 const openOrderSchema = orderSchema.extend({
   status: z.enum(["OPEN", "PARTIAL"]),
@@ -285,9 +362,9 @@ export interface CreatorXDataClient {
   placeOrder(
     input: PlaceOrderInput,
     options?: RequestOptions & { idempotencyKey?: string },
-  ): Promise<Order>;
+  ): Promise<PlaceOrderResult>;
   cancelOrder(
     id: string,
     options?: RequestOptions & { idempotencyKey?: string },
-  ): Promise<void>;
+  ): Promise<CancelOrderResult>;
 }

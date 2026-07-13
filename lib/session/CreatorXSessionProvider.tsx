@@ -383,6 +383,7 @@ export function RemoteGuestSessionAdapter({
   }, [establishAuthenticatedSession, sessionClient, tokenRuntime]);
 
   const signOut = useCallback(async () => {
+    latestAttempt.current += 1;
     await tokenRuntime.clear();
     setState({ status: "unauthenticated", balance: 0, error: null });
   }, [tokenRuntime]);
@@ -537,6 +538,7 @@ function EnabledTossLoginSession({
   }, [establishAuthenticatedSession, tokenRuntime, tossLoginClient]);
 
   const signOut = useCallback(async () => {
+    latestAttempt.current += 1;
     const accessToken = await tokenRuntime.getAccessToken();
     try {
       if (accessToken !== null && tossLoginClient !== null) {

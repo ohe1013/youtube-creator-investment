@@ -1,7 +1,12 @@
 import "server-only";
 
+import type { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/prisma";
-import type { YouTubeClient } from "@/lib/server/youtube/youtube-client";
+import type {
+  RecentVideo,
+  YouTubeClient,
+} from "@/lib/server/youtube/youtube-client";
 
 function utcDay(date = new Date()): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -15,6 +20,36 @@ type RefreshableCreator = {
   currentViews: number;
   currentVideos: number;
 };
+
+type CreatorVideoStore = Pick<Prisma.TransactionClient, "video">;
+
+export async function persistCreatorVideo(
+  store: CreatorVideoStore,
+  creatorId: string,
+  video: RecentVideo,
+): Promise<void> {
+  const data = {
+    title: video.title,
+    thumbnailUrl: video.thumbnailUrl,
+    publishedAt: new Date(video.publishedAt),
+    duration: video.duration,
+    type: video.type,
+    viewCount: video.viewCount,
+    likeCount: video.likeCount,
+    commentCount: video.commentCount,
+  };
+
+  const ownVideo = await store.video.updateMany({
+    where: { id: video.id, creatorId },
+    data,
+  });
+  if (ownVideo.count > 0) return;
+
+  await store.video.createMany({
+    data: [{ id: video.id, creatorId, ...data }],
+    skipDuplicates: true,
+  });
+}
 
 export async function refreshCreator(
   creator: RefreshableCreator,
@@ -37,36 +72,7 @@ export async function refreshCreator(
 
   await prisma.$transaction(async (tx) => {
     for (const video of videos) {
-      const existing = await tx.video.findUnique({
-        where: { id: video.id },
-        select: { creatorId: true },
-      });
-      if (existing && existing.creatorId !== creator.id) continue;
-      await tx.video.upsert({
-        where: { id: video.id },
-        update: {
-          title: video.title,
-          thumbnailUrl: video.thumbnailUrl,
-          publishedAt: new Date(video.publishedAt),
-          duration: video.duration,
-          type: video.type,
-          viewCount: video.viewCount,
-          likeCount: video.likeCount,
-          commentCount: video.commentCount,
-        },
-        create: {
-          id: video.id,
-          creatorId: creator.id,
-          title: video.title,
-          thumbnailUrl: video.thumbnailUrl,
-          publishedAt: new Date(video.publishedAt),
-          duration: video.duration,
-          type: video.type,
-          viewCount: video.viewCount,
-          likeCount: video.likeCount,
-          commentCount: video.commentCount,
-        },
-      });
+      await persistCreatorVideo(tx, creator.id, video);
     }
 
     await tx.creatorStat.upsert({

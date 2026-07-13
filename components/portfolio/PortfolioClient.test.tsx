@@ -4,7 +4,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { PortfolioClient } from "@/components/portfolio/PortfolioClient";
-import type { CreatorXDataClient, Portfolio } from "@/lib/data/contracts";
+import type {
+  CancelOrderResult,
+  CreatorXDataClient,
+  Portfolio,
+} from "@/lib/data/contracts";
 
 const mocks = vi.hoisted(() => ({
   client: null as unknown,
@@ -63,6 +67,14 @@ const portfolio = {
   ],
 } as unknown as Portfolio;
 
+function cancelOrderResult(): CancelOrderResult {
+  return {
+    responseStatus: 200,
+    order: { ...portfolio.openOrders[0], status: "CANCELLED" },
+    portfolio: { ...portfolio, openOrders: [] },
+  } as unknown as CancelOrderResult;
+}
+
 beforeEach(() => {
   mocks.session.status = "authenticated";
   mocks.session.identityKind = "anonymous-device";
@@ -84,7 +96,7 @@ it("cancels through the typed client then immediately reloads portfolio and sess
     .mockResolvedValue(portfolio);
   const cancelOrder = vi
     .fn<CreatorXDataClient["cancelOrder"]>()
-    .mockResolvedValue(undefined);
+    .mockResolvedValue(cancelOrderResult());
   mocks.client = { getPortfolio, cancelOrder } as unknown as CreatorXDataClient;
 
   render(<PortfolioClient />);
@@ -137,7 +149,7 @@ it("renders the server-derived portfolio execution side without a client subject
 it("locks duplicate cancellation and ignores a stale pre-cancel poll", async () => {
   vi.useFakeTimers();
   let resolveStalePoll: ((value: Portfolio) => void) | undefined;
-  let resolveCancel: (() => void) | undefined;
+  let resolveCancel: ((result: CancelOrderResult) => void) | undefined;
   const withoutOrder: Portfolio = {
     ...portfolio,
     balance: "1100" as never,
@@ -179,7 +191,7 @@ it("locks duplicate cancellation and ignores a stale pre-cancel poll", async () 
   expect(cancelOrder).toHaveBeenCalledTimes(1);
   expect(cancelButton).toBeDisabled();
 
-  resolveCancel?.();
+  resolveCancel?.(cancelOrderResult());
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();

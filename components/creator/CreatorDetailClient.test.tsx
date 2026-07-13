@@ -4,7 +4,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { CreatorDetailClient } from "@/components/creator/CreatorDetailClient";
-import type { Creator, CreatorXDataClient, Order } from "@/lib/data/contracts";
+import type {
+  Creator,
+  CreatorXDataClient,
+  Order,
+  PlaceOrderResult,
+} from "@/lib/data/contracts";
 
 const mocks = vi.hoisted(() => ({
   client: null as unknown,
@@ -72,6 +77,19 @@ const acceptedOrder = {
   updatedAt: "2026-07-10T00:00:00.000Z",
 } as unknown as Order;
 
+const acceptedResult = {
+  responseStatus: 201,
+  order: acceptedOrder,
+  portfolio: {
+    balance: "1000",
+    reservedBalance: "250",
+    availableBalance: "750",
+    positions: [],
+    openOrders: [acceptedOrder],
+    executions: [],
+  },
+} as unknown as PlaceOrderResult;
+
 beforeEach(() => {
   mocks.refresh.mockReset().mockResolvedValue(undefined);
   mocks.randomUUID.mockReset().mockReturnValue("inline-key");
@@ -88,7 +106,7 @@ it("submits the inline order through the typed client with one idempotency key",
   const getCreator = vi.fn().mockResolvedValue(creator);
   const placeOrder = vi
     .fn<CreatorXDataClient["placeOrder"]>()
-    .mockResolvedValue(acceptedOrder);
+    .mockResolvedValue(acceptedResult);
   mocks.client = {
     getCreator,
     getCreatorStats: vi.fn().mockResolvedValue([]),

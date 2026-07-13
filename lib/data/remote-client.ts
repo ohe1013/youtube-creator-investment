@@ -5,26 +5,28 @@ import {
   creatorSchema,
   creatorStatSchema,
   creatorVideoSchema,
+  cancelOrderResultSchema,
   dashboardSchema,
   historyPointSchema,
   identifierSchema,
   orderBookSchema,
-  orderSchema,
   paginatedCreatorsSchema,
+  placeOrderResultSchema,
   placeOrderInputSchema,
   portfolioSchema,
   tradeSchema,
   type Creator,
+  type CancelOrderResult,
   type CreatorQuery,
   type CreatorStat,
   type CreatorVideo,
   type CreatorXDataClient,
   type Dashboard,
   type HistoryPoint,
-  type Order,
   type OrderBook,
   type PaginatedCreators,
   type PlaceOrderInput,
+  type PlaceOrderResult,
   type Portfolio,
   type RequestOptions,
   type Trade,
@@ -53,10 +55,6 @@ const historyEnvelopeSchema = z
 const tradesEnvelopeSchema = z
   .object({ trades: z.array(tradeSchema) })
   .transform(({ trades }) => trades);
-const orderResponseSchema = z
-  .union([orderSchema, z.object({ order: orderSchema })])
-  .transform((value) => ("order" in value ? value.order : value));
-
 const flatErrorSchema = z.object({
   error: z.string(),
   code: z.string().optional(),
@@ -91,7 +89,7 @@ type RequestParameters = {
   signal?: AbortSignal;
   headers?: HeadersInit;
   body?: BodyInit;
-  allowNoContent?: boolean;
+  expectedStatus?: number;
 };
 
 function requestRejectedError(): CreatorXClientError {
@@ -410,10 +408,11 @@ export class RemoteDataClient implements CreatorXDataClient {
   async placeOrder(
     input: PlaceOrderInput,
     options: RequestOptions & { idempotencyKey?: string } = {},
-  ): Promise<Order> {
+  ): Promise<PlaceOrderResult> {
     const value = parseRequest(placeOrderInputSchema, input);
-    return await this.request(orderResponseSchema, "/api/trade", {
+    return await this.request<PlaceOrderResult>(placeOrderResultSchema, "/api/trade", {
       method: "POST",
+      expectedStatus: 201,
       signal: options.signal,
       headers: options.idempotencyKey !== undefined
         ? { "Idempotency-Key": options.idempotencyKey }
@@ -425,14 +424,14 @@ export class RemoteDataClient implements CreatorXDataClient {
   async cancelOrder(
     id: string,
     options: RequestOptions & { idempotencyKey?: string } = {},
-  ): Promise<void> {
-    await this.request(z.unknown(), `/api/orders/${this.encodedId(id)}`, {
+  ): Promise<CancelOrderResult> {
+    return await this.request<CancelOrderResult>(cancelOrderResultSchema, `/api/orders/${this.encodedId(id)}`, {
       method: "DELETE",
+      expectedStatus: 200,
       signal: options.signal,
       headers: options.idempotencyKey === undefined
         ? undefined
         : { "Idempotency-Key": options.idempotencyKey },
-      allowNoContent: true,
     });
   }
 
@@ -537,8 +536,11 @@ export class RemoteDataClient implements CreatorXDataClient {
         throw await toHttpError(response, parameters.signal);
       }
 
-      if (parameters.allowNoContent && response.status === 204) {
-        return undefined as T;
+      if (
+        parameters.expectedStatus !== undefined &&
+        response.status !== parameters.expectedStatus
+      ) {
+        throw invalidResponseError();
       }
 
       let body: unknown;

@@ -123,3 +123,84 @@ it("uses one refresh rotation when concurrent 401 handlers hold the same stale a
     "refresh-token-rotated",
   );
 });
+
+it("does not restore accepted tokens when sign-out starts during their storage write", async () => {
+  const runtimeRef: { current: CreatorXTokenRuntime | null } = { current: null };
+  render(
+    <CreatorXTokenRuntimeProvider config={config}>
+      <RuntimeProbe onRuntime={(next) => { runtimeRef.current = next; }} />
+    </CreatorXTokenRuntimeProvider>,
+  );
+  await vi.waitFor(() => expect(runtimeRef.current).not.toBeNull());
+  const runtime = runtimeRef.current;
+  if (runtime === null) throw new Error("runtime probe did not mount");
+
+  const originalSetItem = Storage.prototype.setItem;
+  const writeGate = Promise.withResolvers<void>();
+  const setItem = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation((key, value) => {
+      if (
+        key === "creatorx:session:refresh:v1" &&
+        value === "refresh-token-inflight"
+      ) {
+        return writeGate.promise.then(() => {
+          originalSetItem.call(window.localStorage, key, value);
+        }) as never;
+      }
+      return originalSetItem.call(window.localStorage, key, value);
+    });
+
+  const accepting = runtime.acceptTokens({
+    accessToken: "access-token-inflight",
+    refreshToken: "refresh-token-inflight",
+    tokenType: "Bearer",
+    expiresIn: 900,
+  });
+  await vi.waitFor(() => expect(setItem).toHaveBeenCalledTimes(1));
+  const clearing = runtime.clear();
+  writeGate.resolve();
+  await Promise.all([accepting, clearing]);
+
+  await expect(runtime.getAccessToken()).resolves.toBeNull();
+  expect(localStorage.getItem("creatorx:session:refresh:v1")).toBeNull();
+});
+
+it("does not restore a rotated refresh token when sign-out wins an in-flight rotation", async () => {
+  const runtimeRef: { current: CreatorXTokenRuntime | null } = { current: null };
+  render(
+    <CreatorXTokenRuntimeProvider config={config}>
+      <RuntimeProbe onRuntime={(next) => { runtimeRef.current = next; }} />
+    </CreatorXTokenRuntimeProvider>,
+  );
+  await vi.waitFor(() => expect(runtimeRef.current).not.toBeNull());
+  const runtime = runtimeRef.current;
+  if (runtime === null) throw new Error("runtime probe did not mount");
+
+  await runtime.acceptTokens({
+    accessToken: "access-token-stale",
+    refreshToken: "refresh-token-current",
+    tokenType: "Bearer",
+    expiresIn: 900,
+  });
+  const response = Promise.withResolvers<Response>();
+  const fetchSpy = vi.fn().mockReturnValue(response.promise);
+  vi.stubGlobal("fetch", fetchSpy);
+
+  const rotating = runtime.refreshAccessToken("access-token-stale");
+  await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+  const clearing = runtime.clear();
+  response.resolve(
+    Response.json({
+      accessToken: "access-token-rotated",
+      refreshToken: "refresh-token-rotated",
+      tokenType: "Bearer",
+      expiresIn: 900,
+    }),
+  );
+
+  await expect(rotating).resolves.toBeNull();
+  await clearing;
+  await expect(runtime.getAccessToken()).resolves.toBeNull();
+  expect(localStorage.getItem("creatorx:session:refresh:v1")).toBeNull();
+});

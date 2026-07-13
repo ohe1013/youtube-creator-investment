@@ -20,6 +20,50 @@ const ORDER_INPUT: PlaceOrderInput = {
   quantity: "2",
 };
 
+const AUTHORITATIVE_ORDER = {
+  id: "order-authoritative-1",
+  userId: "user-authoritative-1",
+  creatorId: CREATOR_ID,
+  side: "BUY",
+  orderType: "LIMIT",
+  price: "1200.0000",
+  quantity: "2.00000000",
+  filled: "0.00000000",
+  reservedQuote: "2400.0000",
+  reservedQuantity: "0.00000000",
+  status: "OPEN",
+  completedAt: null,
+  cancelReason: null,
+  createdAt: "2026-07-10T00:00:00.000Z",
+  updatedAt: "2026-07-10T00:00:00.000Z",
+};
+
+const AUTHORITATIVE_PORTFOLIO = {
+  balance: "100000.0000",
+  reservedBalance: "2400.0000",
+  availableBalance: "97600.0000",
+  positions: [],
+  openOrders: [AUTHORITATIVE_ORDER],
+  executions: [],
+};
+
+const PLACE_ORDER_RESULT = {
+  responseStatus: 201,
+  order: AUTHORITATIVE_ORDER,
+  portfolio: AUTHORITATIVE_PORTFOLIO,
+};
+
+const CANCEL_ORDER_RESULT = {
+  responseStatus: 200,
+  order: { ...AUTHORITATIVE_ORDER, status: "CANCELLED" },
+  portfolio: {
+    ...AUTHORITATIVE_PORTFOLIO,
+    reservedBalance: "0.0000",
+    availableBalance: "100000.0000",
+    openOrders: [],
+  },
+};
+
 function createFetchMock() {
   return vi.fn<typeof fetch>();
 }
@@ -448,9 +492,8 @@ describe("RemoteDataClient", () => {
   );
 
   it("sends credentials, a non-null bearer, JSON, the signal, and the caller idempotency key", async () => {
-    const fixture = await createWireFixtures();
     const fetchFn = createFetchMock().mockResolvedValue(
-      Response.json({ order: fixture.order }),
+      Response.json(PLACE_ORDER_RESULT, { status: 201 }),
     );
     const getAccessToken = vi.fn().mockResolvedValue("access-token");
     const signal = new AbortController().signal;
@@ -465,7 +508,7 @@ describe("RemoteDataClient", () => {
         signal,
         idempotencyKey: "caller-key-123",
       }),
-    ).resolves.toEqual(fixture.order);
+    ).resolves.toEqual(PLACE_ORDER_RESULT);
 
     expect(getAccessToken).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledWith(
@@ -485,10 +528,54 @@ describe("RemoteDataClient", () => {
     expect(headers.get("Idempotency-Key")).toBe("caller-key-123");
   });
 
-  it("omits authorization for a null token and accepts a direct order response", async () => {
-    const fixture = await createWireFixtures();
+  it.each([
+    ["a raw order", AUTHORITATIVE_ORDER],
+    ["a legacy order envelope", { order: AUTHORITATIVE_ORDER }],
+    [
+      "a result missing the authoritative portfolio",
+      { responseStatus: 201, order: AUTHORITATIVE_ORDER },
+    ],
+    [
+      "a result with the wrong response status",
+      { ...PLACE_ORDER_RESULT, responseStatus: 200 },
+    ],
+  ])("rejects %s from a place-order response", async (_label, body) => {
     const fetchFn = createFetchMock().mockResolvedValue(
-      Response.json(fixture.order),
+      Response.json(body, { status: 201 }),
+    );
+    const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
+
+    await expect(client.placeOrder(ORDER_INPUT)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      retryable: false,
+    });
+  });
+
+  it.each([
+    ["a 204 response", new Response(null, { status: 204 })],
+    ["an empty 200 response", new Response(null, { status: 200 })],
+    ["a loose JSON response", Response.json({ success: true })],
+    [
+      "a result missing the authoritative portfolio",
+      Response.json({ responseStatus: 200, order: CANCEL_ORDER_RESULT.order }),
+    ],
+    [
+      "a result with the wrong response status",
+      Response.json({ ...CANCEL_ORDER_RESULT, responseStatus: 201 }),
+    ],
+  ])("rejects %s from a cancellation response", async (_label, response) => {
+    const fetchFn = createFetchMock().mockResolvedValue(response);
+    const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
+
+    await expect(client.cancelOrder("order-1")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      retryable: false,
+    });
+  });
+
+  it("omits authorization for a null token and accepts an authoritative order result", async () => {
+    const fetchFn = createFetchMock().mockResolvedValue(
+      Response.json(PLACE_ORDER_RESULT, { status: 201 }),
     );
     const client = new RemoteDataClient({
       baseUrl: API_BASE_URL,
@@ -496,18 +583,15 @@ describe("RemoteDataClient", () => {
       getAccessToken: async () => null,
     });
 
-    await expect(client.placeOrder(ORDER_INPUT)).resolves.toEqual(
-      fixture.order,
-    );
+    await expect(client.placeOrder(ORDER_INPUT)).resolves.toEqual(PLACE_ORDER_RESULT);
     const headers = new Headers(fetchFn.mock.calls[0][1]?.headers);
     expect(headers.has("Authorization")).toBe(false);
     expect(headers.has("Idempotency-Key")).toBe(false);
   });
 
   it("forwards an explicitly supplied idempotency key without rewriting it", async () => {
-    const fixture = await createWireFixtures();
     const fetchFn = createFetchMock().mockResolvedValue(
-      Response.json(fixture.order),
+      Response.json(PLACE_ORDER_RESULT, { status: 201 }),
     );
     const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
 
@@ -552,14 +636,13 @@ describe("RemoteDataClient", () => {
     );
   });
 
-  it("accepts both 204 and JSON cancellation responses", async () => {
-    const fetchFn = createFetchMock()
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(Response.json({ success: true }));
+  it("accepts only the authoritative 200 cancellation result", async () => {
+    const fetchFn = createFetchMock().mockResolvedValue(
+      Response.json(CANCEL_ORDER_RESULT, { status: 200 }),
+    );
     const client = new RemoteDataClient({ baseUrl: API_BASE_URL, fetchFn });
 
-    await expect(client.cancelOrder("order-1")).resolves.toBeUndefined();
-    await expect(client.cancelOrder("order-2")).resolves.toBeUndefined();
+    await expect(client.cancelOrder("order-1")).resolves.toEqual(CANCEL_ORDER_RESULT);
   });
 
   it.each([

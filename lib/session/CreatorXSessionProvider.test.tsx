@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   CreatorXSessionProvider,
+  type CreatorXSessionValue,
   useCreatorXSession,
 } from "@/lib/session/CreatorXSessionProvider";
 import type { CreatorXDataClient, Portfolio } from "@/lib/data/contracts";
@@ -90,8 +91,15 @@ function clientWithPortfolio(
   return { getPortfolio } as unknown as CreatorXDataClient;
 }
 
-function SessionProbe() {
+function SessionProbe({
+  onSession,
+}: {
+  onSession?: (session: CreatorXSessionValue) => void;
+}) {
   const session = useCreatorXSession();
+  useEffect(() => {
+    onSession?.(session);
+  }, [onSession, session]);
   return (
     <div>
       <output data-testid="session">
@@ -111,6 +119,15 @@ function SessionProbe() {
       </button>
     </div>
   );
+}
+
+function requireSession(
+  reference: { current: CreatorXSessionValue | null },
+): CreatorXSessionValue {
+  if (reference.current === null) {
+    throw new Error("session probe did not report a session value");
+  }
+  return reference.current;
 }
 
 beforeEach(() => {
@@ -219,8 +236,10 @@ describe("CreatorXSessionProvider", () => {
       </CreatorXSessionProvider>,
     );
 
-    expect(screen.getByTestId("session")).toHaveTextContent(
-      '"status":"unauthenticated"',
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
     );
     await Promise.resolve();
     expect(getPortfolio).not.toHaveBeenCalled();
@@ -468,6 +487,69 @@ describe("CreatorXSessionProvider", () => {
     },
   );
 
+  it("keeps a guest session signed out when guest issuance resolves after sign-out", async () => {
+    const delayedGuest = Promise.withResolvers<Response>();
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          accessToken: "guest-access-initial",
+          refreshToken: "guest-refresh-initial",
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+      )
+      .mockReturnValueOnce(delayedGuest.promise);
+    vi.stubGlobal("fetch", fetchSpy);
+    const latestSession = { current: null as CreatorXSessionValue | null };
+
+    render(
+      <CreatorXSessionProvider
+        config={config({
+          dataMode: "remote",
+          apiBaseUrl: new URL("https://api.example.com"),
+        })}
+      >
+        <SessionProbe onSession={(session) => { latestSession.current = session; }} />
+      </CreatorXSessionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+    await requireSession(latestSession).signOut();
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
+    );
+
+    const refresh = requireSession(latestSession).refresh();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    await requireSession(latestSession).signOut();
+    delayedGuest.resolve(
+      Response.json({
+        accessToken: "guest-access-stale",
+        refreshToken: "guest-refresh-stale",
+        tokenType: "Bearer",
+        expiresIn: 900,
+      }),
+    );
+    await refresh;
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
+    );
+    expect(window.localStorage.getItem("creatorx:session:refresh:v1")).toBeNull();
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      "guest-access-stale",
+    );
+  });
+
   it("keeps production remote mode fail-closed when Toss Login is not verified", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -644,6 +726,71 @@ describe("CreatorXSessionProvider", () => {
     );
     expect(screen.getByTestId("session")).not.toHaveTextContent(
       creatorXRefreshToken,
+    );
+  });
+
+  it("keeps a Toss session signed out when exchange resolves after sign-out", async () => {
+    const delayedExchange = Promise.withResolvers<Response>();
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          accessToken: "toss-access-initial",
+          refreshToken: "toss-refresh-initial",
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockReturnValueOnce(delayedExchange.promise);
+    vi.stubGlobal("fetch", fetchSpy);
+    const latestSession = { current: null as CreatorXSessionValue | null };
+
+    render(
+      <CreatorXSessionProvider
+        config={config({
+          dataMode: "remote",
+          apiBaseUrl: new URL("https://api.example.com"),
+          tossLoginEnabled: true,
+        })}
+      >
+        <SessionProbe onSession={(session) => { latestSession.current = session; }} />
+      </CreatorXSessionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+    await requireSession(latestSession).signOut();
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
+    );
+
+    const refresh = requireSession(latestSession).refresh();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    await requireSession(latestSession).signOut();
+    delayedExchange.resolve(
+      Response.json({
+        accessToken: "toss-access-stale",
+        refreshToken: "toss-refresh-stale",
+        tokenType: "Bearer",
+        expiresIn: 900,
+      }),
+    );
+    await refresh;
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
+    );
+    expect(window.localStorage.getItem("creatorx:session:refresh:v1")).toBeNull();
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      "toss-access-stale",
     );
   });
 

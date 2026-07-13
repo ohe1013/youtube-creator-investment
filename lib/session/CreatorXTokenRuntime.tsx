@@ -40,10 +40,10 @@ function browserStorage(): AsyncKeyValueStore {
       return window.localStorage.getItem(key);
     },
     async setItem(key, value) {
-      window.localStorage.setItem(key, value);
+      await window.localStorage.setItem(key, value);
     },
     async removeItem(key) {
-      window.localStorage.removeItem(key);
+      await window.localStorage.removeItem(key);
     },
   };
 }
@@ -74,6 +74,8 @@ function TokenRuntimeProviderContent({
   const accessToken = useRef<string | null>(null);
   const storage = useRef<Promise<AsyncKeyValueStore> | null>(null);
   const refreshFlight = useRef<Promise<string | null> | null>(null);
+  const tokenGeneration = useRef(0);
+  const storageMutations = useRef<Promise<void>>(Promise.resolve());
   const apiBaseUrl = config.apiBaseUrl?.toString() ?? null;
 
   const runtime = useMemo<CreatorXTokenRuntime>(() => {
@@ -86,16 +88,45 @@ function TokenRuntimeProviderContent({
       return storage.current;
     };
 
+    const enqueueStorageMutation = <T,>(
+      mutation: () => Promise<T>,
+    ): Promise<T> => {
+      const run = storageMutations.current.then(mutation, mutation);
+      storageMutations.current = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
+    };
+
     const clear = async () => {
+      tokenGeneration.current += 1;
       accessToken.current = null;
       try {
-        await (await getStorage()).removeItem(REFRESH_STORAGE_KEY);
+        await enqueueStorageMutation(async () => {
+          await (await getStorage()).removeItem(REFRESH_STORAGE_KEY);
+        });
       } catch {
         // A failed cleanup must never leave the access token available in memory.
       }
     };
 
+    const persistTokens = async (
+      tokens: CreatorXSessionTokens,
+      generation: number,
+    ): Promise<string | null> =>
+      await enqueueStorageMutation(async () => {
+        if (tokenGeneration.current !== generation) return null;
+        const store = await getStorage();
+        if (tokenGeneration.current !== generation) return null;
+        await store.setItem(REFRESH_STORAGE_KEY, tokens.refreshToken);
+        if (tokenGeneration.current !== generation) return null;
+        accessToken.current = tokens.accessToken;
+        return tokens.accessToken;
+      });
+
     const rotate = async (): Promise<string | null> => {
+      const generation = tokenGeneration.current;
       try {
         const activeBaseUrl = apiBaseUrl === null ? null : new URL(apiBaseUrl);
         if (activeBaseUrl === null) throw sessionUnavailable();
@@ -104,18 +135,18 @@ function TokenRuntimeProviderContent({
         const store = await getStorage();
         const refreshToken = await store.getItem(REFRESH_STORAGE_KEY);
         if (refreshToken === null || refreshToken.trim() === "") {
-          accessToken.current = null;
+          if (tokenGeneration.current === generation) {
+            accessToken.current = null;
+          }
           return null;
         }
 
         const parsed = await sessionClient.refresh({ refreshToken });
 
         // Persist rotation before making the corresponding access token usable.
-        await store.setItem(REFRESH_STORAGE_KEY, parsed.refreshToken);
-        accessToken.current = parsed.accessToken;
-        return parsed.accessToken;
+        return await persistTokens(parsed, generation);
       } catch (error) {
-        await clear();
+        if (tokenGeneration.current === generation) await clear();
         if (error instanceof CreatorXClientError) throw error;
         throw sessionUnavailable();
       }
@@ -141,12 +172,9 @@ function TokenRuntimeProviderContent({
         return await runRefresh();
       },
       async acceptTokens(tokens) {
+        const generation = tokenGeneration.current;
         const parsed = creatorXSessionTokensSchema.parse(tokens);
-        await (await getStorage()).setItem(
-          REFRESH_STORAGE_KEY,
-          parsed.refreshToken,
-        );
-        accessToken.current = parsed.accessToken;
+        await persistTokens(parsed, generation);
       },
       clear,
     };

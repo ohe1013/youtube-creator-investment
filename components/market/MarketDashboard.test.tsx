@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -16,6 +17,7 @@ import {
 import type {
   CreatorXDataClient,
   Order,
+  PlaceOrderResult,
 } from "@/lib/data/contracts";
 
 const mocks = vi.hoisted(() => ({
@@ -85,6 +87,21 @@ const creator: MarketCreator = {
   _count: { videos: 10 },
 };
 
+function placeOrderResult(order: Order): PlaceOrderResult {
+  return {
+    responseStatus: 201,
+    order,
+    portfolio: {
+      balance: "1000",
+      reservedBalance: "0",
+      availableBalance: "1000",
+      positions: [],
+      openOrders: [],
+      executions: [],
+    },
+  } as unknown as PlaceOrderResult;
+}
+
 function enterQuantity(value: string) {
   fireEvent.change(screen.getAllByRole("spinbutton")[1], {
     target: { value },
@@ -109,8 +126,131 @@ afterEach(() => {
 });
 
 describe("MarketDashboard order coordination", () => {
+  it("submits the exact authoritative decimal current price for a limit order", async () => {
+    const exactPrice = "9999999999999999.9999";
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockResolvedValue(placeOrderResult({
+        id: "order-lossless-price",
+        creatorId: creator.id,
+        side: "BUY",
+        orderType: "LIMIT",
+        price: exactPrice,
+        quantity: "2",
+        filled: "0",
+        reservedQuote: exactPrice,
+        reservedQuantity: "0",
+        status: "OPEN",
+        completedAt: null,
+        cancelReason: null,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      } as unknown as Order));
+    mocks.client = { placeOrder } as unknown as CreatorXDataClient;
+
+    render(
+      createElement(
+        MarketDashboard,
+        {
+          selectedCreator: { ...creator, currentPrice: Number(exactPrice) },
+          stats: { high24h: 130, low24h: 120, vol24h: 50, change24h: 2 },
+          chartData: [],
+          trades: [],
+          creators: [creator],
+          orderBook: { asks: [], bids: [] },
+          userBalance: 1000,
+          userQuantity: 4,
+          onOrderAccepted: vi.fn().mockResolvedValue(undefined),
+          orderCurrentPrice: exactPrice,
+        } as never,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "common.limitPrice" }));
+    enterQuantity("2");
+    submitBuy();
+
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    expect(placeOrder).toHaveBeenCalledWith(
+      {
+        creatorId: creator.id,
+        side: "BUY",
+        orderType: "LIMIT",
+        limitPrice: exactPrice,
+        quantity: "2",
+      },
+      { idempotencyKey: "key-1" },
+    );
+  });
+
+  it("submits the exact authoritative decimal selected from the order book", async () => {
+    const exactPrice = "9999999999999999.9999";
+    const placeOrder = vi
+      .fn<CreatorXDataClient["placeOrder"]>()
+      .mockResolvedValue(placeOrderResult({
+        id: "order-lossless-book-price",
+        creatorId: creator.id,
+        side: "BUY",
+        orderType: "LIMIT",
+        price: exactPrice,
+        quantity: "2",
+        filled: "0",
+        reservedQuote: exactPrice,
+        reservedQuantity: "0",
+        status: "OPEN",
+        completedAt: null,
+        cancelReason: null,
+        createdAt: "2026-07-10T00:00:00.000Z",
+        updatedAt: "2026-07-10T00:00:00.000Z",
+      } as unknown as Order));
+    mocks.client = { placeOrder } as unknown as CreatorXDataClient;
+
+    render(
+      createElement(
+        MarketDashboard,
+        {
+          selectedCreator: creator,
+          orderCurrentPrice: "125",
+          stats: { high24h: 130, low24h: 120, vol24h: 50, change24h: 2 },
+          chartData: [],
+          trades: [],
+          creators: [creator],
+          orderBook: {
+            asks: [
+              {
+                price: Number(exactPrice),
+                orderPrice: exactPrice,
+                quantity: 1,
+              },
+            ],
+            bids: [],
+          },
+          userBalance: 1000,
+          userQuantity: 4,
+          onOrderAccepted: vi.fn().mockResolvedValue(undefined),
+        } as never,
+      ),
+    );
+
+    fireEvent.click(screen.getByText(Number(exactPrice).toLocaleString()));
+    enterQuantity("2");
+    submitBuy();
+
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    expect(placeOrder).toHaveBeenCalledWith(
+      {
+        creatorId: creator.id,
+        side: "BUY",
+        orderType: "LIMIT",
+        limitPrice: exactPrice,
+        quantity: "2",
+      },
+      { idempotencyKey: "key-1" },
+    );
+  });
+
   it("keeps one MARKET POST pending when the current order-book price is selected", async () => {
-    let resolveOrder!: (order: Order) => void;
+    let resolveOrder!: (result: PlaceOrderResult) => void;
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
       .mockImplementation(
@@ -124,6 +264,7 @@ describe("MarketDashboard order coordination", () => {
     render(
       <MarketDashboard
         selectedCreator={creator}
+        orderCurrentPrice="125"
         stats={{ high24h: 130, low24h: 120, vol24h: 50, change24h: 2 }}
         chartData={[]}
         trades={[]}
@@ -145,7 +286,7 @@ describe("MarketDashboard order coordination", () => {
 
     expect(placeOrder).toHaveBeenCalledTimes(1);
 
-    resolveOrder({
+    resolveOrder(placeOrderResult({
       id: "order-1",
       creatorId: creator.id,
       side: "BUY",
@@ -160,6 +301,6 @@ describe("MarketDashboard order coordination", () => {
       cancelReason: null,
       createdAt: "2026-07-10T00:00:00.000Z",
       updatedAt: "2026-07-10T00:00:00.000Z",
-    } as unknown as Order);
+    } as unknown as Order));
   });
 });

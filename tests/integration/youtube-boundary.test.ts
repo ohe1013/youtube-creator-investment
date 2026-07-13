@@ -2,15 +2,33 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const prisma = new PrismaClient();
+const VIDEO_RACE_ID = "creatorx-integration-video-ownership-race";
+const VIDEO_RACE_CREATOR_IDS = [
+  "creatorx-integration-video-race-a",
+  "creatorx-integration-video-race-b",
+] as const;
 
 const previousCronSecret = process.env.CRON_SECRET;
 const previousYoutubeKey = process.env.YOUTUBE_API_KEY;
+let isolatedRefreshClients: PrismaClient[] = [];
 
 afterEach(async () => {
   process.env.CRON_SECRET = previousCronSecret;
   process.env.YOUTUBE_API_KEY = previousYoutubeKey;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  await Promise.allSettled(
+    isolatedRefreshClients.map(async (client) => await client.$disconnect()),
+  );
+  isolatedRefreshClients = [];
   vi.resetModules();
+  await prisma.video.deleteMany({ where: { id: VIDEO_RACE_ID } });
+  await prisma.creatorStat.deleteMany({
+    where: { creatorId: { in: [...VIDEO_RACE_CREATOR_IDS] } },
+  });
+  await prisma.creator.deleteMany({
+    where: { id: { in: [...VIDEO_RACE_CREATOR_IDS] } },
+  });
   await prisma.creatorStat.deleteMany({
     where: { creatorId: "creatorx-integration-creator" },
   });
@@ -19,6 +37,98 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 describe.sequential("YouTube network and cron boundaries", () => {
+  it("keeps the winning creator's video ownership and content during a concurrent same-ID refresh", async () => {
+    const [firstCreator, secondCreator] = await Promise.all(
+      VIDEO_RACE_CREATOR_IDS.map((id) =>
+        prisma.creator.create({
+          data: {
+            id,
+            youtubeChannelId: `${id}-channel`,
+            name: `Creator ${id}`,
+            currentSubs: 100,
+            currentViews: 1000,
+            currentVideos: 1,
+            currentScore: 1,
+            currentPrice: 100,
+            initialPrice: 100,
+          },
+        }),
+      ),
+    );
+
+    const conditionalWritesReached = Promise.withResolvers<void>();
+    let conditionalWrites = 0;
+    const createGatedStore = () => {
+      const client = new PrismaClient();
+      isolatedRefreshClients.push(client);
+      return {
+        video: {
+          async updateMany(
+            ...arguments_: Parameters<typeof client.video.updateMany>
+          ) {
+            const result = await client.video.updateMany(...arguments_);
+            conditionalWrites += 1;
+            if (conditionalWrites === 2) conditionalWritesReached.resolve();
+            await conditionalWritesReached.promise;
+            return result;
+          },
+          async createMany(
+            ...arguments_: Parameters<typeof client.video.createMany>
+          ) {
+            const result = await client.video.createMany(...arguments_);
+            return result;
+          },
+        },
+      };
+    };
+    const firstRefreshStore = createGatedStore();
+    const secondRefreshStore = createGatedStore();
+    const refreshModule = (await import(
+      "@/lib/server/youtube/refresh-creator"
+    )) as Record<string, unknown>;
+    const persistCreatorVideo = refreshModule.persistCreatorVideo;
+    if (typeof persistCreatorVideo !== "function") {
+      throw new Error("persistCreatorVideo must provide the atomic video owner write");
+    }
+
+    await expect(
+      Promise.all([
+        persistCreatorVideo(firstRefreshStore, firstCreator.id, {
+          id: VIDEO_RACE_ID,
+          title: `Video owned by ${firstCreator.id}`,
+          thumbnailUrl: `https://img.example.test/video-${firstCreator.id}`,
+          publishedAt: "2026-07-10T00:00:00.000Z",
+          duration: "PT1M",
+          type: "LONG",
+          viewCount: 10,
+          likeCount: 2,
+          commentCount: 1,
+        }),
+        persistCreatorVideo(secondRefreshStore, secondCreator.id, {
+          id: VIDEO_RACE_ID,
+          title: `Video owned by ${secondCreator.id}`,
+          thumbnailUrl: `https://img.example.test/video-${secondCreator.id}`,
+          publishedAt: "2026-07-10T00:00:00.000Z",
+          duration: "PT1M",
+          type: "LONG",
+          viewCount: 10,
+          likeCount: 2,
+          commentCount: 1,
+        }),
+      ]),
+    ).resolves.toEqual([undefined, undefined]);
+
+    const stored = await prisma.video.findUniqueOrThrow({
+      where: { id: VIDEO_RACE_ID },
+    });
+    expect(conditionalWrites).toBe(2);
+    expect(VIDEO_RACE_CREATOR_IDS).toContain(stored.creatorId as never);
+    expect(stored.title).toBe(`Video owned by ${stored.creatorId}`);
+    expect(stored.thumbnailUrl).toBe(
+      `https://img.example.test/video-${stored.creatorId}`,
+    );
+  }, 15_000);
+
   it("keeps public creator video reads database-only and never calls YouTube", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

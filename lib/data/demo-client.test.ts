@@ -161,10 +161,12 @@ describe("DemoDataClient Task 6 contract", () => {
 
   it("uses the Task 6 limit DTO and preserves balance reservations", async () => {
     const client = createClient();
-    const order = await client.placeOrder(limitOrder);
+    const result = await client.placeOrder(limitOrder);
+    const order = result.order;
     const reserved = await client.getPortfolio();
 
     expect(() => orderSchema.parse(order)).not.toThrow();
+    expect(result.responseStatus).toBe(201);
     expect(order).toMatchObject({
       side: "BUY",
       orderType: "LIMIT",
@@ -188,6 +190,39 @@ describe("DemoDataClient Task 6 contract", () => {
     });
   });
 
+  it("returns the Task 6 result envelopes for place and cancel mutations", async () => {
+    const client = createClient();
+    const placed = await client.placeOrder(limitOrder, {
+      idempotencyKey: "result-envelope-place",
+    });
+
+    expect(placed).toMatchObject({
+      responseStatus: 201,
+      order: {
+        userId: "device-a",
+        side: "BUY",
+        orderType: "LIMIT",
+        price: "1",
+      },
+      portfolio: {
+        reservedBalance: "10",
+        openOrders: [{ id: expect.any(String) }],
+      },
+    });
+
+    const cancelled = await client.cancelOrder(placed.order.id, {
+      idempotencyKey: "result-envelope-cancel",
+    });
+    expect(cancelled).toMatchObject({
+      responseStatus: 200,
+      order: { id: placed.order.id, status: "CANCELLED" },
+      portfolio: {
+        reservedBalance: "0",
+        openOrders: [],
+      },
+    });
+  });
+
   it("does not accept a client price for market orders", async () => {
     const client = createClient();
 
@@ -207,7 +242,7 @@ describe("DemoDataClient Task 6 contract", () => {
       orderType: "MARKET",
       quantity: "1",
     });
-    expect(order.price).toBe("1280");
+    expect(order.order.price).toBe("1280");
     expect((await client.getPortfolio()).executions).toHaveLength(1);
   });
 
@@ -254,7 +289,10 @@ describe("DemoDataClient Task 6 contract", () => {
       idempotencyKey: "durable-commit-replay",
     });
 
-    expect(replay).toMatchObject({ status: "FILLED", quantity: "2" });
+    expect(replay).toMatchObject({
+      responseStatus: 201,
+      order: { status: "FILLED", quantity: "2" },
+    });
     expect(setItem).toHaveBeenCalledTimes(1);
     expect(await restarted.getPortfolio()).toMatchObject({
       availableBalance: "97440",
@@ -314,7 +352,7 @@ describe("DemoDataClient Task 6 contract", () => {
     ]);
     const portfolio = await first.getPortfolio();
 
-    expect(new Set([firstOrder.id, secondOrder.id]).size).toBe(2);
+    expect(new Set([firstOrder.order.id, secondOrder.order.id]).size).toBe(2);
     expect(portfolio).toMatchObject({
       reservedBalance: "30",
       availableBalance: "99970",
@@ -345,13 +383,13 @@ describe("DemoDataClient Task 6 contract", () => {
     const orders = await Promise.all([first, second]);
 
     const portfolio = await firstClient.getPortfolio();
-    expect(new Set(orders.map((order) => order.id)).size).toBe(2);
+    expect(new Set(orders.map((result) => result.order.id)).size).toBe(2);
     expect(portfolio).toMatchObject({
       reservedBalance: "30",
       availableBalance: "99970",
     });
     expect(portfolio.openOrders.map((order) => order.id).sort()).toEqual(
-      orders.map((order) => order.id).sort(),
+      orders.map((result) => result.order.id).sort(),
     );
   });
 
@@ -371,7 +409,7 @@ describe("DemoDataClient Task 6 contract", () => {
     const existing = await cancelClient.placeOrder(limitOrder);
     const gate = backing.blockNextWrite();
 
-    const cancellation = cancelClient.cancelOrder(existing.id);
+    const cancellation = cancelClient.cancelOrder(existing.order.id);
     await gate.started;
     const nextOrder = orderClient.placeOrder({
       ...limitOrder,
@@ -384,7 +422,7 @@ describe("DemoDataClient Task 6 contract", () => {
     expect(await cancelClient.getPortfolio()).toMatchObject({
       reservedBalance: "20",
       availableBalance: "99980",
-      openOrders: [{ id: accepted.id, price: "2" }],
+      openOrders: [{ id: accepted.order.id, price: "2" }],
     });
   });
 

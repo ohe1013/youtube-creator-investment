@@ -6,12 +6,12 @@ import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmiss
 
 interface OrderFormProps {
   creatorId: string;
-  currentPrice: number;
+  currentPrice: string | number;
   userBalance: number;
   userQuantity: number; // User's holding of this creator
   onOrderAccepted?: () => Promise<void>;
   externalPriceUpdate?: {
-    price: number;
+    price: string | number;
     side?: "BUY" | "SELL";
     timestamp: number;
   };
@@ -45,13 +45,16 @@ function OrderFormFields({
     externalPriceUpdate?.side ? "LIMIT" : "MARKET",
   );
   const [amount, setAmount] = useState<string>("0");
+  const currentMutationPrice = String(currentPrice);
   const [limitPrice, setLimitPrice] = useState<string>(
-    (externalPriceUpdate?.price ?? currentPrice).toString(),
+    String(externalPriceUpdate?.price ?? currentMutationPrice),
   );
   const { t } = useLanguage();
 
   const price =
-    orderType === "MARKET" ? currentPrice : parseFloat(limitPrice) || 0;
+    orderType === "MARKET"
+      ? parseFloat(currentMutationPrice) || 0
+      : parseFloat(limitPrice) || 0;
   const quantity = parseFloat(amount) || 0;
   const total = quantity * price;
 
@@ -136,7 +139,7 @@ function OrderFormFields({
             <input
               data-creatorx-keyboard-target="true"
               type="number"
-              value={orderType === "MARKET" ? currentPrice : limitPrice}
+              value={orderType === "MARKET" ? currentMutationPrice : limitPrice}
               onChange={(e) => setLimitPrice(e.target.value)}
               disabled={orderType === "MARKET"}
               className={`w-full bg-card border border-border-exchange rounded px-3 py-2 font-mono text-sm outline-none transition-colors text-foreground ${

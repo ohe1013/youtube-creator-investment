@@ -102,9 +102,10 @@ export function useCreatorXOrderSubmission(): {
 
         let order: Order;
         try {
-          order = await client.placeOrder(input, {
+          const result = await client.placeOrder(input, {
             idempotencyKey: attempt.idempotencyKey,
           });
+          order = result.order;
         } catch (error) {
           if (isDefinitiveRejection(error)) {
             reportSettlementConcern(

@@ -107,7 +107,7 @@ describe("CreatorX data contracts", () => {
     ).not.toThrow();
     expect(() => tradeSchema.array().parse(trades)).not.toThrow();
     expect(() => orderBookSchema.array().parse(orderBooks)).not.toThrow();
-    expect(() => orderSchema.parse(order)).not.toThrow();
+    expect(() => orderSchema.parse(order.order)).not.toThrow();
   });
 
   it("rejects a zero maximum subscriber filter", () => {

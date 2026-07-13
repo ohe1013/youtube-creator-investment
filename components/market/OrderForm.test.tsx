@@ -5,7 +5,11 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OrderForm } from "@/components/market/OrderForm";
-import type { CreatorXDataClient, Order } from "@/lib/data/contracts";
+import type {
+  CreatorXDataClient,
+  Order,
+  PlaceOrderResult,
+} from "@/lib/data/contracts";
 import { CreatorXClientError } from "@/lib/data/errors";
 import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmission";
 
@@ -44,6 +48,21 @@ const acceptedOrder: Order = {
   createdAt: "2026-07-10T00:00:00.000Z",
   updatedAt: "2026-07-10T00:00:00.000Z",
 } as unknown as Order;
+
+function placeOrderResult(order: Order = acceptedOrder): PlaceOrderResult {
+  return {
+    responseStatus: 201,
+    order,
+    portfolio: {
+      balance: "1000",
+      reservedBalance: "0",
+      availableBalance: "1000",
+      positions: [],
+      openOrders: [],
+      executions: [],
+    },
+  } as unknown as PlaceOrderResult;
+}
 
 function renderForm(
   placeOrder: CreatorXDataClient["placeOrder"],
@@ -126,8 +145,8 @@ afterEach(() => {
 
 describe("OrderForm", () => {
   it("keeps isSubmitting active until concurrent A and B signatures both settle", async () => {
-    let resolveA: ((order: Order) => void) | undefined;
-    let resolveB: ((order: Order) => void) | undefined;
+    let resolveA: ((result: PlaceOrderResult) => void) | undefined;
+    let resolveB: ((result: PlaceOrderResult) => void) | undefined;
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
       .mockImplementation(
@@ -145,30 +164,30 @@ describe("OrderForm", () => {
     await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("submission-state")).toHaveTextContent("busy");
 
-    resolveA?.({
+    resolveA?.(placeOrderResult({
       ...acceptedOrder,
       id: "order-a",
       creatorId: "creator-a",
       price: "100",
       quantity: "1",
-    } as unknown as Order);
+    } as unknown as Order));
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("submission-state")).toHaveTextContent("busy");
 
-    resolveB?.({
+    resolveB?.(placeOrderResult({
       ...acceptedOrder,
       id: "order-b",
       creatorId: "creator-b",
       price: "200",
       quantity: "1",
-    } as unknown as Order);
+    } as unknown as Order));
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("submission-state")).toHaveTextContent("idle");
   });
 
   it("submits the exact typed order with one idempotency key and refreshes session after acceptance", async () => {
     const placeOrder = vi.fn<CreatorXDataClient["placeOrder"]>().mockResolvedValue(
-      acceptedOrder,
+      placeOrderResult(),
     );
     const onOrderAccepted = vi.fn().mockResolvedValue(undefined);
     renderForm(placeOrder, onOrderAccepted);
@@ -191,7 +210,7 @@ describe("OrderForm", () => {
   });
 
   it("blocks a rapid duplicate while the first submission is pending", async () => {
-    let resolveOrder: ((order: Order) => void) | undefined;
+    let resolveOrder: ((result: PlaceOrderResult) => void) | undefined;
     const placeOrder = vi.fn<CreatorXDataClient["placeOrder"]>().mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -204,12 +223,12 @@ describe("OrderForm", () => {
     submitBuy();
 
     await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
-    resolveOrder?.(acceptedOrder);
+    resolveOrder?.(placeOrderResult());
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
   });
 
   it("keeps pending UI state active through StrictMode effect replay", async () => {
-    let resolveOrder: ((order: Order) => void) | undefined;
+    let resolveOrder: ((result: PlaceOrderResult) => void) | undefined;
     const placeOrder = vi.fn<CreatorXDataClient["placeOrder"]>().mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -233,14 +252,14 @@ describe("OrderForm", () => {
 
     expect(screen.getByRole("button", { name: "Processing..." })).toBeDisabled();
 
-    resolveOrder?.(acceptedOrder);
+    resolveOrder?.(placeOrderResult());
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
     enterQuantity("2");
     expect(screen.getAllByRole("button", { name: "common.buy" }).at(-1)).toBeEnabled();
   });
 
   it("keeps the shared lock through unmount and releases it when the POST settles", async () => {
-    let resolveFirst: ((order: Order) => void) | undefined;
+    let resolveFirst: ((result: PlaceOrderResult) => void) | undefined;
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
       .mockImplementationOnce(
@@ -249,7 +268,7 @@ describe("OrderForm", () => {
             resolveFirst = resolve;
           }),
       )
-      .mockResolvedValueOnce(acceptedOrder);
+      .mockResolvedValueOnce(placeOrderResult());
     mocks.client = { placeOrder } as unknown as CreatorXDataClient;
     const renderSharedClientForm = () =>
       render(
@@ -271,7 +290,7 @@ describe("OrderForm", () => {
     submitBuy();
     expect(placeOrder).toHaveBeenCalledTimes(1);
 
-    resolveFirst?.(acceptedOrder);
+    resolveFirst?.(placeOrderResult());
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
     submitBuy();
     await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(2));
@@ -287,7 +306,7 @@ describe("OrderForm", () => {
     );
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
-      .mockResolvedValue(acceptedOrder);
+      .mockResolvedValue(placeOrderResult());
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
@@ -311,7 +330,7 @@ describe("OrderForm", () => {
           true,
         ),
       )
-      .mockResolvedValueOnce(acceptedOrder);
+      .mockResolvedValueOnce(placeOrderResult());
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
@@ -338,7 +357,7 @@ describe("OrderForm", () => {
           502,
         ),
       )
-      .mockResolvedValueOnce(acceptedOrder);
+      .mockResolvedValueOnce(placeOrderResult());
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
@@ -364,7 +383,9 @@ describe("OrderForm", () => {
           true,
         ),
       )
-      .mockResolvedValueOnce({ ...acceptedOrder, quantity: "3" } as unknown as Order);
+      .mockResolvedValueOnce(
+        placeOrderResult({ ...acceptedOrder, quantity: "3" } as unknown as Order),
+      );
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
@@ -383,8 +404,10 @@ describe("OrderForm", () => {
   it("clears a confirmed attempt so the same input starts a new logical order", async () => {
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
-      .mockResolvedValueOnce(acceptedOrder)
-      .mockResolvedValueOnce({ ...acceptedOrder, id: "order-2" });
+      .mockResolvedValueOnce(placeOrderResult())
+      .mockResolvedValueOnce(
+        placeOrderResult({ ...acceptedOrder, id: "order-2" } as unknown as Order),
+      );
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
@@ -409,7 +432,7 @@ describe("OrderForm", () => {
           409,
         ),
       )
-      .mockResolvedValueOnce(acceptedOrder);
+      .mockResolvedValueOnce(placeOrderResult());
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
@@ -433,7 +456,7 @@ describe("OrderForm", () => {
           true,
         ),
       )
-      .mockResolvedValueOnce(acceptedOrder);
+      .mockResolvedValueOnce(placeOrderResult());
     mocks.client = { placeOrder } as unknown as CreatorXDataClient;
     const first = render(
       <OrderForm
@@ -470,7 +493,7 @@ describe("OrderForm", () => {
     mocks.refresh.mockRejectedValueOnce(new Error("session refresh failed"));
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
-      .mockResolvedValue(acceptedOrder);
+      .mockResolvedValue(placeOrderResult());
     const onOrderAccepted = vi
       .fn<() => Promise<void>>()
       .mockRejectedValue(new Error("parent refresh failed"));

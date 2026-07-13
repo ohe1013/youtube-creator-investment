@@ -6,11 +6,12 @@ import {
   creatorSchema,
   creatorStatSchema,
   creatorVideoSchema,
+  tradingOrderSchema,
+  tradingPortfolioSchema,
   dashboardSchema,
   historyPointSchema,
   identifierSchema,
   orderBookSchema,
-  orderSchema,
   paginatedCreatorsSchema,
   placeOrderInputSchema,
   portfolioSchema,
@@ -19,13 +20,14 @@ import {
   type CreatorQuery,
   type CreatorStat,
   type CreatorVideo,
+  type CancelOrderResult,
   type CreatorXDataClient,
   type Dashboard,
   type HistoryPoint,
-  type Order,
   type OrderBook,
   type PaginatedCreators,
   type PlaceOrderInput,
+  type PlaceOrderResult,
   type Portfolio,
   type RequestOptions,
   type Trade,
@@ -174,6 +176,7 @@ type LocalState = Omit<
 };
 type LocalPosition = z.infer<typeof localPositionSchema>;
 type LocalOrder = z.infer<typeof localOrderSchema>;
+type LocalOrderRecord = z.infer<typeof localOrderRecordSchema>;
 
 const mutationQueues = new Map<string, Promise<void>>();
 const storeScopeIds = new WeakMap<AsyncKeyValueStore, number>();
@@ -374,10 +377,14 @@ function toPublicCreator(creator: (typeof appInTossDemoData.creators)[number]): 
   });
 }
 
-function toPublicOrder(order: LocalOrder): Order {
+function toTradingOrder(
+  order: LocalOrderRecord,
+  userId: string,
+): PlaceOrderResult["order"] {
   const remaining = Math.max(0, order.quantity - order.filled);
-  return parseResponse(orderSchema, {
+  return parseResponse(tradingOrderSchema, {
     id: order.id,
+    userId,
     creatorId: order.creatorId,
     side: order.type,
     orderType: order.orderType,
@@ -657,16 +664,14 @@ export class DemoDataClient implements CreatorXDataClient {
     });
   }
 
-  async getPortfolio(options?: RequestOptions): Promise<Portfolio> {
-    this.checkSignal(options);
-    const state = await this.readState();
+  private toTradingPortfolio(state: LocalState): PlaceOrderResult["portfolio"] {
     const reservedBalance = state.openOrders
       .filter((order) => order.type === "BUY")
       .reduce(
         (sum, order) => sum + (order.quantity - order.filled) * order.price,
         0,
       );
-    return parseResponse(portfolioSchema, {
+    return parseResponse(tradingPortfolioSchema, {
       balance: decimal(state.balance + reservedBalance),
       reservedBalance: decimal(reservedBalance),
       availableBalance: decimal(state.balance),
@@ -690,7 +695,7 @@ export class DemoDataClient implements CreatorXDataClient {
         })),
       openOrders: [...state.openOrders]
         .sort(compareNewest)
-        .map(toPublicOrder),
+        .map((order) => toTradingOrder(order, this.namespace)),
       executions: [...state.trades].sort(compareNewest).map((trade) => ({
         id: trade.id,
         creatorId: trade.creatorId,
@@ -703,10 +708,18 @@ export class DemoDataClient implements CreatorXDataClient {
     });
   }
 
+  async getPortfolio(options?: RequestOptions): Promise<Portfolio> {
+    this.checkSignal(options);
+    return parseResponse(
+      portfolioSchema,
+      this.toTradingPortfolio(await this.readState()),
+    );
+  }
+
   async placeOrder(
     input: unknown,
     options?: RequestOptions & { idempotencyKey?: string },
-  ): Promise<Order> {
+  ): Promise<PlaceOrderResult> {
     this.checkSignal(options);
     const parsed = parseDemoOrderInput(input);
     const idempotencyKey =
@@ -736,7 +749,7 @@ export class DemoDataClient implements CreatorXDataClient {
             if (existing.fingerprint !== fingerprint) {
               throw idempotencyKeyReusedError();
             }
-            return toPublicOrder(existing.response);
+            return this.toPlaceOrderResult(existing.response, state);
           }
         }
         const shouldFill =
@@ -826,7 +839,7 @@ export class DemoDataClient implements CreatorXDataClient {
           state.openOrders.unshift(order);
         }
 
-        const response = toPublicOrder(order);
+        const response = this.toPlaceOrderResult(order, state);
         if (idempotencyKey !== null) {
           state.idempotencyRecords.push({
             key: idempotencyKey,
@@ -846,10 +859,10 @@ export class DemoDataClient implements CreatorXDataClient {
   async cancelOrder(
     id: string,
     options?: RequestOptions & { idempotencyKey?: string },
-  ): Promise<void> {
+  ): Promise<CancelOrderResult> {
     this.checkSignal(options);
     const orderId = parseRequest(identifierSchema, id);
-    await enqueueMutation(
+    return await enqueueMutation(
       this.mutationKey,
       async () => {
         this.checkSignal(options);
@@ -887,10 +900,31 @@ export class DemoDataClient implements CreatorXDataClient {
             refundAvgPrice,
           );
         }
+        const cancelled = {
+          ...order,
+          status: "CANCELLED" as const,
+          updatedAt: this.getTimestamp(),
+        };
         state.openOrders.splice(orderIndex, 1);
         await this.writeState(state);
+        return {
+          responseStatus: 200,
+          order: toTradingOrder(cancelled, this.namespace),
+          portfolio: this.toTradingPortfolio(state),
+        };
       },
     );
+  }
+
+  private toPlaceOrderResult(
+    order: LocalOrderRecord,
+    state: LocalState,
+  ): PlaceOrderResult {
+    return {
+      responseStatus: 201,
+      order: toTradingOrder(order, this.namespace),
+      portfolio: this.toTradingPortfolio(state),
+    };
   }
 
   private checkSignal(options?: RequestOptions): void {

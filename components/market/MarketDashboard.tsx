@@ -46,12 +46,13 @@ export type MarketCreator = {
 };
 
 type DisplayOrderBook = {
-  asks: Array<{ price: number; quantity: number }>;
-  bids: Array<{ price: number; quantity: number }>;
+  asks: Array<{ price: number; orderPrice: string; quantity: number }>;
+  bids: Array<{ price: number; orderPrice: string; quantity: number }>;
 };
 
 interface MarketDashboardProps {
   selectedCreator: MarketCreator;
+  orderCurrentPrice: string;
   stats: {
     high24h: number;
     low24h: number;
@@ -77,6 +78,7 @@ interface MarketDashboardProps {
 
 export function MarketDashboard({
   selectedCreator,
+  orderCurrentPrice,
   stats,
   historyStats = [],
   videos = [],
@@ -97,7 +99,7 @@ export function MarketDashboard({
   const [dataTab, setDataTab] = useState<"ORDERBOOK" | "TRADES">("ORDERBOOK");
   // External Price Update (from OrderBook to OrderForm)
   const [priceUpdate, setPriceUpdate] = useState<
-    { price: number; side?: "BUY" | "SELL"; timestamp: number } | undefined
+    { price: string; side?: "BUY" | "SELL"; timestamp: number } | undefined
   >();
   const { t } = useLanguage();
 
@@ -209,6 +211,7 @@ export function MarketDashboard({
                 {dataTab === "ORDERBOOK" ? (
                   <OrderBook
                     currentPrice={selectedCreator.currentPrice}
+                    currentOrderPrice={orderCurrentPrice}
                     liquidity={selectedCreator.liquidity}
                     asks={orderBook.asks}
                     bids={orderBook.bids}
@@ -230,7 +233,7 @@ export function MarketDashboard({
             >
               <OrderForm
                 creatorId={selectedCreator.id}
-                currentPrice={selectedCreator.currentPrice}
+                currentPrice={orderCurrentPrice}
                 userBalance={userBalance}
                 userQuantity={userQuantity}
                 onOrderAccepted={onOrderAccepted}

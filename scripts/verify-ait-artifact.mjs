@@ -455,6 +455,16 @@ function isPlaceholderValue(value) {
   );
 }
 
+function isDynamicRuntimeExpression(value) {
+  const normalized = value.trim();
+  return (
+    /^(?:[A-Za-z_$][\w$]*)(?:\??\.[A-Za-z_$][\w$]*|\[[^\]\r\n]+\]|\([^()\r\n]*\))*$/.test(
+      normalized,
+    ) &&
+    /[.\[(]/.test(normalized)
+  );
+}
+
 function isSensitiveConfigurationKey(key) {
   const normalized = key.replaceAll("-", "_");
   if (normalized.toUpperCase().startsWith("NEXT_PUBLIC_")) return false;
@@ -503,7 +513,11 @@ function containsLikelySecret(text) {
   for (const match of scrubbed.matchAll(genericSecretAssignmentPattern)) {
     const key = match[1] ?? match[2] ?? "";
     const value = match[3] ?? match[4] ?? match[5] ?? match[6] ?? "";
-    if (isSensitiveConfigurationKey(key) && !isPlaceholderValue(value)) {
+    if (
+      isSensitiveConfigurationKey(key) &&
+      !isPlaceholderValue(value) &&
+      !isDynamicRuntimeExpression(value)
+    ) {
       return true;
     }
   }

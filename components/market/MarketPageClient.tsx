@@ -36,11 +36,12 @@ type RecentTrade = {
   time: string;
 };
 type DisplayOrderBook = {
-  asks: Array<{ price: number; quantity: number }>;
-  bids: Array<{ price: number; quantity: number }>;
+  asks: Array<{ price: number; orderPrice: string; quantity: number }>;
+  bids: Array<{ price: number; orderPrice: string; quantity: number }>;
 };
 type LoadState = {
   selectedCreator: Creator;
+  orderCurrentPrice: string;
   creators: Creator[];
   stats: {
     high24h: number;
@@ -81,10 +82,12 @@ function toDisplayOrderBook(orderBook: CreatorXOrderBook) {
   return {
     asks: orderBook.asks.map((level) => ({
       price: decimalToDisplayNumber(level.price),
+      orderPrice: level.price,
       quantity: decimalToDisplayNumber(level.quantity),
     })),
     bids: orderBook.bids.map((level) => ({
       price: decimalToDisplayNumber(level.price),
+      orderPrice: level.price,
       quantity: decimalToDisplayNumber(level.quantity),
     })),
   };
@@ -143,17 +146,18 @@ function MarketPageContent() {
           { sort: "subs", limit: 50 },
           { signal: controller.signal },
         );
-        const creators = creatorsData.creators.map(toMarketCreator);
-        const selectedCreator =
+        const selectedCreatorSource =
           ticker === null
-            ? creators[0]
-            : creators.find((creator) => creator.id === ticker);
+            ? creatorsData.creators[0]
+            : creatorsData.creators.find((creator) => creator.id === ticker);
 
-        if (!selectedCreator) {
+        if (!selectedCreatorSource) {
           throw new Error(
             ticker === null ? "No creators are available" : "Creator not found",
           );
         }
+        const creators = creatorsData.creators.map(toMarketCreator);
+        const selectedCreator = toMarketCreator(selectedCreatorSource);
 
         const [history, trades, statsData, videos, orderBook, portfolio] =
           await Promise.all([
@@ -204,6 +208,7 @@ function MarketPageContent() {
 
         setState({
           selectedCreator,
+          orderCurrentPrice: selectedCreatorSource.currentPrice,
           creators,
           stats,
           historyStats: statsData,
@@ -312,6 +317,7 @@ function MarketPageContent() {
       <main className="creatorx-below-navbar creatorx-safe-bottom creatorx-safe-inline bg-background text-foreground flex flex-col overflow-hidden">
         <MarketDashboard
           selectedCreator={state.selectedCreator}
+          orderCurrentPrice={state.orderCurrentPrice}
           stats={state.stats}
           historyStats={state.historyStats}
           videos={state.videos}

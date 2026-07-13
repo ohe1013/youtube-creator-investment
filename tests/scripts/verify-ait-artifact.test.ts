@@ -533,6 +533,23 @@ describe("verifyAitArtifact", () => {
     });
   });
 
+  it("allows a sensitive-named runtime property wired to a dynamic expression", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content: "const session = { refreshToken: tokenStore.read() };",
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).resolves.toMatchObject({
+      appName: "creatorx",
+      hasWebIndex: true,
+    });
+  });
+
   it("does not flag normal NEXT_PUBLIC configuration", async () => {
     const publicGoogleKey = `AIza${"A".repeat(35)}`;
     const artifact = await buildFixture({
