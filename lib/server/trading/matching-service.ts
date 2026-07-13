@@ -51,8 +51,21 @@ type IdempotencyClaim<T> =
   | { kind: "new"; id: string }
   | { kind: "replay"; response: T };
 
+type BuyerPositionCreditPlan = {
+  positionId: string | null;
+  avgPrice: Prisma.Decimal;
+};
+
 function tradingError(status: number, code: string, message: string): TradingServiceError {
   return new TradingServiceError(status, code, message);
+}
+
+function tradingStateOverflow() {
+  return tradingError(
+    409,
+    "TRADING_STATE_OVERFLOW",
+    "The resulting trading state cannot be represented safely.",
+  );
 }
 
 function decimalAtScale(value: unknown, scale: number, maximum: Prisma.Decimal, code: string) {
@@ -151,6 +164,14 @@ function quantizeQuote(value: Prisma.Decimal) {
   const quantized = value.toDecimalPlaces(QUOTE_SCALE, Prisma.Decimal.ROUND_DOWN);
   if (!quantized.isFinite() || quantized.isNegative() || quantized.greaterThan(MAX_QUOTE)) {
     throw tradingError(400, "DERIVED_QUOTE_OVERFLOW", "Derived quote value cannot be represented safely.");
+  }
+  return quantized;
+}
+
+function quantizeStateQuote(value: Prisma.Decimal) {
+  const quantized = value.toDecimalPlaces(QUOTE_SCALE, Prisma.Decimal.ROUND_DOWN);
+  if (!quantized.isFinite() || quantized.isNegative() || quantized.greaterThan(MAX_QUOTE)) {
+    throw tradingStateOverflow();
   }
   return quantized;
 }
@@ -402,17 +423,13 @@ async function updateSellOrderForFill(
 ) {
   const filled = order.filled.plus(quantity);
   const remaining = order.quantity.minus(filled);
-  const remainingQuote = remaining.greaterThan(ZERO)
-    ? quantizeQuote(order.price.times(remaining))
-    : ZERO;
-  const dustRemainder = remaining.greaterThan(ZERO) && !remainingQuote.greaterThan(ZERO);
-  const reservedQuantity = dustRemainder ? ZERO : remaining;
+  const reservedQuantity = remaining;
   const release = order.reservedQuantity.minus(reservedQuantity);
   if (release.lessThan(quantity) || release.isNegative()) {
     throw tradingError(500, "TRADING_RESERVE_INCONSISTENT", "Sell reserve is inconsistent.");
   }
 
-  const status = nextOrderStatus(filled, order.quantity, dustRemainder);
+  const status = nextOrderStatus(filled, order.quantity, false);
   await tx.position.update({
     where: { userId_creatorId: { userId: order.userId, creatorId: order.creatorId } },
     data: {
@@ -420,7 +437,14 @@ async function updateSellOrderForFill(
       reservedQuantity: { decrement: release },
     },
   });
-  await tx.user.update({ where: { id: order.userId }, data: { balance: { increment: quoteAmount } } });
+  const creditedSeller = await tx.user.updateMany({
+    where: {
+      id: order.userId,
+      balance: { lte: MAX_QUOTE.minus(quoteAmount) },
+    },
+    data: { balance: { increment: quoteAmount } },
+  });
+  if (creditedSeller.count !== 1) throw tradingStateOverflow();
   return tx.order.update({
     where: { id: order.id },
     data: {
@@ -428,41 +452,85 @@ async function updateSellOrderForFill(
       reservedQuantity,
       status,
       completedAt: status === "OPEN" || status === "PARTIAL" ? null : new Date(),
-      cancelReason: dustRemainder ? "DUST_REMAINDER" : null,
+      cancelReason: null,
     },
   });
 }
 
+async function preflightReceivingCredits(
+  tx: Prisma.TransactionClient,
+  input: {
+    buyerId: string;
+    sellerId: string;
+    creatorId: string;
+    quantity: Prisma.Decimal;
+    quoteAmount: Prisma.Decimal;
+  },
+): Promise<BuyerPositionCreditPlan> {
+  const seller = await tx.user.findUnique({
+    where: { id: input.sellerId },
+    select: { balance: true },
+  });
+  if (!seller || !seller.balance.plus(input.quoteAmount).lessThanOrEqualTo(MAX_QUOTE)) {
+    throw tradingStateOverflow();
+  }
+
+  const existing = await tx.position.findUnique({
+    where: { userId_creatorId: { userId: input.buyerId, creatorId: input.creatorId } },
+  });
+  if (!existing) {
+    return {
+      positionId: null,
+      avgPrice: quantizeStateQuote(input.quoteAmount.dividedBy(input.quantity)),
+    };
+  }
+
+  const nextQuantity = existing.quantity.plus(input.quantity);
+  if (!nextQuantity.isFinite() || nextQuantity.greaterThan(MAX_QUANTITY)) {
+    throw tradingStateOverflow();
+  }
+
+  const totalCost = existing.avgPrice.times(existing.quantity).plus(input.quoteAmount);
+  return {
+    positionId: existing.id,
+    avgPrice: quantizeStateQuote(totalCost.dividedBy(nextQuantity)),
+  };
+}
+
 async function creditBuyerPosition(
   tx: Prisma.TransactionClient,
-  input: { userId: string; creatorId: string; quantity: Prisma.Decimal; quoteAmount: Prisma.Decimal },
+  input: {
+    userId: string;
+    creatorId: string;
+    quantity: Prisma.Decimal;
+    quoteAmount: Prisma.Decimal;
+    plan: BuyerPositionCreditPlan;
+  },
 ) {
-  const existing = await tx.position.findUnique({
-    where: { userId_creatorId: { userId: input.userId, creatorId: input.creatorId } },
-  });
-
-  if (!existing) {
+  if (!input.plan.positionId) {
     await tx.position.create({
       data: {
         userId: input.userId,
         creatorId: input.creatorId,
         quantity: input.quantity,
         reservedQuantity: ZERO,
-        avgPrice: quantizeQuote(input.quoteAmount.dividedBy(input.quantity)),
+        avgPrice: input.plan.avgPrice,
       },
     });
     return;
   }
 
-  const quantity = existing.quantity.plus(input.quantity);
-  const totalCost = existing.avgPrice.times(existing.quantity).plus(input.quoteAmount);
-  await tx.position.update({
-    where: { id: existing.id },
+  const updated = await tx.position.updateMany({
+    where: {
+      id: input.plan.positionId,
+      quantity: { lte: MAX_QUANTITY.minus(input.quantity) },
+    },
     data: {
-      quantity,
-      avgPrice: quantizeQuote(totalCost.dividedBy(quantity)),
+      quantity: { increment: input.quantity },
+      avgPrice: input.plan.avgPrice,
     },
   });
+  if (updated.count !== 1) throw tradingStateOverflow();
 }
 
 async function executeFill(
@@ -477,6 +545,13 @@ async function executeFill(
   const quoteAmount = requirePositiveQuote(quantizeQuote(maker.price.times(quantity)));
   const buyer = taker.type === "BUY" ? taker : maker;
   const seller = taker.type === "SELL" ? taker : maker;
+  const buyerPositionCredit = await preflightReceivingCredits(tx, {
+    buyerId: buyer.userId,
+    sellerId: seller.userId,
+    creatorId: taker.creatorId,
+    quantity,
+    quoteAmount,
+  });
 
   const updatedTaker =
     taker.type === "BUY"
@@ -493,6 +568,7 @@ async function executeFill(
     creatorId: buyer.creatorId,
     quantity,
     quoteAmount,
+    plan: buyerPositionCredit,
   });
   await tx.tradeExecution.create({
     data: {

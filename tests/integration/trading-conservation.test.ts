@@ -1,7 +1,8 @@
-import { PrismaClient } from "@prisma/client";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Prisma, PrismaClient } from "@prisma/client";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DecimalString } from "@/lib/contracts/decimal";
+import { prisma as tradingPrisma } from "@/lib/prisma";
 import { cancelOrder, placeOrder } from "@/lib/server/trading/matching-service";
 import { getPortfolio } from "@/lib/server/trading/portfolio-service";
 import {
@@ -432,6 +433,64 @@ describe.sequential("transactional trading conservation and matching", () => {
     expect(executableAfter.status).toBe("FILLED");
   }, REAL_POSTGRES_TIMEOUT_MS);
 
+  it("keeps a SELL remainder active for a later higher bid that can execute it", async () => {
+    const firstBuyer = await createTradingUser(prisma, { id: "sell-continuation-first-buyer" });
+    const secondBuyer = await createTradingUser(prisma, { id: "sell-continuation-second-buyer" });
+    const seller = await createTradingUser(prisma, {
+      id: "sell-continuation-seller",
+      positionQuantity: decimal("0.00010000"),
+    });
+
+    await placeOrder(
+      tradingPrincipal(firstBuyer.id),
+      {
+        creatorId: TRADING_CREATOR_ID,
+        side: "BUY",
+        orderType: "LIMIT",
+        quantity: decimal("0.00000100"),
+        limitPrice: decimal("100"),
+      },
+      "sell-continuation-first-maker",
+    );
+    await placeOrder(
+      tradingPrincipal(secondBuyer.id),
+      {
+        creatorId: TRADING_CREATOR_ID,
+        side: "BUY",
+        orderType: "LIMIT",
+        quantity: decimal("0.00009900"),
+        limitPrice: decimal("100"),
+      },
+      "sell-continuation-second-maker",
+    );
+
+    const sell = await placeOrder(
+      tradingPrincipal(seller.id),
+      {
+        creatorId: TRADING_CREATOR_ID,
+        side: "SELL",
+        orderType: "LIMIT",
+        quantity: decimal("0.00010000"),
+        limitPrice: decimal("1"),
+      },
+      "sell-continuation-taker",
+    );
+    const executions = await prisma.tradeExecution.findMany({
+      where: { takerOrderId: sell.order.id },
+      orderBy: { executedAt: "asc" },
+    });
+    const executionQuote = executions.reduce(
+      (total, execution) => total.plus(execution.quoteAmount),
+      new Prisma.Decimal("0"),
+    );
+
+    expect(sell.order.status).toBe("FILLED");
+    expect(sell.order.filled).toBe("0.00010000");
+    expect(sell.order.reservedQuantity).toBe("0.00000000");
+    expect(executions).toHaveLength(2);
+    expect(decimalEquals(executionQuote, "0.0100")).toBe(true);
+  }, REAL_POSTGRES_TIMEOUT_MS);
+
   it("cancels and releases a buy dust remainder after an otherwise executable partial fill", async () => {
     const seller = await createTradingUser(prisma, {
       id: "buy-dust-remainder-seller",
@@ -471,7 +530,7 @@ describe.sequential("transactional trading conservation and matching", () => {
     expect(decimalEquals(buyerAfter.reservedBalance, "0")).toBe(true);
   }, REAL_POSTGRES_TIMEOUT_MS);
 
-  it("cancels and releases a sell dust remainder after an otherwise executable partial fill", async () => {
+  it("keeps a sell dust remainder reserved until an explicit cancellation", async () => {
     const seller = await createTradingUser(prisma, {
       id: "sell-dust-remainder-seller",
       positionQuantity: decimal("0.00000150"),
@@ -489,7 +548,7 @@ describe.sequential("transactional trading conservation and matching", () => {
       },
       "sell-dust-remainder-maker",
     );
-    await placeOrder(
+    const partial = await placeOrder(
       tradingPrincipal(buyer.id),
       {
         creatorId: TRADING_CREATOR_ID,
@@ -500,18 +559,160 @@ describe.sequential("transactional trading conservation and matching", () => {
       },
       "sell-dust-remainder-taker",
     );
-    const [sellAfter, position] = await Promise.all([
+    const [sellAfterFill, positionAfterFill] = await Promise.all([
       prisma.order.findUniqueOrThrow({ where: { id: sell.order.id } }),
       prisma.position.findUniqueOrThrow({
         where: { userId_creatorId: { userId: seller.id, creatorId: TRADING_CREATOR_ID } },
       }),
     ]);
 
-    expect(sellAfter.status).toBe("CANCELLED");
-    expect(sellAfter.cancelReason).toBe("DUST_REMAINDER");
-    expect(decimalEquals(sellAfter.filled, "0.00000100")).toBe(true);
-    expect(decimalEquals(sellAfter.reservedQuantity, "0")).toBe(true);
-    expect(decimalEquals(position.quantity, "0.00000050")).toBe(true);
-    expect(decimalEquals(position.reservedQuantity, "0")).toBe(true);
+    expect(partial.order.status).toBe("FILLED");
+    expect(sellAfterFill.status).toBe("PARTIAL");
+    expect(sellAfterFill.cancelReason).toBeNull();
+    expect(decimalEquals(sellAfterFill.filled, "0.00000100")).toBe(true);
+    expect(decimalEquals(sellAfterFill.reservedQuantity, "0.00000050")).toBe(true);
+    expect(decimalEquals(positionAfterFill.quantity, "0.00000050")).toBe(true);
+    expect(decimalEquals(positionAfterFill.reservedQuantity, "0.00000050")).toBe(true);
+
+    await cancelOrder(tradingPrincipal(seller.id), sell.order.id, "sell-dust-remainder-cancel");
+    const [sellAfterCancel, positionAfterCancel] = await Promise.all([
+      prisma.order.findUniqueOrThrow({ where: { id: sell.order.id } }),
+      prisma.position.findUniqueOrThrow({
+        where: { userId_creatorId: { userId: seller.id, creatorId: TRADING_CREATOR_ID } },
+      }),
+    ]);
+
+    expect(sellAfterCancel.status).toBe("CANCELLED");
+    expect(decimalEquals(sellAfterCancel.reservedQuantity, "0")).toBe(true);
+    expect(decimalEquals(positionAfterCancel.quantity, "0.00000050")).toBe(true);
+    expect(decimalEquals(positionAfterCancel.reservedQuantity, "0")).toBe(true);
+  }, REAL_POSTGRES_TIMEOUT_MS);
+
+  it("rejects a seller balance credit overflow without mutating a pending fill", async () => {
+    const seller = await createTradingUser(prisma, {
+      id: "balance-overflow-seller",
+      balance: decimal("9999999999999999.9999"),
+      positionQuantity: decimal("1"),
+    });
+    const buyer = await createTradingUser(prisma, { id: "balance-overflow-buyer" });
+    const maker = await placeOrder(
+      tradingPrincipal(seller.id),
+      {
+        creatorId: TRADING_CREATOR_ID,
+        side: "SELL",
+        orderType: "LIMIT",
+        quantity: decimal("1"),
+        limitPrice: decimal("10"),
+      },
+      "balance-overflow-maker",
+    );
+
+    await expect(
+      placeOrder(
+        tradingPrincipal(buyer.id),
+        {
+          creatorId: TRADING_CREATOR_ID,
+          side: "BUY",
+          orderType: "LIMIT",
+          quantity: decimal("1"),
+          limitPrice: decimal("10"),
+        },
+        "balance-overflow-taker",
+      ),
+    ).rejects.toMatchObject({ status: 409, code: "TRADING_STATE_OVERFLOW" });
+
+    const [sellerAfter, buyerAfter, makerAfter, orders, executions] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: seller.id } }),
+      prisma.user.findUniqueOrThrow({ where: { id: buyer.id } }),
+      prisma.order.findUniqueOrThrow({ where: { id: maker.order.id } }),
+      prisma.order.findMany({ where: { creatorId: TRADING_CREATOR_ID } }),
+      prisma.tradeExecution.findMany({ where: { creatorId: TRADING_CREATOR_ID } }),
+    ]);
+
+    expect(decimalEquals(sellerAfter.balance, "9999999999999999.9999")).toBe(true);
+    expect(decimalEquals(buyerAfter.balance, "100")).toBe(true);
+    expect(decimalEquals(buyerAfter.reservedBalance, "0")).toBe(true);
+    expect(makerAfter.status).toBe("OPEN");
+    expect(decimalEquals(makerAfter.filled, "0")).toBe(true);
+    expect(decimalEquals(makerAfter.reservedQuantity, "1")).toBe(true);
+    expect(orders).toHaveLength(1);
+    expect(executions).toHaveLength(0);
+  }, REAL_POSTGRES_TIMEOUT_MS);
+
+  it("rejects a buyer position overflow without mutating a pending fill", async () => {
+    const buyer = await createTradingUser(prisma, {
+      id: "position-overflow-buyer",
+      positionQuantity: decimal("999999999999.99999999"),
+    });
+    const seller = await createTradingUser(prisma, {
+      id: "position-overflow-seller",
+      positionQuantity: decimal("1"),
+    });
+    const maker = await placeOrder(
+      tradingPrincipal(seller.id),
+      {
+        creatorId: TRADING_CREATOR_ID,
+        side: "SELL",
+        orderType: "LIMIT",
+        quantity: decimal("1"),
+        limitPrice: decimal("10"),
+      },
+      "position-overflow-maker",
+    );
+
+    await expect(
+      placeOrder(
+        tradingPrincipal(buyer.id),
+        {
+          creatorId: TRADING_CREATOR_ID,
+          side: "BUY",
+          orderType: "LIMIT",
+          quantity: decimal("1"),
+          limitPrice: decimal("10"),
+        },
+        "position-overflow-taker",
+      ),
+    ).rejects.toMatchObject({ status: 409, code: "TRADING_STATE_OVERFLOW" });
+
+    const [buyerAfter, buyerPositionAfter, sellerPositionAfter, makerAfter, orders, executions] =
+      await Promise.all([
+        prisma.user.findUniqueOrThrow({ where: { id: buyer.id } }),
+        prisma.position.findUniqueOrThrow({
+          where: { userId_creatorId: { userId: buyer.id, creatorId: TRADING_CREATOR_ID } },
+        }),
+        prisma.position.findUniqueOrThrow({
+          where: { userId_creatorId: { userId: seller.id, creatorId: TRADING_CREATOR_ID } },
+        }),
+        prisma.order.findUniqueOrThrow({ where: { id: maker.order.id } }),
+        prisma.order.findMany({ where: { creatorId: TRADING_CREATOR_ID } }),
+        prisma.tradeExecution.findMany({ where: { creatorId: TRADING_CREATOR_ID } }),
+      ]);
+
+    expect(decimalEquals(buyerAfter.balance, "100")).toBe(true);
+    expect(decimalEquals(buyerAfter.reservedBalance, "0")).toBe(true);
+    expect(decimalEquals(buyerPositionAfter.quantity, "999999999999.99999999")).toBe(true);
+    expect(decimalEquals(buyerPositionAfter.reservedQuantity, "0")).toBe(true);
+    expect(decimalEquals(sellerPositionAfter.quantity, "1")).toBe(true);
+    expect(decimalEquals(sellerPositionAfter.reservedQuantity, "1")).toBe(true);
+    expect(makerAfter.status).toBe("OPEN");
+    expect(decimalEquals(makerAfter.filled, "0")).toBe(true);
+    expect(orders).toHaveLength(1);
+    expect(executions).toHaveLength(0);
+  }, REAL_POSTGRES_TIMEOUT_MS);
+
+  it("reads a standalone portfolio in one repeatable-read transaction", async () => {
+    const user = await createTradingUser(prisma, { id: "repeatable-read-user" });
+    const transactionSpy = vi.spyOn(tradingPrisma, "$transaction");
+
+    try {
+      const portfolio = await getPortfolio(tradingPrincipal(user.id));
+
+      expect(portfolio.balance).toBe("100.0000");
+      expect(transactionSpy).toHaveBeenCalledWith(expect.any(Function), {
+        isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      });
+    } finally {
+      transactionSpy.mockRestore();
+    }
   }, REAL_POSTGRES_TIMEOUT_MS);
 });

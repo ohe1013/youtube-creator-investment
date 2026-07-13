@@ -52,5 +52,8 @@ export async function getPortfolioInTransaction(
 }
 
 export async function getPortfolio(principal: AuthPrincipal): Promise<TradingPortfolio> {
-  return getPortfolioInTransaction(prisma, principal);
+  return prisma.$transaction(
+    (tx) => getPortfolioInTransaction(tx, principal),
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
 }
