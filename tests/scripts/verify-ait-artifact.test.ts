@@ -4,8 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { AITBundle, AITWriter } from "@apps-in-toss/ait-format";
-import { afterEach, describe, expect, it } from "vitest";
+import { AITBundle, AITReader, AITWriter } from "@apps-in-toss/ait-format";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_AIT_UNCOMPRESSED_BYTES,
@@ -85,6 +85,70 @@ function mutateBundle(
   new DataView(output.buffer).setBigUint64(12, BigInt(encodedBundle.length), false);
   output.set(encodedBundle, headerBytes);
   output.set(tail, headerBytes + encodedBundle.length);
+  return output;
+}
+
+function getZipBounds(input: Uint8Array): {
+  zipStart: number;
+  zipLength: number;
+  zipEnd: number;
+} {
+  const headerBytes = 20;
+  const view = new DataView(input.buffer, input.byteOffset, input.byteLength);
+  const bundleLength = Number(view.getBigUint64(12, false));
+  const zipLengthOffset = headerBytes + bundleLength;
+  const zipLength = Number(view.getBigUint64(zipLengthOffset, false));
+  const zipStart = zipLengthOffset + 8;
+  return { zipStart, zipLength, zipEnd: zipStart + zipLength };
+}
+
+function replaceZipEntryName(
+  input: Uint8Array,
+  from: string,
+  to: string,
+  replacementLimit = Number.POSITIVE_INFINITY,
+): { artifact: Uint8Array; replacements: number } {
+  const fromBytes = encoder.encode(from);
+  const toBytes = encoder.encode(to);
+  if (fromBytes.byteLength !== toBytes.byteLength) {
+    throw new Error("ZIP entry name replacements must preserve byte length");
+  }
+
+  const output = Uint8Array.from(input);
+  const { zipStart, zipEnd } = getZipBounds(output);
+  let replacements = 0;
+
+  for (
+    let offset = zipStart;
+    offset <= zipEnd - fromBytes.byteLength && replacements < replacementLimit;
+    offset += 1
+  ) {
+    let matches = true;
+    for (let index = 0; index < fromBytes.byteLength; index += 1) {
+      if (output[offset + index] !== fromBytes[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (!matches) continue;
+
+    output.set(toBytes, offset);
+    replacements += 1;
+    offset += fromBytes.byteLength - 1;
+  }
+
+  return { artifact: output, replacements };
+}
+
+function corruptCentralDirectoryOffset(input: Uint8Array): Uint8Array {
+  const output = Uint8Array.from(input);
+  const { zipStart, zipLength, zipEnd } = getZipBounds(output);
+  const eocdOffset = zipEnd - 22;
+  const view = new DataView(output.buffer, output.byteOffset, output.byteLength);
+  view.setUint32(eocdOffset + 16, zipLength + 1, true);
+  if (view.getUint32(eocdOffset, true) !== 0x06054b50) {
+    throw new Error(`Expected EOCD at ZIP-relative offset ${eocdOffset - zipStart}`);
+  }
   return output;
 }
 
@@ -213,6 +277,127 @@ describe("verifyAitArtifact", () => {
     ).rejects.toMatchObject({ code: "AIT_WEB_INDEX" });
   });
 
+  it("rejects an unsafe ZIP member omitted from the AIT index", async () => {
+    const artifact = mutateBundle(
+      await buildFixture({
+        files: [
+          { name: ENTRYPOINT, content: "<!doctype html>" },
+          { name: "../unindexed-secret.txt", content: "unsafe" },
+        ],
+      }),
+      (bundle) => {
+        bundle.index = bundle.index.filter((entry) => entry.name === ENTRYPOINT);
+      },
+    );
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_ZIP_INDEX_MISMATCH",
+    });
+  });
+
+  it("rejects a safe ZIP member omitted from the AIT index", async () => {
+    const artifact = mutateBundle(
+      await buildFixture({
+        files: [
+          { name: ENTRYPOINT, content: "<!doctype html>" },
+          { name: "web/unindexed.js", content: "export {};" },
+        ],
+      }),
+      (bundle) => {
+        bundle.index = bundle.index.filter((entry) => entry.name === ENTRYPOINT);
+      },
+    );
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_ZIP_INDEX_MISMATCH",
+    });
+  });
+
+  it("rejects an AIT index member missing from the ZIP", async () => {
+    const artifact = mutateBundle(await buildFixture(), (bundle) => {
+      bundle.index[0].name = "web/missing.htm";
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_ZIP_INDEX_MISMATCH",
+    });
+  });
+
+  it("rejects duplicate raw names in the ZIP central directory", async () => {
+    const patched = replaceZipEntryName(
+      await buildFixture({
+        files: [
+          { name: ENTRYPOINT, content: "<!doctype html>" },
+          { name: "web/extra.html", content: "extra" },
+        ],
+      }),
+      "web/extra.html",
+      ENTRYPOINT,
+    );
+    expect(patched.replacements).toBe(2);
+
+    await expect(verifyAitArtifact(patched.artifact)).rejects.toMatchObject({
+      code: "AIT_DUPLICATE_ZIP_ENTRY",
+    });
+  });
+
+  it("rejects a local ZIP header name that disagrees with the central directory", async () => {
+    const patched = replaceZipEntryName(
+      await buildFixture({
+        files: [
+          { name: ENTRYPOINT, content: "<!doctype html>" },
+          { name: "web/extra.html", content: "extra" },
+        ],
+      }),
+      "web/extra.html",
+      ENTRYPOINT,
+      1,
+    );
+    expect(patched.replacements).toBe(1);
+
+    await expect(verifyAitArtifact(patched.artifact)).rejects.toMatchObject({
+      code: "AIT_ZIP_LOCAL_MISMATCH",
+    });
+  });
+
+  it("rejects out-of-bounds ZIP central-directory metadata", async () => {
+    const artifact = corruptCentralDirectoryOffset(await buildFixture());
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_ZIP_MALFORMED",
+    });
+  });
+
+  it("rejects a payload that does not match its indexed SHA-256", async () => {
+    const artifact = mutateBundle(await buildFixture(), (bundle) => {
+      bundle.index[0].sha256Hex = "0".repeat(64);
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_ENTRY_HASH",
+    });
+  });
+
+  it("extracts members without reinflating the complete ZIP for every entry", async () => {
+    const readEntry = vi.spyOn(AITReader.prototype, "readEntry");
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/app.js", content: "export {};" },
+        { name: "web/app.css", content: "body {}" },
+      ],
+    });
+
+    try {
+      await expect(verifyAitArtifact(artifact)).resolves.toMatchObject({
+        entryCount: 3,
+      });
+      expect(readEntry).not.toHaveBeenCalled();
+    } finally {
+      readEntry.mockRestore();
+    }
+  });
+
   it("rejects an index whose total uncompressed size exceeds 100 MiB", async () => {
     const artifact = mutateBundle(await buildFixture(), (bundle) => {
       bundle.index[0].uncompressedSize =
@@ -259,7 +444,12 @@ describe("verifyAitArtifact", () => {
     });
   });
 
-  it.each(["../secret.txt", "/absolute.txt", "C:\\absolute.txt"])(
+  it.each([
+    "../secret.txt",
+    "/absolute.txt",
+    "C:\\absolute.txt",
+    "C:escape.txt",
+  ])(
     "rejects unsafe archive path %s",
     async (unsafePath) => {
       const artifact = await buildFixture({
