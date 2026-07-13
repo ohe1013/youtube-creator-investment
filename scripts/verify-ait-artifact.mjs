@@ -13,6 +13,7 @@ const EXPECTED_FORMAT_VERSION = 1;
 const WEB_ENTRYPOINT = "web/index.html";
 const MAX_AIT_UNCOMPRESSED_BYTES_BIGINT = BigInt(MAX_AIT_UNCOMPRESSED_BYTES);
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+const latin1Decoder = new TextDecoder("latin1", { fatal: true });
 const zipLegacyNameDecoder = new TextDecoder("latin1", { fatal: true });
 const ZIP_EOCD_SIGNATURE = 0x06054b50;
 const ZIP_CENTRAL_SIGNATURE = 0x02014b50;
@@ -52,6 +53,14 @@ const genericSecretAssignmentPattern =
 
 const nextPublicAssignmentPattern =
   /(["']?(NEXT_PUBLIC_[A-Z0-9_]+)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;}]+)/gi;
+
+function containsSpecificSecretText(text) {
+  return specificSecretPatterns.some((pattern) => pattern.test(text));
+}
+
+export function containsSpecificSecretBytes(bytes) {
+  return containsSpecificSecretText(latin1Decoder.decode(bytes));
+}
 
 export class AitArtifactVerificationError extends Error {
   constructor(code, message, options) {
@@ -518,7 +527,7 @@ function scrubPublicConfiguration(text) {
 }
 
 function containsLikelySecret(text) {
-  if (specificSecretPatterns.some((pattern) => pattern.test(text))) {
+  if (containsSpecificSecretText(text)) {
     return true;
   }
 
@@ -765,6 +774,13 @@ export async function verifyAitArtifact(source = "creatorx.ait") {
       rejectArtifact(
         "AIT_ENTRY_HASH",
         `Artifact entry hash mismatch: ${normalizedName}`,
+      );
+    }
+
+    if (containsSpecificSecretBytes(payload)) {
+      rejectArtifact(
+        "AIT_SECRET_DETECTED",
+        `Suspected secret in entry ${normalizedName}`,
       );
     }
 

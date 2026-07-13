@@ -42,7 +42,7 @@ The API CORS allowlist is code-managed and contains only the private and publish
 | URL | Host and port | Required username shape |
 | --- | --- | --- |
 | `DIRECT_URL` | `db.<project-ref>.supabase.co:5432` | Any approved direct database role. |
-| `DATABASE_URL` (shared Supavisor) | `aws-<region>.pooler.supabase.com:5432` or `:6543` | A role ending in `.<project-ref>`, such as `postgres.<project-ref>`. |
+| `DATABASE_URL` (shared Supavisor) | `aws-<pooler-id>-<aws-region>.pooler.supabase.com:5432` or `:6543`, such as `aws-0-ap-northeast-2.pooler.supabase.com` | A role ending in `.<project-ref>`, such as `postgres.<project-ref>`. |
 | `DATABASE_URL` (dedicated runtime) | `db.<project-ref>.supabase.co:6543` | An approved runtime database role. |
 
 Set `pgbouncer=true` on `DATABASE_URL` for Prisma compatibility; it does not make a direct endpoint into a runtime pooler. `DIRECT_URL` must remain the direct `db.<project-ref>.supabase.co:5432` endpoint and must not set that option. The preflight derives the project ref from `DIRECT_URL`, then rejects a runtime URL for another project, a direct endpoint used as runtime, a pooler used as direct, or a generic remote PostgreSQL URL. Never paste credentials into this runbook or release evidence.

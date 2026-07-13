@@ -30,7 +30,8 @@ const POSTGRES_ENDPOINT_OVERRIDE_PARAMETERS = new Set([
   "service",
 ]);
 const SUPABASE_DIRECT_HOSTNAME = /^db\.([a-z0-9]+)\.supabase\.co$/;
-const SUPABASE_POOLER_HOSTNAME_SUFFIX = ".pooler.supabase.com";
+const SUPABASE_POOLER_HOSTNAME =
+  /^aws-\d+-(?:[a-z0-9]+-)+\d+\.pooler\.supabase\.com$/;
 const SUPABASE_POOLER_RUNTIME_PORTS = new Set(["5432", "6543"]);
 const SUPABASE_DEDICATED_RUNTIME_PORT = "6543";
 const LOCAL_HOSTNAME_SUFFIXES = [
@@ -139,10 +140,10 @@ function isRemoteHostname(hostname) {
   const normalized = canonicalHostname(hostname);
   const ipv4 = parseIpv4(normalized);
   const mapped = mappedIpv4(normalized);
-  const isPrivateIpv6 =
+  const isNonGlobalIpv6 =
     normalized === "::" ||
     normalized === "::1" ||
-    /^(?:fc|fd|fe[89ab])/i.test(normalized);
+    /^(?:fc|fd|fe[89a-f]|ff)/i.test(normalized);
   const isLocalNamespace = LOCAL_HOSTNAME_SUFFIXES.some(
     (suffix) => normalized === suffix.slice(1) || normalized.endsWith(suffix),
   );
@@ -155,7 +156,7 @@ function isRemoteHostname(hostname) {
     !isLocalNamespace &&
     !isPrivateIpv4(ipv4) &&
     !isPrivateIpv4(mapped) &&
-    !isPrivateIpv6
+    !isNonGlobalIpv6
   );
 }
 
@@ -302,7 +303,7 @@ function assertSupabaseRuntimeUrl(connection, projectRef) {
     return;
   }
 
-  if (connection.hostname.endsWith(SUPABASE_POOLER_HOSTNAME_SUFFIX)) {
+  if (SUPABASE_POOLER_HOSTNAME.test(connection.hostname)) {
     if (!SUPABASE_POOLER_RUNTIME_PORTS.has(port)) {
       fail("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
     }

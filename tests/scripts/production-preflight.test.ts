@@ -58,12 +58,15 @@ const requiredProductionVariables = [
 
 const temporaryRoots: string[] = [];
 
-async function createOutputFixture(content: string) {
+async function createOutputFixture(
+  content: string | Uint8Array,
+  fileName = "runtime.js",
+) {
   const root = await mkdtemp(join(tmpdir(), "creatorx-client-secret-scan-"));
   temporaryRoots.push(root);
   const webDir = join(root, "out", "web");
   await mkdir(webDir, { recursive: true });
-  await writeFile(join(webDir, "runtime.js"), content, "utf8");
+  await writeFile(join(webDir, fileName), content);
   return join(root, "out");
 }
 
@@ -120,6 +123,27 @@ describe("production preflight", () => {
     ).toThrow("remote HTTPS URL");
   });
 
+  it.each(["https://[fec0::1]", "https://[ff02::1]"])(
+    "rejects a non-global IPv6 HTTPS API origin without echoing it: %s",
+    (apiBaseUrl) => {
+      let error: Error | null = null;
+      try {
+        validateProductionEnvironment({
+          ...validProductionEnvironment,
+          NEXT_PUBLIC_CREATORX_API_BASE_URL: apiBaseUrl,
+        });
+      } catch (failure) {
+        if (failure instanceof Error) error = failure;
+      }
+
+      expect(error).toMatchObject({ name: "ProductionPreflightError" });
+      expect(String(error?.message)).toBe(
+        "NEXT_PUBLIC_CREATORX_API_BASE_URL must be a remote HTTPS URL",
+      );
+      expect(String(error?.message)).not.toContain(apiBaseUrl);
+    },
+  );
+
   it.each(["6543", "5432"])(
     "accepts a shared Supavisor runtime on port %s for the direct project",
     (runtimePort) => {
@@ -132,6 +156,23 @@ describe("production preflight", () => {
       ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
     },
   );
+
+  it("accepts the documented regional Supavisor hostname", () => {
+    expect(validateProductionEnvironment(validProductionEnvironment)).toEqual({
+      releaseChannel: "production",
+      tossLoginEnabled: false,
+    });
+  });
+
+  it("rejects a pooler hostname that is not an AWS regional Supavisor endpoint", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          `postgresql://postgres.${SUPABASE_PROJECT_REF}:password@not-a-region.pooler.supabase.com:6543/postgres?pgbouncer=true`,
+      }),
+    ).toThrow("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
+  });
 
   it("accepts a dedicated Supabase runtime on port 6543 for the direct project", () => {
     expect(
@@ -619,5 +660,30 @@ describe("client secret scan", () => {
     expect(failure).toMatchObject({ code: "CLIENT_SECRET_DETECTED" });
     expect(String(failure.message)).toContain("web/runtime.js");
     expect(String(failure.message)).not.toContain(content);
+  });
+
+  it("rejects a NUL-delimited database URL in opaque binary output without echoing it", async () => {
+    const secret =
+      "postgresql://creator:committed-password@db.creatorx.example/creatorx";
+    const outDir = await createOutputFixture(
+      new TextEncoder().encode(`\0${secret}\0`),
+      "opaque.bin",
+    );
+    const failure = await scanClientSecrets({ outDir }).catch((error) => error);
+
+    expect(failure).toMatchObject({ code: "CLIENT_SECRET_DETECTED" });
+    expect(String(failure.message)).toContain("web/opaque.bin");
+    expect(String(failure.message)).not.toContain(secret);
+  });
+
+  it("allows an opaque binary file without a concrete secret", async () => {
+    const outDir = await createOutputFixture(
+      new Uint8Array([0, 255, 1, 2, 3, 4, 5]),
+      "safe-opaque.bin",
+    );
+
+    await expect(scanClientSecrets({ outDir })).resolves.toEqual({
+      filesScanned: 1,
+    });
   });
 });

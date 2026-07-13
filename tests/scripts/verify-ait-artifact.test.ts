@@ -693,6 +693,26 @@ describe("verifyAitArtifact", () => {
     });
   });
 
+  it("rejects a NUL-delimited database URL in an opaque binary payload without echoing it", async () => {
+    const secret =
+      "postgresql://creator:committed-password@db.creatorx.example/creatorx";
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/opaque.bin",
+          content: encoder.encode(`\0${secret}\0`),
+        },
+      ],
+    });
+
+    const failure = await verifyAitArtifact(artifact).catch((error) => error);
+
+    expect(failure).toMatchObject({ code: "AIT_SECRET_DETECTED" });
+    expect(String(failure.message)).toContain("web/opaque.bin");
+    expect(String(failure.message)).not.toContain(secret);
+  });
+
   it("does not flag normal NEXT_PUBLIC configuration", async () => {
     const artifact = await buildFixture({
       files: [

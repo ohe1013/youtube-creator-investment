@@ -1,20 +1,13 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { verifyAitArtifact } from "./verify-ait-artifact.mjs";
+import {
+  containsSpecificSecretBytes,
+  verifyAitArtifact,
+} from "./verify-ait-artifact.mjs";
 
-const TEXT_EXTENSIONS = new Set([
-  ".css",
-  ".html",
-  ".js",
-  ".json",
-  ".map",
-  ".mjs",
-  ".svg",
-  ".txt",
-]);
-const MAX_TEXT_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_CLIENT_FILE_BYTES = 10 * 1024 * 1024;
 const specificSecretPatterns = [
   /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/i,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
@@ -93,7 +86,7 @@ function readableText(bytes) {
     : null;
 }
 
-async function collectTextFiles(root, directory = root, files = []) {
+async function collectClientFiles(root, directory = root, files = []) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = resolve(directory, entry.name);
     const label = relative(root, path).replaceAll("\\", "/");
@@ -101,15 +94,13 @@ async function collectTextFiles(root, directory = root, files = []) {
       reject("CLIENT_SCAN_SYMLINK", `Refusing symbolic link in client output: ${label}`);
     }
     if (entry.isDirectory()) {
-      await collectTextFiles(root, path, files);
+      await collectClientFiles(root, path, files);
       continue;
     }
-    if (!entry.isFile() || !TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
-      continue;
-    }
+    if (!entry.isFile()) continue;
     const stats = await lstat(path);
-    if (stats.size > MAX_TEXT_FILE_BYTES) {
-      reject("CLIENT_SCAN_FILE_TOO_LARGE", `Client text file is too large: ${label}`);
+    if (stats.size > MAX_CLIENT_FILE_BYTES) {
+      reject("CLIENT_SCAN_FILE_TOO_LARGE", `Client output file is too large: ${label}`);
     }
     files.push({ path, label });
   }
@@ -132,9 +123,14 @@ export async function scanClientSecrets({ outDir, artifactPath } = {}) {
     reject("CLIENT_OUTPUT_INVALID", "Client output directory is invalid");
   }
 
-  const files = await collectTextFiles(root);
+  const files = await collectClientFiles(root);
   for (const file of files) {
-    const text = readableText(await readFile(file.path));
+    const bytes = await readFile(file.path);
+    if (containsSpecificSecretBytes(bytes)) {
+      reject("CLIENT_SECRET_DETECTED", `Suspected secret in client output: ${file.label}`);
+    }
+
+    const text = readableText(bytes);
     if (text !== null && containsClientSecret(text)) {
       reject("CLIENT_SECRET_DETECTED", `Suspected secret in client output: ${file.label}`);
     }
