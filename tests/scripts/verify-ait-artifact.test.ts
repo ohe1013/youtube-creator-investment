@@ -568,6 +568,42 @@ describe("verifyAitArtifact", () => {
     });
   });
 
+  it("rejects a quoted literal that only looks like a dynamic runtime chain", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content:
+            'const session = { refreshToken: "tokenStore.read().slice(0)" };',
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/runtime.js",
+    });
+  });
+
+  it("rejects a template literal that only looks like a dynamic runtime chain", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content:
+            "const session = { refreshToken: `tokenStore.read().slice(0)` };",
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/runtime.js",
+    });
+  });
+
   it("rejects a dynamic-looking expression containing a committed string literal", async () => {
     const artifact = await buildFixture({
       files: [

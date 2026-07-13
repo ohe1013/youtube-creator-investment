@@ -516,11 +516,13 @@ function containsLikelySecret(text) {
   genericSecretAssignmentPattern.lastIndex = 0;
   for (const match of scrubbed.matchAll(genericSecretAssignmentPattern)) {
     const key = match[1] ?? match[2] ?? "";
-    const value = match[3] ?? match[4] ?? match[5] ?? match[6] ?? "";
+    const quotedOrTemplateValue = match[3] ?? match[4] ?? match[5];
+    const value = quotedOrTemplateValue ?? match[6] ?? "";
+    const isUnquotedValue = quotedOrTemplateValue === undefined;
     if (
       isSensitiveConfigurationKey(key) &&
       !isPlaceholderValue(value) &&
-      !isDynamicRuntimeExpression(value)
+      (!isUnquotedValue || !isDynamicRuntimeExpression(value))
     ) {
       return true;
     }
