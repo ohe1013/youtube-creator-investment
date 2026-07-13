@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextRequest } from "next/server";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -31,9 +32,9 @@ const dbCreator = {
   currentScore: 88,
   initialPrice: 100,
   currentPrice: 125,
-  totalSupply: 1_000_000,
-  circulatingSupply: 200_000,
-  reserveSupply: 800_000,
+  totalSupply: new Prisma.Decimal("1000000.00000000"),
+  circulatingSupply: new Prisma.Decimal("200000.00000000"),
+  reserveSupply: new Prisma.Decimal("800000.00000000"),
   liquidity: 10_000,
   isActive: true,
   visibility: "PUBLIC",
@@ -59,6 +60,9 @@ it("returns exact CreatorSummary JSON including ISO timestamps and video count",
   const body = await response.json();
   expect(creatorSummarySchema.parse(body.creators[0])).toEqual({
     ...dbCreator,
+    totalSupply: 1_000_000,
+    circulatingSupply: 200_000,
+    reserveSupply: 800_000,
     createdAt: "2026-07-01T00:00:00.000Z",
     lastSyncedAt: "2026-07-10T00:00:00.000Z",
   });

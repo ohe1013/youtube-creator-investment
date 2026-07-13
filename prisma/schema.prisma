@@ -25,11 +25,11 @@ model Creator {
   lastSyncedAt      DateTime         @updatedAt
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
-  circulatingSupply Float            @default(200000)
+  circulatingSupply Decimal          @default(200000) @db.Decimal(20, 8)
   initialPrice      Decimal          @default(100) @db.Decimal(20, 4)
   liquidity         Decimal          @default(10000) @db.Decimal(20, 4)
-  reserveSupply     Float            @default(800000)
-  totalSupply       Float            @default(1000000)
+  reserveSupply     Decimal          @default(800000) @db.Decimal(20, 8)
+  totalSupply       Decimal          @default(1000000) @db.Decimal(20, 8)
   stats             CreatorStat[]
   positions         Position[]
   legacyTrades      LegacyTrade[]
@@ -323,11 +323,11 @@ model TradeExecution {
   quantity     Decimal  @db.Decimal(20, 8)
   quoteAmount  Decimal  @db.Decimal(20, 4)
   executedAt   DateTime @default(now())
-  makerOrder   Order    @relation("MakerOrderExecution", fields: [makerOrderId], references: [id], onDelete: Restrict)
-  takerOrder   Order    @relation("TakerOrderExecution", fields: [takerOrderId], references: [id], onDelete: Restrict)
-  buyer        User     @relation("ExecutionBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
-  seller       User     @relation("ExecutionSeller", fields: [sellerId], references: [id], onDelete: Restrict)
-  creator      Creator  @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  makerOrder   Order    @relation("MakerOrderExecution", fields: [makerOrderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  takerOrder   Order    @relation("TakerOrderExecution", fields: [takerOrderId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  buyer        User     @relation("ExecutionBuyer", fields: [buyerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  seller       User     @relation("ExecutionSeller", fields: [sellerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator      Creator  @relation(fields: [creatorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([makerOrderId])
   @@index([takerOrderId])

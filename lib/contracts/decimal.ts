@@ -17,6 +17,6 @@ export function serializeDecimal(value: DecimalSerializable): DecimalString {
     throw new TypeError("Decimal values must not be serialized from numbers");
   }
 
-  const text = typeof value === "string" ? value : value.toString();
+  const text = typeof value === "string" ? value : value.toFixed();
   return decimalStringSchema.parse(text);
 }

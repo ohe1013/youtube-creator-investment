@@ -20,7 +20,7 @@ export async function GET() {
     });
 
     const totalMarketCap = activeCreators.reduce(
-      (sum, c) => sum + Number(c.currentPrice) * (c.circulatingSupply || 0),
+      (sum, c) => sum + Number(c.currentPrice) * Number(c.circulatingSupply),
       0
     );
 
@@ -99,12 +99,17 @@ export async function GET() {
       rankings: topRankings.map((r) => ({
         ...r,
         currentPrice: Number(r.currentPrice),
-        marketCap: Number(r.currentPrice) * (r.circulatingSupply || 200000),
+        circulatingSupply: Number(r.circulatingSupply),
+        marketCap:
+          Number(r.currentPrice) * (Number(r.circulatingSupply) || 200000),
       })),
       newListings: newListings.map((creator) => ({
         ...creator,
         currentPrice: Number(creator.currentPrice),
         initialPrice: Number(creator.initialPrice),
+        totalSupply: Number(creator.totalSupply),
+        circulatingSupply: Number(creator.circulatingSupply),
+        reserveSupply: Number(creator.reserveSupply),
         liquidity: Number(creator.liquidity),
       })),
       user: userSnapshot,

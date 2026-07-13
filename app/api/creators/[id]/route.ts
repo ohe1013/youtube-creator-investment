@@ -251,6 +251,9 @@ export async function GET(
         ...creator,
         currentPrice: Number(creator.currentPrice),
         initialPrice: Number(creator.initialPrice),
+        totalSupply: Number(creator.totalSupply),
+        circulatingSupply: Number(creator.circulatingSupply),
+        reserveSupply: Number(creator.reserveSupply),
         liquidity: Number(creator.liquidity),
       },
     });

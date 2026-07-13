@@ -8,6 +8,10 @@ const prisma = new PrismaClient();
 const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
 const foundationMigration =
   "prisma/migrations/20260710_shared_backend_foundation/migration.sql";
+const hardeningMigration =
+  "prisma/migrations/20260713_trade_persistence_hardening/migration.sql";
+const supplyConstraintMigration =
+  "prisma/migrations/20260713_creator_supply_constraints/migration.sql";
 const legacyMigrations = [
   "prisma/migrations/20251218063440_init/migration.sql",
   "prisma/migrations/20251218115251_test2/migration.sql",
@@ -23,11 +27,68 @@ async function readMigration(relativePath: string) {
 }
 
 function splitSqlStatements(sql: string) {
-  return sql
-    .replace(/^\s*--.*$/gm, "")
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
+  const normalizedSql = sql.replace(/^\s*--.*$/gm, "");
+  const statements: string[] = [];
+  let statement = "";
+  let dollarQuote: string | null = null;
+  let quoted: "'" | '"' | null = null;
+
+  for (let index = 0; index < normalizedSql.length; index += 1) {
+    const character = normalizedSql[index];
+
+    if (dollarQuote) {
+      if (normalizedSql.startsWith(dollarQuote, index)) {
+        statement += dollarQuote;
+        index += dollarQuote.length - 1;
+        dollarQuote = null;
+      } else {
+        statement += character;
+      }
+      continue;
+    }
+
+    if (quoted) {
+      statement += character;
+      if (character === quoted) {
+        if (normalizedSql[index + 1] === quoted) {
+          statement += normalizedSql[index + 1];
+          index += 1;
+        } else {
+          quoted = null;
+        }
+      }
+      continue;
+    }
+
+    const dollarQuoteMatch = normalizedSql
+      .slice(index)
+      .match(/^\$[A-Za-z0-9_]*\$/);
+    if (dollarQuoteMatch) {
+      dollarQuote = dollarQuoteMatch[0];
+      statement += dollarQuote;
+      index += dollarQuote.length - 1;
+      continue;
+    }
+
+    if (character === "'" || character === '"') {
+      quoted = character;
+      statement += character;
+      continue;
+    }
+
+    if (character === ";") {
+      const trimmed = statement.trim();
+      if (trimmed) statements.push(trimmed);
+      statement = "";
+      continue;
+    }
+
+    statement += character;
+  }
+
+  const trailing = statement.trim();
+  if (trailing) statements.push(trailing);
+  return statements;
 }
 
 async function executeMigration(
@@ -37,6 +98,25 @@ async function executeMigration(
   for (const statement of splitSqlStatements(sql)) {
     await tx.$executeRawUnsafe(statement);
   }
+}
+
+async function captureRejectedMutation(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  savepoint: string,
+  sql: string,
+) {
+  await tx.$executeRawUnsafe(`SAVEPOINT "${savepoint}"`);
+  let rejection: unknown;
+
+  try {
+    await tx.$executeRawUnsafe(sql);
+  } catch (error) {
+    rejection = error;
+  }
+
+  await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT "${savepoint}"`);
+  await tx.$executeRawUnsafe(`RELEASE SAVEPOINT "${savepoint}"`);
+  return rejection;
 }
 
 describe.sequential("shared backend persistence migration", () => {
@@ -180,6 +260,292 @@ describe.sequential("shared backend persistence migration", () => {
           `);
           expect(tradeTables).toEqual([
             { legacyTable: '"LegacyTrade"', oldTable: null },
+          ]);
+
+          assertionsCompleted = true;
+          throw rollback;
+        },
+        { timeout: 30_000 },
+      );
+    } catch (error) {
+      if (error !== rollback) throw error;
+    }
+
+    expect(assertionsCompleted).toBe(true);
+  });
+
+  it("hardens supplies, backfills active reserves, and makes executions immutable", async () => {
+    const [foundationSql, hardeningSql, supplyConstraintSql, ...legacySql] =
+      await Promise.all([
+        readMigration(foundationMigration),
+        readMigration(hardeningMigration),
+        readMigration(supplyConstraintMigration),
+        ...legacyMigrations.map(readMigration),
+      ]);
+    const schema = `migration_hardening_${randomUUID().replaceAll("-", "")}`;
+    const rollback = new Error("ROLLBACK_MIGRATION_HARDENING_TEST");
+    let assertionsCompleted = false;
+
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
+          await tx.$executeRawUnsafe(
+            `SET LOCAL search_path TO "${schema}", public`,
+          );
+
+          for (const sql of legacySql) {
+            await executeMigration(tx, sql);
+          }
+          await executeMigration(tx, foundationSql);
+
+          await tx.$executeRawUnsafe(`
+            INSERT INTO "User" ("id", "initialBudget", "balance", "updatedAt")
+            VALUES
+              ('hardening-buyer', 1000, 1000, CURRENT_TIMESTAMP),
+              ('hardening-seller', 500, 500, CURRENT_TIMESTAMP)
+          `);
+          await tx.$executeRawUnsafe(`
+            INSERT INTO "Creator" (
+              "id", "youtubeChannelId", "name", "currentPrice", "initialPrice",
+              "circulatingSupply", "reserveSupply", "totalSupply",
+              "lastSyncedAt", "updatedAt"
+            ) VALUES (
+              'hardening-creator', 'hardening-channel', 'Hardening Creator',
+              12.3456, 10, 123456.123456789, 876543.876543219,
+              1000000.000000009, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+          `);
+          await tx.$executeRawUnsafe(`
+            INSERT INTO "Position" (
+              "id", "userId", "creatorId", "quantity", "reservedQuantity",
+              "avgPrice", "updatedAt"
+            ) VALUES (
+              'hardening-position', 'hardening-seller', 'hardening-creator',
+              10, 0, 10, CURRENT_TIMESTAMP
+            )
+          `);
+          await tx.$executeRawUnsafe(`
+            INSERT INTO "Order" (
+              "id", "userId", "creatorId", "type", "price", "quantity",
+              "filled", "status", "updatedAt"
+            ) VALUES
+              ('buy-open', 'hardening-buyer', 'hardening-creator', 'BUY', 12.3456, 10, 2.5, 'OPEN', CURRENT_TIMESTAMP),
+              ('buy-partial', 'hardening-buyer', 'hardening-creator', 'BUY', 2.5, 4, 1, 'PARTIAL', CURRENT_TIMESTAMP),
+              ('buy-cancelled', 'hardening-buyer', 'hardening-creator', 'BUY', 999, 2, 0, 'CANCELLED', CURRENT_TIMESTAMP),
+              ('sell-open', 'hardening-seller', 'hardening-creator', 'SELL', 13, 5, 0.75, 'OPEN', CURRENT_TIMESTAMP),
+              ('sell-partial', 'hardening-seller', 'hardening-creator', 'SELL', 14, 3, 1.125, 'PARTIAL', CURRENT_TIMESTAMP),
+              ('sell-filled', 'hardening-seller', 'hardening-creator', 'SELL', 15, 1, 1, 'FILLED', CURRENT_TIMESTAMP)
+          `);
+          await tx.$executeRawUnsafe(`
+            INSERT INTO "TradeExecution" (
+              "id", "makerOrderId", "takerOrderId", "buyerId", "sellerId",
+              "creatorId", "price", "quantity", "quoteAmount"
+            ) VALUES (
+              'immutable-execution', 'buy-open', 'sell-open',
+              'hardening-buyer', 'hardening-seller', 'hardening-creator',
+              12.3456, 1, 12.3456
+            )
+          `);
+
+          await executeMigration(tx, supplyConstraintSql);
+          await executeMigration(tx, hardeningSql);
+
+          const supplyColumns = await tx.$queryRawUnsafe<
+            Array<{
+              columnName: string;
+              precision: number;
+              scale: number;
+            }>
+          >(`
+            SELECT
+              column_name AS "columnName",
+              numeric_precision::int AS precision,
+              numeric_scale::int AS scale
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'Creator'
+              AND column_name IN (
+                'circulatingSupply', 'reserveSupply', 'totalSupply'
+              )
+            ORDER BY column_name
+          `);
+          expect(supplyColumns).toEqual([
+            { columnName: "circulatingSupply", precision: 20, scale: 8 },
+            { columnName: "reserveSupply", precision: 20, scale: 8 },
+            { columnName: "totalSupply", precision: 20, scale: 8 },
+          ]);
+
+          const supplyConstraints = await tx.$queryRawUnsafe<
+            Array<{ name: string }>
+          >(`
+            SELECT conname AS name
+            FROM pg_constraint
+            WHERE connamespace = current_schema()::regnamespace
+              AND conname = 'Creator_supplies_nonnegative'
+          `);
+          expect(supplyConstraints).toEqual([
+            { name: "Creator_supplies_nonnegative" },
+          ]);
+
+          const negativeSupplyRejection = await captureRejectedMutation(
+            tx,
+            "negative_supply",
+            `UPDATE "Creator" SET "totalSupply" = -1 WHERE id = 'hardening-creator'`,
+          );
+          expect(negativeSupplyRejection).toBeDefined();
+
+          const supplies = await tx.$queryRawUnsafe<
+            Array<{
+              circulatingSupply: string;
+              reserveSupply: string;
+              totalSupply: string;
+            }>
+          >(`
+            SELECT
+              "circulatingSupply"::text AS "circulatingSupply",
+              "reserveSupply"::text AS "reserveSupply",
+              "totalSupply"::text AS "totalSupply"
+            FROM "Creator"
+            WHERE id = 'hardening-creator'
+          `);
+          expect(supplies).toEqual([
+            {
+              circulatingSupply: "123456.12345679",
+              reserveSupply: "876543.87654322",
+              totalSupply: "1000000.00000001",
+            },
+          ]);
+
+          const orders = await tx.$queryRawUnsafe<
+            Array<{
+              id: string;
+              reservedQuote: string;
+              reservedQuantity: string;
+            }>
+          >(`
+            SELECT
+              id,
+              "reservedQuote"::text AS "reservedQuote",
+              "reservedQuantity"::text AS "reservedQuantity"
+            FROM "Order"
+            ORDER BY id
+          `);
+          expect(orders).toEqual([
+            {
+              id: "buy-cancelled",
+              reservedQuote: "0.0000",
+              reservedQuantity: "0.00000000",
+            },
+            {
+              id: "buy-open",
+              reservedQuote: "92.5920",
+              reservedQuantity: "0.00000000",
+            },
+            {
+              id: "buy-partial",
+              reservedQuote: "7.5000",
+              reservedQuantity: "0.00000000",
+            },
+            {
+              id: "sell-filled",
+              reservedQuote: "0.0000",
+              reservedQuantity: "0.00000000",
+            },
+            {
+              id: "sell-open",
+              reservedQuote: "0.0000",
+              reservedQuantity: "4.25000000",
+            },
+            {
+              id: "sell-partial",
+              reservedQuote: "0.0000",
+              reservedQuantity: "1.87500000",
+            },
+          ]);
+
+          const aggregateReserves = await tx.$queryRawUnsafe<
+            Array<{
+              reservedBalance: string;
+              reservedQuantity: string;
+            }>
+          >(`
+            SELECT
+              buyer."reservedBalance"::text AS "reservedBalance",
+              position."reservedQuantity"::text AS "reservedQuantity"
+            FROM "User" buyer
+            CROSS JOIN "Position" position
+            WHERE buyer.id = 'hardening-buyer'
+              AND position.id = 'hardening-position'
+          `);
+          expect(aggregateReserves).toEqual([
+            {
+              reservedBalance: "100.0920",
+              reservedQuantity: "6.12500000",
+            },
+          ]);
+
+          const updateRejection = await captureRejectedMutation(
+            tx,
+            "immutable_update",
+            `UPDATE "TradeExecution" SET "quoteAmount" = 99 WHERE id = 'immutable-execution'`,
+          );
+          expect(updateRejection).toBeDefined();
+
+          const deleteRejection = await captureRejectedMutation(
+            tx,
+            "immutable_delete",
+            `DELETE FROM "TradeExecution" WHERE id = 'immutable-execution'`,
+          );
+          expect(deleteRejection).toBeDefined();
+
+          const execution = await tx.$queryRawUnsafe<
+            Array<{ count: number; quoteAmount: string }>
+          >(`
+            SELECT COUNT(*)::int AS count, MAX("quoteAmount")::text AS "quoteAmount"
+            FROM "TradeExecution"
+            WHERE id = 'immutable-execution'
+          `);
+          expect(execution).toEqual([{ count: 1, quoteAmount: "12.3456" }]);
+
+          const executionForeignKeys = await tx.$queryRawUnsafe<
+            Array<{ name: string; updateAction: string }>
+          >(`
+            SELECT
+              conname AS name,
+              CASE confupdtype WHEN 'r' THEN 'RESTRICT' ELSE confupdtype::text END AS "updateAction"
+            FROM pg_constraint
+            WHERE connamespace = current_schema()::regnamespace
+              AND conname IN (
+                'TradeExecution_makerOrderId_fkey',
+                'TradeExecution_takerOrderId_fkey',
+                'TradeExecution_buyerId_fkey',
+                'TradeExecution_sellerId_fkey',
+                'TradeExecution_creatorId_fkey'
+              )
+            ORDER BY conname
+          `);
+          expect(executionForeignKeys).toEqual([
+            {
+              name: "TradeExecution_buyerId_fkey",
+              updateAction: "RESTRICT",
+            },
+            {
+              name: "TradeExecution_creatorId_fkey",
+              updateAction: "RESTRICT",
+            },
+            {
+              name: "TradeExecution_makerOrderId_fkey",
+              updateAction: "RESTRICT",
+            },
+            {
+              name: "TradeExecution_sellerId_fkey",
+              updateAction: "RESTRICT",
+            },
+            {
+              name: "TradeExecution_takerOrderId_fkey",
+              updateAction: "RESTRICT",
+            },
           ]);
 
           assertionsCompleted = true;
