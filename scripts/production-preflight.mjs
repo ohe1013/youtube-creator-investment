@@ -21,6 +21,7 @@ const SANDBOX_OPERATOR_NAME = "CreatorX \uAC1C\uBC1C\uD300";
 const SANDBOX_SUPPORT_URL =
   "https://github.com/ohe1013/youtube-creator-investment/issues";
 const SANDBOX_PRIVACY_CONTACT = "GitHub Issues";
+const DEFAULT_POSTGRES_PORT = "5432";
 const LOCAL_HOSTNAME_SUFFIXES = [
   ".localhost",
   ".local",
@@ -192,6 +193,21 @@ function assertDirectMigrationUrl(url) {
   }
 }
 
+function hasSamePostgresEndpoint(left, right) {
+  return (
+    canonicalHostname(left.hostname) === canonicalHostname(right.hostname) &&
+    (left.port || DEFAULT_POSTGRES_PORT) ===
+      (right.port || DEFAULT_POSTGRES_PORT) &&
+    left.pathname === right.pathname
+  );
+}
+
+function assertDistinctPostgresEndpoints(databaseConnection, directConnection) {
+  if (hasSamePostgresEndpoint(databaseConnection, directConnection)) {
+    fail("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
+  }
+}
+
 function assertDate(key, value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) {
@@ -264,6 +280,7 @@ export function validateProductionEnvironment(env = process.env) {
   }
   assertPooledRuntimeUrl(databaseConnection);
   assertDirectMigrationUrl(directConnection);
+  assertDistinctPostgresEndpoints(databaseConnection, directConnection);
 
   if (requireValue(env, "CREATORX_ACCESS_TOKEN_SECRET").length < 32) {
     fail("CREATORX_ACCESS_TOKEN_SECRET must be at least 32 characters");

@@ -137,6 +137,16 @@ describe("production preflight", () => {
     ).toThrow("DATABASE_URL and DIRECT_URL must not be the same URL");
   });
 
+  it("rejects direct migration URLs that reuse the pooled database endpoint", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DIRECT_URL:
+          "postgres://migration:other-password@DB.CREATORX.EXAMPLE.:6543/postgres?sslmode=require",
+      }),
+    ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
+  });
+
   it("requires an actual calendar date for the legal effective date", () => {
     expect(() =>
       validateProductionEnvironment({
