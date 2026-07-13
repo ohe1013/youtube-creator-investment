@@ -1,7 +1,7 @@
 # Local backend database
 
 This harness runs PostgreSQL 16 in Docker and exposes only the isolated
-`creatorx_test` database on `localhost:54329`. It is intended for local
+`creatorx_test` database on `127.0.0.1:54329`. It is intended for local
 integration tests, not production or shared databases.
 
 ## First-time setup
@@ -23,10 +23,12 @@ setup, so later runs need only the database and `.env.test.local`.
 ## Safety guarantees
 
 - `.env.test.local` is ignored runtime state. Never stage or commit it.
-- The integration global setup refuses to run unless both `DATABASE_URL` and
-  `DIRECT_URL` target the same database and its name ends in `_test`.
-- The setup runs `prisma migrate deploy`; it never runs `prisma migrate reset`,
-  drops a database, or invokes the repository's live YouTube seed.
+- Both `npm run db:migrate` and the integration global setup call the same
+  safety guard. They refuse to run unless `DATABASE_URL` and `DIRECT_URL`
+  target the same database and its name ends in `_test`.
+- The guarded migration runner and global setup run `prisma migrate deploy`;
+  they never run `prisma migrate reset`, drop a database, or invoke the
+  repository's live YouTube seed.
 - The only seeded rows use fixed identifiers, values, and timestamps. They are
   upserted, so rerunning setup is deterministic and does not delete other rows.
 

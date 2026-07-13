@@ -3,34 +3,10 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 import { config as loadEnv } from "dotenv";
+import { assertTestDatabaseUrls } from "../../../scripts/test-database-safety.mjs";
 
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const require = createRequire(import.meta.url);
-
-function testDatabaseName(variableName: "DATABASE_URL" | "DIRECT_URL") {
-  const value = process.env[variableName];
-
-  if (!value) {
-    throw new Error(
-      `${variableName} must be set in .env.test.local before integration tests run.`,
-    );
-  }
-
-  let databaseName: string;
-  try {
-    databaseName = decodeURIComponent(new URL(value).pathname.replace(/^\//, ""));
-  } catch {
-    throw new Error(`${variableName} must be a valid PostgreSQL URL.`);
-  }
-
-  if (!databaseName.endsWith("_test")) {
-    throw new Error(
-      `Refusing to run integration setup: ${variableName} targets database "${databaseName}", which does not end in "_test".`,
-    );
-  }
-
-  return databaseName;
-}
 
 async function seedDeterministicFixtures() {
   const prisma = new PrismaClient();
@@ -106,14 +82,7 @@ export default async function globalSetup() {
     quiet: true,
   });
 
-  const databaseName = testDatabaseName("DATABASE_URL");
-  const directDatabaseName = testDatabaseName("DIRECT_URL");
-
-  if (databaseName !== directDatabaseName) {
-    throw new Error(
-      "Refusing to run integration setup: DATABASE_URL and DIRECT_URL target different test databases.",
-    );
-  }
+  assertTestDatabaseUrls(process.env);
 
   execFileSync(process.execPath, [require.resolve("prisma"), "migrate", "deploy"], {
     cwd: projectRoot,
