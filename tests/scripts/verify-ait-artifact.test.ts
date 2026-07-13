@@ -675,6 +675,24 @@ describe("verifyAitArtifact", () => {
     });
   });
 
+  it("does not scrub a concrete database URL in non-sensitive NEXT_PUBLIC config", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/public-config.js",
+          content:
+            'const config = { NEXT_PUBLIC_API_URL: "postgresql://creator:committed-password@db.example.com/app" };',
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/public-config.js",
+    });
+  });
+
   it("does not flag normal NEXT_PUBLIC configuration", async () => {
     const artifact = await buildFixture({
       files: [

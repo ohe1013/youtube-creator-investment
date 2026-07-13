@@ -94,6 +94,100 @@ describe("production preflight", () => {
     ).toThrow("remote HTTPS URL");
   });
 
+  it.each([
+    "https://localhost",
+    "https://127.0.0.1",
+    "https://10.0.0.2",
+    "https://172.16.0.2",
+    "https://192.168.0.2",
+    "https://[::1]",
+    "https://[::ffff:7f00:1]",
+    "https://creatorx-local",
+  ])("rejects a private or loopback HTTPS API origin: %s", (apiBaseUrl) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        NEXT_PUBLIC_CREATORX_API_BASE_URL: apiBaseUrl,
+      }),
+    ).toThrow("remote HTTPS URL");
+  });
+
+  it("requires the pooled runtime and direct migration database URLs to remain separate", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          "postgresql://runtime:password@direct.creatorx.example:5432/postgres",
+      }),
+    ).toThrow("DATABASE_URL must be a pooled PostgreSQL URL");
+
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DIRECT_URL:
+          "postgresql://migration:password@direct.creatorx.example:6543/postgres?pgbouncer=true",
+      }),
+    ).toThrow("DIRECT_URL must be a direct PostgreSQL URL");
+
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DIRECT_URL: validProductionEnvironment.DATABASE_URL,
+      }),
+    ).toThrow("DATABASE_URL and DIRECT_URL must not be the same URL");
+  });
+
+  it("requires an actual calendar date for the legal effective date", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE: "2026-02-29",
+      }),
+    ).toThrow("NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE must be an ISO date");
+  });
+
+  it.each([
+    [
+      "NEXT_PUBLIC_CREATORX_OPERATOR_NAME",
+      "CreatorX \uAC1C\uBC1C\uD300",
+      "verified operator name",
+    ],
+    [
+      "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
+      "https://github.com/ohe1013/youtube-creator-investment/issues",
+      "verified support URL",
+    ],
+    [
+      "NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT",
+      "GitHub Issues",
+      "verified privacy contact",
+    ],
+    [
+      "NEXT_PUBLIC_CREATORX_ICON_URL",
+      "https://static.toss.im/icons/png/4x/icon-toss-logo.png",
+      "CreatorX-owned",
+    ],
+  ] as const)(
+    "rejects the sandbox or Toss placeholder in %s",
+    (key, value, message) => {
+      expect(() =>
+        validateProductionEnvironment({
+          ...validProductionEnvironment,
+          [key]: value,
+        }),
+      ).toThrow(message);
+    },
+  );
+
+  it("requires an access-token signing secret of at least 32 characters", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        CREATORX_ACCESS_TOKEN_SECRET: "a".repeat(31),
+      }),
+    ).toThrow("CREATORX_ACCESS_TOKEN_SECRET must be at least 32 characters");
+  });
+
   it("requires the existing public and server Toss Login flags to agree", () => {
     expect(() =>
       validateProductionEnvironment({

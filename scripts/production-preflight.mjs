@@ -15,11 +15,18 @@ const REQUIRED_PRODUCTION_VARIABLES = [
   "NEXT_PUBLIC_CREATORX_ICON_URL",
 ];
 
+const LEGACY_TOSS_LOGO_URL =
+  "https://static.toss.im/icons/png/4x/icon-toss-logo.png";
+const SANDBOX_OPERATOR_NAME = "CreatorX \uAC1C\uBC1C\uD300";
+const SANDBOX_SUPPORT_URL =
+  "https://github.com/ohe1013/youtube-creator-investment/issues";
+const SANDBOX_PRIVACY_CONTACT = "GitHub Issues";
 const LOCAL_HOSTNAME_SUFFIXES = [
   ".localhost",
   ".local",
   ".internal",
   ".lan",
+  ".localdomain",
   ".home.arpa",
 ];
 
@@ -43,17 +50,65 @@ function requireValue(env, key) {
   return value.trim();
 }
 
-function isPrivateIpv4(hostname) {
-  const parts = hostname.split(".").map(Number);
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
-    return false;
+function canonicalHostname(hostname) {
+  return hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.+$/g, "");
+}
+
+function decodePathname(pathname) {
+  let decoded = pathname;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
   }
+  return decoded.normalize("NFKC").toLowerCase();
+}
+
+function isTossBrandIcon(value) {
+  const url = new URL(value);
+  if (value === LEGACY_TOSS_LOGO_URL) return true;
+  if (canonicalHostname(url.hostname) !== "static.toss.im") return false;
+
+  const compactPathname = decodePathname(url.pathname).replace(
+    /[^a-z0-9]+/g,
+    "",
+  );
+  return compactPathname.includes("tosslogo");
+}
+
+function parseIpv4(hostname) {
+  const parts = hostname.split(".").map(Number);
+  return parts.length === 4 &&
+    parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    ? parts
+    : null;
+}
+
+function mappedIpv4(hostname) {
+  const match = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(
+    hostname,
+  );
+  if (!match) return null;
+
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return [high >>> 8, high & 0xff, low >>> 8, low & 0xff];
+}
+
+function isPrivateIpv4(parts) {
+  if (!parts) return false;
   return (
+    parts[0] === 0 ||
     parts[0] === 10 ||
     parts[0] === 127 ||
+    (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
     (parts[0] === 169 && parts[1] === 254) ||
     (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
     (parts[0] === 192 && parts[1] === 168)
@@ -61,15 +116,24 @@ function isPrivateIpv4(hostname) {
 }
 
 function isRemoteHostname(hostname) {
-  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const normalized = canonicalHostname(hostname);
+  const ipv4 = parseIpv4(normalized);
+  const mapped = mappedIpv4(normalized);
+  const isPrivateIpv6 =
+    normalized === "::" ||
+    normalized === "::1" ||
+    /^(?:fc|fd|fe[89ab])/i.test(normalized);
+  const isLocalNamespace = LOCAL_HOSTNAME_SUFFIXES.some(
+    (suffix) => normalized === suffix.slice(1) || normalized.endsWith(suffix),
+  );
   return (
     normalized !== "localhost" &&
-    !isPrivateIpv4(normalized) &&
-    !LOCAL_HOSTNAME_SUFFIXES.some(
-      (suffix) => normalized === suffix.slice(1) || normalized.endsWith(suffix),
-    ) &&
-    normalized !== "::1" &&
-    !/^(?:fc|fd|fe[89ab])[0-9a-f:]*$/i.test(normalized)
+    !normalized.endsWith(".localhost") &&
+    !(!ipv4 && !normalized.includes(".") && !normalized.includes(":")) &&
+    !isLocalNamespace &&
+    !isPrivateIpv4(ipv4) &&
+    !isPrivateIpv4(mapped) &&
+    !isPrivateIpv6
   );
 }
 
@@ -89,6 +153,7 @@ function readUrl(key, value, { rootOnly = false } = {}) {
   ) {
     fail(`${key} must be a remote HTTPS URL`);
   }
+  return url;
 }
 
 function assertPostgresUrl(key, value) {
@@ -101,12 +166,67 @@ function assertPostgresUrl(key, value) {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     fail(`${key} must be a PostgreSQL URL`);
   }
+  return url;
+}
+
+function isPgbouncerUrl(url) {
+  const values = url.searchParams
+    .getAll("pgbouncer")
+    .map((value) => value.toLowerCase());
+  return values.length === 1 && values[0] === "true";
+}
+
+function assertPooledRuntimeUrl(url) {
+  if (!isPgbouncerUrl(url)) {
+    fail("DATABASE_URL must be a pooled PostgreSQL URL");
+  }
+}
+
+function assertDirectMigrationUrl(url) {
+  if (
+    url.searchParams
+      .getAll("pgbouncer")
+      .some((value) => value.toLowerCase() === "true")
+  ) {
+    fail("DIRECT_URL must be a direct PostgreSQL URL");
+  }
 }
 
 function assertDate(key, value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
     fail(`${key} must be an ISO date`);
   }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const daysInMonth = [
+    31,
+    year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) {
+    fail(`${key} must be an ISO date`);
+  }
+}
+
+function isSandboxSupportPlaceholder(value) {
+  const url = new URL(value);
+  const pathname = url.pathname.replace(/\/+$/g, "");
+  return (
+    url.protocol === "https:" &&
+    canonicalHostname(url.hostname) === "github.com" &&
+    pathname === new URL(SANDBOX_SUPPORT_URL).pathname
+  );
 }
 
 function assertPem(key, encoded, marker) {
@@ -137,9 +257,17 @@ export function validateProductionEnvironment(env = process.env) {
 
   const databaseUrl = requireValue(env, "DATABASE_URL");
   const directUrl = requireValue(env, "DIRECT_URL");
-  assertPostgresUrl("DATABASE_URL", databaseUrl);
-  assertPostgresUrl("DIRECT_URL", directUrl);
+  const databaseConnection = assertPostgresUrl("DATABASE_URL", databaseUrl);
+  const directConnection = assertPostgresUrl("DIRECT_URL", directUrl);
+  if (databaseUrl === directUrl) {
+    fail("DATABASE_URL and DIRECT_URL must not be the same URL");
+  }
+  assertPooledRuntimeUrl(databaseConnection);
+  assertDirectMigrationUrl(directConnection);
 
+  if (requireValue(env, "CREATORX_ACCESS_TOKEN_SECRET").length < 32) {
+    fail("CREATORX_ACCESS_TOKEN_SECRET must be at least 32 characters");
+  }
   if (requireValue(env, "CREATORX_IDENTITY_PEPPER").length < 32) {
     fail("CREATORX_IDENTITY_PEPPER must be at least 32 characters");
   }
@@ -167,14 +295,34 @@ export function validateProductionEnvironment(env = process.env) {
     requireValue(env, "NEXT_PUBLIC_CREATORX_API_BASE_URL"),
     { rootOnly: true },
   );
+  const supportUrl = requireValue(env, "NEXT_PUBLIC_CREATORX_SUPPORT_URL");
   readUrl(
     "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
-    requireValue(env, "NEXT_PUBLIC_CREATORX_SUPPORT_URL"),
+    supportUrl,
   );
+  if (isSandboxSupportPlaceholder(supportUrl)) {
+    fail("NEXT_PUBLIC_CREATORX_SUPPORT_URL must be a verified support URL");
+  }
+  const iconUrl = requireValue(env, "NEXT_PUBLIC_CREATORX_ICON_URL");
   readUrl(
     "NEXT_PUBLIC_CREATORX_ICON_URL",
-    requireValue(env, "NEXT_PUBLIC_CREATORX_ICON_URL"),
+    iconUrl,
   );
+  if (isTossBrandIcon(iconUrl)) {
+    fail("NEXT_PUBLIC_CREATORX_ICON_URL must be CreatorX-owned, not the Toss logo");
+  }
+  if (
+    requireValue(env, "NEXT_PUBLIC_CREATORX_OPERATOR_NAME") ===
+    SANDBOX_OPERATOR_NAME
+  ) {
+    fail("NEXT_PUBLIC_CREATORX_OPERATOR_NAME must be a verified operator name");
+  }
+  if (
+    requireValue(env, "NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT").toLowerCase() ===
+    SANDBOX_PRIVACY_CONTACT.toLowerCase()
+  ) {
+    fail("NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT must be a verified privacy contact");
+  }
   assertDate(
     "NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE",
     requireValue(env, "NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE"),

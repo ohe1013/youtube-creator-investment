@@ -518,10 +518,11 @@ function scrubPublicConfiguration(text) {
 }
 
 function containsLikelySecret(text) {
-  const scrubbed = scrubPublicConfiguration(text);
-  if (specificSecretPatterns.some((pattern) => pattern.test(scrubbed))) {
+  if (specificSecretPatterns.some((pattern) => pattern.test(text))) {
     return true;
   }
+
+  const scrubbed = scrubPublicConfiguration(text);
 
   genericSecretAssignmentPattern.lastIndex = 0;
   for (const match of scrubbed.matchAll(genericSecretAssignmentPattern)) {
