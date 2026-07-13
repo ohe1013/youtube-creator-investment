@@ -66,6 +66,7 @@ export class TossLoginClient {
             referrer: input.referrer,
           }),
           credentials: "omit",
+          redirect: "error",
         },
       );
     } catch {
@@ -89,6 +90,7 @@ export class TossLoginClient {
           method: "POST",
           headers: { authorization: "Bearer " + accessToken },
           credentials: "omit",
+          redirect: "error",
         },
       );
     } catch {

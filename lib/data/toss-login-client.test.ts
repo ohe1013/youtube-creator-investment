@@ -39,7 +39,31 @@ describe("TossLoginClient", () => {
           referrer: "SANDBOX",
         }),
         credentials: "omit",
+        redirect: "error",
       },
+    );
+  });
+
+  it("normalizes a redirect rejection without forwarding the authorization code", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockRejectedValue(new TypeError("redirect disallowed"));
+    const client = new TossLoginClient({ baseUrl, fetchFn });
+
+    const error = await client
+      .exchange({ authorizationCode: "single-use-code", referrer: "DEFAULT" })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({
+      code: "SESSION_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://api.example.com/api/auth/toss/exchange",
+      expect.objectContaining({
+        credentials: "omit",
+        redirect: "error",
+      }),
     );
   });
 
@@ -75,6 +99,7 @@ describe("TossLoginClient", () => {
         method: "POST",
         headers: { authorization: "Bearer creatorx-access-token" },
         credentials: "omit",
+        redirect: "error",
       },
     );
   });

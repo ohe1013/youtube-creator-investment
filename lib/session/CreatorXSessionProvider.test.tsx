@@ -500,6 +500,7 @@ describe("CreatorXSessionProvider", () => {
           referrer: "SANDBOX",
         }),
         credentials: "omit",
+        redirect: "error",
       },
     );
     expect(screen.getByTestId("session")).not.toHaveTextContent(
@@ -556,6 +557,7 @@ describe("CreatorXSessionProvider", () => {
         method: "POST",
         headers: { authorization: "Bearer creatorx-access-token" },
         credentials: "omit",
+        redirect: "error",
       },
     );
     await waitFor(() =>
