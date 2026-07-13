@@ -51,7 +51,7 @@ const genericSecretAssignmentPattern =
   /(?:^|[\s,{;])(?:["']([A-Za-z][A-Za-z0-9_-]{1,63})["']|([A-Za-z][A-Za-z0-9_-]{1,63}))\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|`([^`\r\n]{8,})`|([^\s,;}]{8,}))/gim;
 
 const nextPublicAssignmentPattern =
-  /(["']?NEXT_PUBLIC_[A-Z0-9_]+["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;}]+)/gi;
+  /(["']?(NEXT_PUBLIC_[A-Z0-9_]+)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;}]+)/gi;
 
 export class AitArtifactVerificationError extends Error {
   constructor(code, message, options) {
@@ -434,10 +434,6 @@ function decodeReadablePayload(payload) {
   }
 }
 
-function scrubPublicConfiguration(text) {
-  return text.replace(nextPublicAssignmentPattern, '$1"<public-config>"');
-}
-
 function isPlaceholderValue(value) {
   const normalized = value.trim().toLowerCase();
   return (
@@ -471,7 +467,11 @@ function isDynamicRuntimeExpression(value) {
 
 function isSensitiveConfigurationKey(key) {
   const normalized = key.replaceAll("-", "_");
-  if (normalized.toUpperCase().startsWith("NEXT_PUBLIC_")) return false;
+  if (normalized.toUpperCase().startsWith("NEXT_PUBLIC_")) {
+    return /(?:API_KEY|CLIENT_SECRET|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(
+      normalized.toUpperCase(),
+    );
+  }
 
   if (/^[A-Z0-9_]+$/.test(normalized)) {
     return (
@@ -505,6 +505,16 @@ function isSensitiveConfigurationKey(key) {
     "cronSecret",
     "serviceAccountKey",
   ]).has(normalized);
+}
+
+function scrubPublicConfiguration(text) {
+  return text.replace(
+    nextPublicAssignmentPattern,
+    (assignment, prefix, key) =>
+      isSensitiveConfigurationKey(key)
+        ? assignment
+        : `${prefix}"<public-config>"`,
+  );
 }
 
 function containsLikelySecret(text) {

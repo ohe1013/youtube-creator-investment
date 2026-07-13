@@ -604,6 +604,23 @@ describe("verifyAitArtifact", () => {
     });
   });
 
+  it("rejects an API key even when its key name is prefixed NEXT_PUBLIC", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content: `const config = { NEXT_PUBLIC_ANALYTICS_API_KEY: "AIza${"A".repeat(35)}" };`,
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/runtime.js",
+    });
+  });
+
   it("rejects a template literal that only looks like a dynamic runtime chain", async () => {
     const artifact = await buildFixture({
       files: [
@@ -659,7 +676,6 @@ describe("verifyAitArtifact", () => {
   });
 
   it("does not flag normal NEXT_PUBLIC configuration", async () => {
-    const publicGoogleKey = `AIza${"A".repeat(35)}`;
     const artifact = await buildFixture({
       files: [
         { name: ENTRYPOINT, content: "<!doctype html>" },
@@ -667,14 +683,14 @@ describe("verifyAitArtifact", () => {
           name: "web/public-config.js",
           content: JSON.stringify({
             NEXT_PUBLIC_API_URL: "https://api.example.com",
-            NEXT_PUBLIC_FIREBASE_API_KEY: publicGoogleKey,
+            NEXT_PUBLIC_RELEASE_CHANNEL: "production",
           }),
         },
       ],
       metadata: {
         packageJson: {
           NEXT_PUBLIC_API_URL: "https://api.example.com",
-          NEXT_PUBLIC_FIREBASE_API_KEY: publicGoogleKey,
+          NEXT_PUBLIC_RELEASE_CHANNEL: "production",
         },
       },
     });
