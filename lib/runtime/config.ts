@@ -60,6 +60,13 @@ function parseIpv4(hostname: string) {
     : null;
 }
 
+function isAmbiguousIpv4Literal(hostname: string) {
+  return (
+    /^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+))*$/i.test(hostname) &&
+    !parseIpv4(hostname)
+  );
+}
+
 function mappedIpv4(hostname: string) {
   const match = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(
     hostname,
@@ -86,11 +93,23 @@ function isPrivateIpv4(parts: number[] | null) {
 
 function isSandboxSupportPlaceholder(value: string) {
   const url = new URL(value);
-  const pathname = url.pathname.replace(/\/+$/g, "");
+  const pathname = decodePathname(url.pathname).replace(/\/+$/g, "");
+  const sandboxPathname = decodePathname(
+    new URL(sandboxSupportUrl).pathname,
+  ).replace(/\/+$/g, "");
   return (
     url.protocol === "https:" &&
     canonicalHostname(url) === "github.com" &&
-    pathname === "/ohe1013/youtube-creator-investment/issues"
+    pathname === sandboxPathname
+  );
+}
+
+function isRemoteDnsHostname(hostname: string) {
+  return (
+    hostname.includes(".") &&
+    !hostname.includes(":") &&
+    !parseIpv4(hostname) &&
+    !isAmbiguousIpv4Literal(hostname)
   );
 }
 
@@ -117,7 +136,11 @@ function isRemoteHttpsUrl(value: string) {
       isPrivateIpv4(mapped) ||
       isPrivateIpv6;
 
-    return url.protocol === "https:" && !isLocal;
+    return (
+      url.protocol === "https:" &&
+      !isLocal &&
+      isRemoteDnsHostname(hostname)
+    );
   } catch {
     return false;
   }

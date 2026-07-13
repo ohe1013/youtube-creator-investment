@@ -123,6 +123,31 @@ describe("production preflight", () => {
     ).toThrow("remote HTTPS URL");
   });
 
+  it.each(
+    ([
+      "NEXT_PUBLIC_CREATORX_API_BASE_URL",
+      "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
+      "NEXT_PUBLIC_CREATORX_ICON_URL",
+    ] as const).flatMap((key) =>
+      [
+        "https://192.0.2.1",
+        "https://198.18.0.1",
+        "https://224.0.0.1",
+        "https://240.0.0.1",
+        "https://[2001:db8::1]",
+        "https://[64:ff9b::7f00:1]",
+        "https://[::ffff:192.0.2.1]",
+      ].map((value) => [key, value] as const),
+    ),
+  )("rejects a non-DNS public URL in %s: %s", (key, value) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      }),
+    ).toThrow(`${key} must be a remote HTTPS URL`);
+  });
+
   it.each(["https://[fec0::1]", "https://[ff02::1]"])(
     "rejects a non-global IPv6 HTTPS API origin without echoing it: %s",
     (apiBaseUrl) => {
@@ -290,6 +315,19 @@ describe("production preflight", () => {
       }),
     ).toThrow("DATABASE_URL and DIRECT_URL must not be the same URL");
   });
+
+  it.each(["false", "FALSE"]) (
+    "rejects a direct URL with pgbouncer=%s",
+    (pgbouncer) => {
+      expect(() =>
+        validateProductionEnvironment({
+          ...validProductionEnvironment,
+          DIRECT_URL:
+            `postgresql://postgres:password@${SUPABASE_DIRECT_HOST}:5432/postgres?sslmode=require&pgbouncer=${pgbouncer}`,
+        }),
+      ).toThrow("DIRECT_URL must be a direct PostgreSQL URL");
+    },
+  );
 
   it("rejects a direct URL on another endpoint when its decoded database name differs", () => {
     expect(() =>
@@ -513,6 +551,11 @@ describe("production preflight", () => {
       "verified support URL",
     ],
     [
+      "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
+      "https://github.com/ohe1013/youtube-creator-investment/%69ssues",
+      "verified support URL",
+    ],
+    [
       "NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT",
       "GitHub Issues",
       "verified privacy contact",
@@ -596,6 +639,19 @@ describe("production preflight", () => {
 });
 
 describe("production App-in-Toss build options", () => {
+  it("forces sandbox demo values for a no-argument build despite inherited production values", () => {
+    expect(
+      resolveAppInTossBuildEnvironment({
+        env: validProductionEnvironment,
+      }),
+    ).toMatchObject({
+      APP_IN_TOSS: "1",
+      NEXT_PUBLIC_APP_IN_TOSS: "1",
+      NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "sandbox",
+      NEXT_PUBLIC_CREATORX_DATA_MODE: "demo",
+    });
+  });
+
   it("forces production channel and remote data mode only for the explicit production argument", () => {
     expect(
       resolveAppInTossBuildEnvironment({
@@ -612,6 +668,15 @@ describe("production App-in-Toss build options", () => {
       NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "production",
       NEXT_PUBLIC_CREATORX_DATA_MODE: "remote",
     });
+  });
+
+  it("runs production preflight for an explicit production build", () => {
+    expect(() =>
+      resolveAppInTossBuildEnvironment({
+        argv: ["--release-channel", "production"],
+        env: {},
+      }),
+    ).toThrow("Missing production variable: DATABASE_URL");
   });
 
   it("rejects unknown or conflicting build-channel arguments", () => {

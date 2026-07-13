@@ -160,6 +160,16 @@ function isRemoteHostname(hostname) {
   );
 }
 
+function isRemoteDnsHostname(hostname) {
+  const normalized = canonicalHostname(hostname);
+  return (
+    isRemoteHostname(normalized) &&
+    !parseIpv4(normalized) &&
+    !isAmbiguousIpv4Literal(normalized) &&
+    !normalized.includes(":")
+  );
+}
+
 function readUrl(key, value, { rootOnly = false } = {}) {
   let url;
   try {
@@ -171,7 +181,7 @@ function readUrl(key, value, { rootOnly = false } = {}) {
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
-    !isRemoteHostname(url.hostname) ||
+    !isRemoteDnsHostname(url.hostname) ||
     (rootOnly && (url.pathname !== "/" || url.search || url.hash))
   ) {
     fail(`${key} must be a remote HTTPS URL`);
@@ -266,9 +276,9 @@ function assertPooledRuntimeUrl(connection) {
 
 function assertDirectMigrationUrl(connection) {
   if (
-    connection.url.searchParams
-      .getAll("pgbouncer")
-      .some((value) => value.toLowerCase() === "true")
+    [...connection.url.searchParams.keys()].some(
+      (key) => key.toLowerCase() === "pgbouncer",
+    )
   ) {
     fail("DIRECT_URL must be a direct PostgreSQL URL");
   }
@@ -372,11 +382,14 @@ function assertDate(key, value) {
 
 function isSandboxSupportPlaceholder(value) {
   const url = new URL(value);
-  const pathname = url.pathname.replace(/\/+$/g, "");
+  const pathname = decodePathname(url.pathname).replace(/\/+$/g, "");
+  const sandboxPathname = decodePathname(
+    new URL(SANDBOX_SUPPORT_URL).pathname,
+  ).replace(/\/+$/g, "");
   return (
     url.protocol === "https:" &&
     canonicalHostname(url.hostname) === "github.com" &&
-    pathname === new URL(SANDBOX_SUPPORT_URL).pathname
+    pathname === sandboxPathname
   );
 }
 

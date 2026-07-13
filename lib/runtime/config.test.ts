@@ -197,6 +197,16 @@ describe("parseRuntimeConfig", () => {
     "https://[::ffff:a00:1]/asset",
   ];
 
+  const nonDnsPublicProductionUrls = [
+    "https://192.0.2.1",
+    "https://198.18.0.1",
+    "https://224.0.0.1",
+    "https://240.0.0.1",
+    "https://[2001:db8::1]",
+    "https://[64:ff9b::7f00:1]",
+    "https://[::ffff:192.0.2.1]",
+  ];
+
   it.each(
     ([
       ["NEXT_PUBLIC_CREATORX_API_BASE_URL", "remote HTTPS API URL"],
@@ -206,6 +216,23 @@ describe("parseRuntimeConfig", () => {
       nonRemoteProductionUrls.map((url) => [field, url, message] as const),
     ),
   )("rejects canonical local URL in %s: %s", (field, url, message) => {
+    expect(() =>
+      parseRuntimeConfig({
+        ...validProductionEnvironment,
+        [field]: url,
+      }),
+    ).toThrow(message);
+  });
+
+  it.each(
+    ([
+      ["NEXT_PUBLIC_CREATORX_API_BASE_URL", "remote HTTPS API URL"],
+      ["NEXT_PUBLIC_CREATORX_SUPPORT_URL", "remote HTTPS support URL"],
+      ["NEXT_PUBLIC_CREATORX_ICON_URL", "remote HTTPS URL"],
+    ] as const).flatMap(([field, message]) =>
+      nonDnsPublicProductionUrls.map((url) => [field, url, message] as const),
+    ),
+  )("rejects a non-DNS public URL in %s: %s", (field, url, message) => {
     expect(() =>
       parseRuntimeConfig({
         ...validProductionEnvironment,
@@ -249,6 +276,11 @@ describe("parseRuntimeConfig", () => {
     [
       "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
       "https://github.com/ohe1013/youtube-creator-investment/issues/",
+      "verified support",
+    ],
+    [
+      "NEXT_PUBLIC_CREATORX_SUPPORT_URL",
+      "https://github.com/ohe1013/youtube-creator-investment/%69ssues",
       "verified support",
     ],
     ["NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT", "GitHub Issues", "verified privacy"],

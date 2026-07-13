@@ -1,3 +1,5 @@
+import { validateProductionEnvironment } from "./production-preflight.mjs";
+
 export class AppInTossBuildOptionError extends Error {
   constructor(message) {
     super(message);
@@ -24,10 +26,8 @@ export function resolveAppInTossBuildEnvironment({
   if (argv.length === 0) {
     return {
       ...base,
-      NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL:
-        env.NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL ?? "sandbox",
-      NEXT_PUBLIC_CREATORX_DATA_MODE:
-        env.NEXT_PUBLIC_CREATORX_DATA_MODE ?? "demo",
+      NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "sandbox",
+      NEXT_PUBLIC_CREATORX_DATA_MODE: "demo",
     };
   }
 
@@ -41,9 +41,11 @@ export function resolveAppInTossBuildEnvironment({
     );
   }
 
-  return {
+  const productionEnvironment = {
     ...base,
     NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "production",
     NEXT_PUBLIC_CREATORX_DATA_MODE: "remote",
   };
+  validateProductionEnvironment(productionEnvironment);
+  return productionEnvironment;
 }
