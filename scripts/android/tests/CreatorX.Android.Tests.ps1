@@ -237,6 +237,12 @@ Describe 'Project-local adb integrity' {
         {
             Get-CreatorXAdbPath -ProjectRoot $projectRoot -PinPath $pinPath
         } | Should -Throw -ExpectedMessage '*ADB_INTEGRITY_MISMATCH*'
+        {
+            Invoke-CreatorXAdb `
+                -ProjectRoot $projectRoot `
+                -PinPath $pinPath `
+                -Arguments @('devices')
+        } | Should -Throw -ExpectedMessage '*ADB_INTEGRITY_MISMATCH*'
     }
 }
 
@@ -319,7 +325,7 @@ Describe 'Android command scripts' {
         foreach ($port in @(8081, 5173, 3000)) {
             $reverse | Should -Match ([string] $port)
         }
-        $reverse | Should -Match 'Get-CreatorXAdbPath'
+        $reverse | Should -Match 'Invoke-CreatorXAdb -ProjectRoot'
         $reverse | Should -Match 'Test-CreatorXReverseRules'
     }
 
@@ -339,9 +345,10 @@ Describe 'Android command scripts' {
 
         $logcat | Should -Match '\.artifacts'
         $logcat | Should -Match 'android'
+        $logcat | Should -Match 'Invoke-CreatorXAdb -ProjectRoot'
         $logcat | Should -Match 'Get-CreatorXAdbPath'
         $screenshot | Should -Match '\.artifacts'
-        $screenshot | Should -Match 'Get-CreatorXAdbPath'
+        $screenshot | Should -Match 'Invoke-CreatorXAdb -ProjectRoot'
         $screenshot | Should -Match 'screencap'
         $screenshot | Should -Match "'pull'"
         $screenshot | Should -Not -Match 'exec-out.*[>]'

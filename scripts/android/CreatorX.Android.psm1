@@ -362,11 +362,18 @@ function Test-CreatorXReverseRules {
 }
 
 function Invoke-CreatorXAdb {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'ExplicitPath')]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, ParameterSetName = 'ExplicitPath')]
         [ValidateNotNullOrEmpty()]
         [string] $AdbPath,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'ProjectRoot')]
+        [ValidateNotNullOrEmpty()]
+        [string] $ProjectRoot,
+
+        [Parameter(ParameterSetName = 'ProjectRoot')]
+        [string] $PinPath = (Join-Path $PSScriptRoot 'platform-tools.json'),
 
         [string] $Serial,
 
@@ -374,6 +381,10 @@ function Invoke-CreatorXAdb {
         [AllowEmptyCollection()]
         [string[]] $Arguments
     )
+
+    if ($PSCmdlet.ParameterSetName -eq 'ProjectRoot') {
+        $AdbPath = Get-CreatorXAdbPath -ProjectRoot $ProjectRoot -PinPath $PinPath
+    }
 
     if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
         throw "ADB_MISSING Project-local adb was not found at '$AdbPath'."

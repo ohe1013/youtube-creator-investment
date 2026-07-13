@@ -136,7 +136,7 @@ try {
     }
 
     if ($null -ne $adbPath) {
-        $deviceResult = Invoke-CreatorXAdb -AdbPath $adbPath -Arguments @('devices', '-l')
+        $deviceResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Arguments @('devices', '-l')
         if ($deviceResult.ExitCode -ne 0) {
             Write-CreatorXDoctorResult FAIL ADB_COMMAND_FAILED ($deviceResult.Output -join ' ')
         } else {
@@ -191,7 +191,7 @@ try {
     }
 
     if ($Mode -eq 'Running' -and $null -ne $selectedDevice) {
-        $reverseResult = Invoke-CreatorXAdb -AdbPath $adbPath -Serial $selectedDevice.Serial -Arguments @('reverse', '--list')
+        $reverseResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $selectedDevice.Serial -Arguments @('reverse', '--list')
         if ($reverseResult.ExitCode -ne 0) {
             Write-CreatorXDoctorResult BLOCKED REVERSE_MISSING ($reverseResult.Output -join ' ')
         } else {

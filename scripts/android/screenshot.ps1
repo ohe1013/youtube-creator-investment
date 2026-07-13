@@ -10,8 +10,7 @@ $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Pat
 $evidenceRoot = Join-Path $projectRoot '.artifacts\android'
 Import-Module (Join-Path $PSScriptRoot 'CreatorX.Android.psm1') -Force -ErrorAction Stop
 
-$adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
-$deviceResult = Invoke-CreatorXAdb -AdbPath $adbPath -Arguments @('devices', '-l')
+$deviceResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Arguments @('devices', '-l')
 if ($deviceResult.ExitCode -ne 0) {
     throw "ADB_COMMAND_FAILED $($deviceResult.Output -join ' ')"
 }
@@ -24,7 +23,7 @@ $outputPath = Join-Path $evidenceRoot "screenshot-$timestamp.png"
 $remotePath = "/sdcard/creatorx-screenshot-$([guid]::NewGuid().ToString('N')).png"
 
 try {
-    $captureResult = Invoke-CreatorXAdb -AdbPath $adbPath -Serial $device.Serial -Arguments @(
+    $captureResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $device.Serial -Arguments @(
         'shell',
         'screencap',
         '-p',
@@ -34,7 +33,7 @@ try {
         throw "SCREENSHOT_CAPTURE_FAILED $($captureResult.Output -join ' ')"
     }
 
-    $pullResult = Invoke-CreatorXAdb -AdbPath $adbPath -Serial $device.Serial -Arguments @(
+    $pullResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $device.Serial -Arguments @(
         'pull',
         $remotePath,
         $outputPath
@@ -51,7 +50,7 @@ try {
 
     Write-Output "[PASS] SCREENSHOT_CAPTURED $outputPath"
 } finally {
-    $null = Invoke-CreatorXAdb -AdbPath $adbPath -Serial $device.Serial -Arguments @(
+    $null = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $device.Serial -Arguments @(
         'shell',
         'rm',
         '-f',

@@ -11,8 +11,7 @@ $requiredPorts = @(8081, 5173, 3000)
 Import-Module (Join-Path $PSScriptRoot 'CreatorX.Android.psm1') -Force -ErrorAction Stop
 
 try {
-    $adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
-    $deviceResult = Invoke-CreatorXAdb -AdbPath $adbPath -Arguments @('devices', '-l')
+    $deviceResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Arguments @('devices', '-l')
     if ($deviceResult.ExitCode -ne 0) {
         throw "ADB_COMMAND_FAILED $($deviceResult.Output -join ' ')"
     }
@@ -20,7 +19,7 @@ try {
     $device = Resolve-CreatorXDevice -Devices $devices -RequestedSerial $Serial
 
     foreach ($port in $requiredPorts) {
-        $result = Invoke-CreatorXAdb -AdbPath $adbPath -Serial $device.Serial -Arguments @(
+        $result = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $device.Serial -Arguments @(
             'reverse',
             "tcp:$port",
             "tcp:$port"
@@ -30,7 +29,7 @@ try {
         }
     }
 
-    $listResult = Invoke-CreatorXAdb -AdbPath $adbPath -Serial $device.Serial -Arguments @(
+    $listResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $device.Serial -Arguments @(
         'reverse',
         '--list'
     )
