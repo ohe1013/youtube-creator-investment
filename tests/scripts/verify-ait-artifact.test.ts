@@ -550,6 +550,60 @@ describe("verifyAitArtifact", () => {
     });
   });
 
+  it("allows a dynamic runtime chain with a numeric method argument", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content:
+            "const session = { refreshToken: tokenStore.read().slice(0) };",
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).resolves.toMatchObject({
+      appName: "creatorx",
+      hasWebIndex: true,
+    });
+  });
+
+  it("rejects a dynamic-looking expression containing a committed string literal", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content:
+            'const session = { refreshToken: tokenStore.read("committed-secret-value-123") };',
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/runtime.js",
+    });
+  });
+
+  it("rejects a sensitive property wrapped around a committed literal", async () => {
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        {
+          name: "web/runtime.js",
+          content:
+            'const session = { refreshToken: String("committed-secret-value-123") };',
+        },
+      ],
+    });
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/runtime.js",
+    });
+  });
+
   it("does not flag normal NEXT_PUBLIC configuration", async () => {
     const publicGoogleKey = `AIza${"A".repeat(35)}`;
     const artifact = await buildFixture({

@@ -540,13 +540,15 @@ function EnabledTossLoginSession({
   const signOut = useCallback(async () => {
     latestAttempt.current += 1;
     const accessToken = await tokenRuntime.getAccessToken();
-    try {
-      if (accessToken !== null && tossLoginClient !== null) {
+    const clearRuntime = tokenRuntime.clear();
+    setState({ status: "unauthenticated", balance: 0, error: null });
+    await clearRuntime.catch(() => undefined);
+    if (accessToken !== null && tossLoginClient !== null) {
+      try {
         await tossLoginClient.unlink(accessToken);
+      } catch {
+        // Local sign-out is complete even if remote unlink is unavailable.
       }
-    } finally {
-      await tokenRuntime.clear();
-      setState({ status: "unauthenticated", balance: 0, error: null });
     }
   }, [tokenRuntime, tossLoginClient]);
 

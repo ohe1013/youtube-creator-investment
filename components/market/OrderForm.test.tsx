@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode, type ComponentProps } from "react";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { OrderForm } from "@/components/market/OrderForm";
+import type { DecimalString } from "@/lib/contracts/decimal";
 import type {
   CreatorXDataClient,
   Order,
@@ -49,6 +50,8 @@ const acceptedOrder: Order = {
   updatedAt: "2026-07-10T00:00:00.000Z",
 } as unknown as Order;
 
+const CURRENT_PRICE = "125" as DecimalString;
+
 function placeOrderResult(order: Order = acceptedOrder): PlaceOrderResult {
   return {
     responseStatus: 201,
@@ -72,7 +75,7 @@ function renderForm(
   return render(
     <OrderForm
       creatorId="creator-1"
-      currentPrice={125}
+      currentPrice={CURRENT_PRICE}
       userBalance={1000}
       userQuantity={4}
       onOrderAccepted={onOrderAccepted}
@@ -144,6 +147,15 @@ afterEach(() => {
 });
 
 describe("OrderForm", () => {
+  it("accepts only lossless decimal strings for current and selected prices", () => {
+    type Props = ComponentProps<typeof OrderForm>;
+
+    expectTypeOf<Props["currentPrice"]>().toEqualTypeOf<DecimalString>();
+    expectTypeOf<NonNullable<Props["externalPriceUpdate"]>["price"]>().toEqualTypeOf<
+      DecimalString
+    >();
+  });
+
   it("keeps isSubmitting active until concurrent A and B signatures both settle", async () => {
     let resolveA: ((result: PlaceOrderResult) => void) | undefined;
     let resolveB: ((result: PlaceOrderResult) => void) | undefined;
@@ -240,7 +252,7 @@ describe("OrderForm", () => {
       <StrictMode>
         <OrderForm
           creatorId="creator-1"
-          currentPrice={125}
+          currentPrice={CURRENT_PRICE}
           userBalance={1000}
           userQuantity={4}
         />
@@ -274,7 +286,7 @@ describe("OrderForm", () => {
       render(
         <OrderForm
           creatorId="creator-1"
-          currentPrice={125}
+          currentPrice={CURRENT_PRICE}
           userBalance={1000}
           userQuantity={4}
         />,
@@ -461,7 +473,7 @@ describe("OrderForm", () => {
     const first = render(
       <OrderForm
         creatorId="creator-1"
-        currentPrice={125}
+        currentPrice={CURRENT_PRICE}
         userBalance={1000}
         userQuantity={4}
       />,
@@ -477,7 +489,7 @@ describe("OrderForm", () => {
     render(
       <OrderForm
         creatorId="creator-1"
-        currentPrice={125}
+        currentPrice={CURRENT_PRICE}
         userBalance={1000}
         userQuantity={4}
       />,

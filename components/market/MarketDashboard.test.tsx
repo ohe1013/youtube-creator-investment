@@ -7,7 +7,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -19,6 +18,7 @@ import type {
   Order,
   PlaceOrderResult,
 } from "@/lib/data/contracts";
+import type { DecimalString } from "@/lib/contracts/decimal";
 
 const mocks = vi.hoisted(() => ({
   client: null as unknown,
@@ -127,7 +127,7 @@ afterEach(() => {
 
 describe("MarketDashboard order coordination", () => {
   it("submits the exact authoritative decimal current price for a limit order", async () => {
-    const exactPrice = "9999999999999999.9999";
+    const exactPrice = "9999999999999999.9999" as DecimalString;
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
       .mockResolvedValue(placeOrderResult({
@@ -149,21 +149,18 @@ describe("MarketDashboard order coordination", () => {
     mocks.client = { placeOrder } as unknown as CreatorXDataClient;
 
     render(
-      createElement(
-        MarketDashboard,
-        {
-          selectedCreator: { ...creator, currentPrice: Number(exactPrice) },
-          stats: { high24h: 130, low24h: 120, vol24h: 50, change24h: 2 },
-          chartData: [],
-          trades: [],
-          creators: [creator],
-          orderBook: { asks: [], bids: [] },
-          userBalance: 1000,
-          userQuantity: 4,
-          onOrderAccepted: vi.fn().mockResolvedValue(undefined),
-          orderCurrentPrice: exactPrice,
-        } as never,
-      ),
+      <MarketDashboard
+        selectedCreator={{ ...creator, currentPrice: 125 }}
+        stats={{ high24h: 130, low24h: 120, vol24h: 50, change24h: 2 }}
+        chartData={[]}
+        trades={[]}
+        creators={[creator]}
+        orderBook={{ asks: [], bids: [] }}
+        userBalance={1000}
+        userQuantity={4}
+        onOrderAccepted={vi.fn().mockResolvedValue(undefined)}
+        orderCurrentPrice={exactPrice}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "common.limitPrice" }));
@@ -184,7 +181,7 @@ describe("MarketDashboard order coordination", () => {
   });
 
   it("submits the exact authoritative decimal selected from the order book", async () => {
-    const exactPrice = "9999999999999999.9999";
+    const exactPrice = "9999999999999999.9999" as DecimalString;
     const placeOrder = vi
       .fn<CreatorXDataClient["placeOrder"]>()
       .mockResolvedValue(placeOrderResult({
@@ -206,33 +203,24 @@ describe("MarketDashboard order coordination", () => {
     mocks.client = { placeOrder } as unknown as CreatorXDataClient;
 
     render(
-      createElement(
-        MarketDashboard,
-        {
-          selectedCreator: creator,
-          orderCurrentPrice: "125",
-          stats: { high24h: 130, low24h: 120, vol24h: 50, change24h: 2 },
-          chartData: [],
-          trades: [],
-          creators: [creator],
-          orderBook: {
-            asks: [
-              {
-                price: Number(exactPrice),
-                orderPrice: exactPrice,
-                quantity: 1,
-              },
-            ],
-            bids: [],
-          },
-          userBalance: 1000,
-          userQuantity: 4,
-          onOrderAccepted: vi.fn().mockResolvedValue(undefined),
-        } as never,
-      ),
+      <MarketDashboard
+        selectedCreator={creator}
+        orderCurrentPrice={"125" as DecimalString}
+        stats={{ high24h: 130, low24h: 120, vol24h: 50, change24h: 2 }}
+        chartData={[]}
+        trades={[]}
+        creators={[creator]}
+        orderBook={{
+          asks: [{ price: 126, orderPrice: exactPrice, quantity: 1 }],
+          bids: [],
+        }}
+        userBalance={1000}
+        userQuantity={4}
+        onOrderAccepted={vi.fn().mockResolvedValue(undefined)}
+      />,
     );
 
-    fireEvent.click(screen.getByText(Number(exactPrice).toLocaleString()));
+    fireEvent.click(screen.getByText("126"));
     enterQuantity("2");
     submitBuy();
 
@@ -264,7 +252,7 @@ describe("MarketDashboard order coordination", () => {
     render(
       <MarketDashboard
         selectedCreator={creator}
-        orderCurrentPrice="125"
+        orderCurrentPrice={"125" as DecimalString}
         stats={{ high24h: 130, low24h: 120, vol24h: 50, change24h: 2 }}
         chartData={[]}
         trades={[]}

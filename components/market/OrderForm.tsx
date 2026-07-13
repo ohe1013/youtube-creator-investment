@@ -2,16 +2,17 @@
 
 import { useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
+import type { DecimalString } from "@/lib/contracts/decimal";
 import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmission";
 
 interface OrderFormProps {
   creatorId: string;
-  currentPrice: string | number;
+  currentPrice: DecimalString;
   userBalance: number;
   userQuantity: number; // User's holding of this creator
   onOrderAccepted?: () => Promise<void>;
   externalPriceUpdate?: {
-    price: string | number;
+    price: DecimalString;
     side?: "BUY" | "SELL";
     timestamp: number;
   };
@@ -45,9 +46,9 @@ function OrderFormFields({
     externalPriceUpdate?.side ? "LIMIT" : "MARKET",
   );
   const [amount, setAmount] = useState<string>("0");
-  const currentMutationPrice = String(currentPrice);
+  const currentMutationPrice = currentPrice;
   const [limitPrice, setLimitPrice] = useState<string>(
-    String(externalPriceUpdate?.price ?? currentMutationPrice),
+    externalPriceUpdate?.price ?? currentMutationPrice,
   );
   const { t } = useLanguage();
 

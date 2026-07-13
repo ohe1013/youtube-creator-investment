@@ -13,6 +13,7 @@ import type {
   CreatorStat,
   CreatorVideo,
 } from "@/lib/data/contracts";
+import type { DecimalString } from "@/lib/contracts/decimal";
 
 type MobileTab = "CHART" | "ORDER" | "TRADES" | "LIST";
 const MOBILE_TABS: MobileTab[] = ["CHART", "ORDER", "TRADES", "LIST"];
@@ -46,13 +47,13 @@ export type MarketCreator = {
 };
 
 type DisplayOrderBook = {
-  asks: Array<{ price: number; orderPrice: string; quantity: number }>;
-  bids: Array<{ price: number; orderPrice: string; quantity: number }>;
+  asks: Array<{ price: number; orderPrice: DecimalString; quantity: number }>;
+  bids: Array<{ price: number; orderPrice: DecimalString; quantity: number }>;
 };
 
 interface MarketDashboardProps {
   selectedCreator: MarketCreator;
-  orderCurrentPrice: string;
+  orderCurrentPrice: DecimalString;
   stats: {
     high24h: number;
     low24h: number;
@@ -99,7 +100,7 @@ export function MarketDashboard({
   const [dataTab, setDataTab] = useState<"ORDERBOOK" | "TRADES">("ORDERBOOK");
   // External Price Update (from OrderBook to OrderForm)
   const [priceUpdate, setPriceUpdate] = useState<
-    { price: string; side?: "BUY" | "SELL"; timestamp: number } | undefined
+    { price: DecimalString; side?: "BUY" | "SELL"; timestamp: number } | undefined
   >();
   const { t } = useLanguage();
 

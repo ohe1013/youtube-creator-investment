@@ -2,18 +2,19 @@
 
 import { useMemo } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
+import type { DecimalString } from "@/lib/contracts/decimal";
 
-type OrderLevel = { price: number; orderPrice?: string; quantity: number };
+type OrderLevel = { price: number; orderPrice?: DecimalString; quantity: number };
 
 const EMPTY_ORDER_LEVELS: OrderLevel[] = [];
 
 interface OrderBookProps {
   currentPrice: number;
-  currentOrderPrice?: string;
+  currentOrderPrice?: DecimalString;
   liquidity: number;
   asks?: OrderLevel[];
   bids?: OrderLevel[];
-  onPriceClick?: (price: string, side?: "BUY" | "SELL") => void;
+  onPriceClick?: (price: DecimalString, side?: "BUY" | "SELL") => void;
 }
 
 export function OrderBook({
@@ -47,7 +48,9 @@ export function OrderBook({
           {asks.map((o, i) => (
             <div
               key={`ask-${i}`}
-              onClick={() => onPriceClick?.(o.orderPrice ?? String(o.price), "BUY")}
+              onClick={() => {
+                if (o.orderPrice !== undefined) onPriceClick?.(o.orderPrice, "BUY");
+              }}
               className="relative flex items-center px-4 py-1 text-xs hover:bg-down/10 transition-colors group h-7 cursor-pointer active:bg-down/20"
             >
               {/* Depth Bar */}
@@ -67,7 +70,9 @@ export function OrderBook({
 
         {/* Current Price Divider */}
         <div
-          onClick={() => onPriceClick?.(currentOrderPrice ?? String(currentPrice))}
+          onClick={() => {
+            if (currentOrderPrice !== undefined) onPriceClick?.(currentOrderPrice);
+          }}
           className="bg-card/80 border-y border-border-exchange py-1.5 px-4 flex justify-between items-center z-20 shadow-sm relative cursor-pointer hover:bg-card/90 active:bg-card transition-colors"
         >
           <span className="text-sm font-bold text-primary">
@@ -83,7 +88,9 @@ export function OrderBook({
           {bids.map((o, i) => (
             <div
               key={`bid-${i}`}
-              onClick={() => onPriceClick?.(o.orderPrice ?? String(o.price), "SELL")}
+              onClick={() => {
+                if (o.orderPrice !== undefined) onPriceClick?.(o.orderPrice, "SELL");
+              }}
               className="relative flex items-center px-4 py-1 text-xs hover:bg-up/10 transition-colors group h-7 cursor-pointer active:bg-up/20"
             >
               {/* Depth Bar */}

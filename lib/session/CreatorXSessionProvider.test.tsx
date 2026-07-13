@@ -9,6 +9,11 @@ import {
   type CreatorXSessionValue,
   useCreatorXSession,
 } from "@/lib/session/CreatorXSessionProvider";
+import {
+  CreatorXTokenRuntimeProvider,
+  type CreatorXTokenRuntime,
+  useCreatorXTokenRuntime,
+} from "@/lib/session/CreatorXTokenRuntime";
 import type { CreatorXDataClient, Portfolio } from "@/lib/data/contracts";
 import { CreatorXClientError } from "@/lib/data/errors";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
@@ -126,6 +131,27 @@ function requireSession(
 ): CreatorXSessionValue {
   if (reference.current === null) {
     throw new Error("session probe did not report a session value");
+  }
+  return reference.current;
+}
+
+function TokenRuntimeProbe({
+  onRuntime,
+}: {
+  onRuntime: (runtime: CreatorXTokenRuntime) => void;
+}) {
+  const runtime = useCreatorXTokenRuntime();
+  useEffect(() => {
+    onRuntime(runtime);
+  }, [onRuntime, runtime]);
+  return null;
+}
+
+function requireTokenRuntime(
+  reference: { current: CreatorXTokenRuntime | null },
+): CreatorXTokenRuntime {
+  if (reference.current === null) {
+    throw new Error("token runtime probe did not report a runtime value");
   }
   return reference.current;
 }
@@ -727,6 +753,78 @@ describe("CreatorXSessionProvider", () => {
     expect(screen.getByTestId("session")).not.toHaveTextContent(
       creatorXRefreshToken,
     );
+  });
+
+  it("clears a Toss session before a delayed unlink and blocks a stale token refresh", async () => {
+    const delayedRefresh = Promise.withResolvers<Response>();
+    const delayedUnlink = Promise.withResolvers<Response>();
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          accessToken: "creatorx-access-initial",
+          refreshToken: "creatorx-refresh-initial",
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+      )
+      .mockReturnValueOnce(delayedRefresh.promise)
+      .mockReturnValueOnce(delayedUnlink.promise);
+    vi.stubGlobal("fetch", fetchSpy);
+    const latestSession = { current: null as CreatorXSessionValue | null };
+    const latestRuntime = { current: null as CreatorXTokenRuntime | null };
+    const runtimeConfig = config({
+      dataMode: "remote",
+      apiBaseUrl: new URL("https://api.example.com"),
+      tossLoginEnabled: true,
+    });
+
+    render(
+      <CreatorXTokenRuntimeProvider config={runtimeConfig}>
+        <TokenRuntimeProbe onRuntime={(runtime) => { latestRuntime.current = runtime; }} />
+        <CreatorXSessionProvider config={runtimeConfig}>
+          <SessionProbe onSession={(session) => { latestSession.current = session; }} />
+        </CreatorXSessionProvider>
+      </CreatorXTokenRuntimeProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+
+    const staleRefresh = requireTokenRuntime(latestRuntime).refreshAccessToken(
+      "creatorx-access-initial",
+    );
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+
+    const signOut = requireSession(latestSession).signOut();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
+    );
+    expect(window.localStorage.getItem("creatorx:session:refresh:v1")).toBeNull();
+
+    delayedRefresh.resolve(
+      Response.json({
+        accessToken: "creatorx-access-stale",
+        refreshToken: "creatorx-refresh-stale",
+        tokenType: "Bearer",
+        expiresIn: 900,
+      }),
+    );
+    await expect(staleRefresh).resolves.toBeNull();
+    expect(await requireTokenRuntime(latestRuntime).getAccessToken()).toBeNull();
+    expect(window.localStorage.getItem("creatorx:session:refresh:v1")).toBeNull();
+    expect(screen.getByTestId("session")).toHaveTextContent(
+      '"status":"unauthenticated"',
+    );
+
+    delayedUnlink.resolve(new Response(null, { status: 204 }));
+    await signOut;
   });
 
   it("keeps a Toss session signed out when exchange resolves after sign-out", async () => {

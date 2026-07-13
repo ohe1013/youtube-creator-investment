@@ -23,6 +23,7 @@ import type {
   Portfolio,
   Trade,
 } from "@/lib/data/contracts";
+import type { DecimalString } from "@/lib/contracts/decimal";
 import { decimalToDisplayNumber } from "@/lib/data/decimal-display";
 import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
@@ -36,12 +37,12 @@ type RecentTrade = {
   time: string;
 };
 type DisplayOrderBook = {
-  asks: Array<{ price: number; orderPrice: string; quantity: number }>;
-  bids: Array<{ price: number; orderPrice: string; quantity: number }>;
+  asks: Array<{ price: number; orderPrice: DecimalString; quantity: number }>;
+  bids: Array<{ price: number; orderPrice: DecimalString; quantity: number }>;
 };
 type LoadState = {
   selectedCreator: Creator;
-  orderCurrentPrice: string;
+  orderCurrentPrice: DecimalString;
   creators: Creator[];
   stats: {
     high24h: number;

@@ -15,6 +15,7 @@ import {
   CreatorXDataProvider,
   type CreatorXDataProviderDependencies,
 } from "@/components/runtime/CreatorXDataProvider";
+import type { DecimalString } from "@/lib/contracts/decimal";
 import { DemoDataClient } from "@/lib/data/demo-client";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
 import type { AsyncKeyValueStore } from "@/lib/storage/client-storage";
@@ -100,7 +101,7 @@ function orderForm() {
   return (
     <OrderForm
       creatorId="creator-kpop-lab"
-      currentPrice={1280}
+      currentPrice={"1280" as DecimalString}
       userBalance={100_000}
       userQuantity={0}
     />

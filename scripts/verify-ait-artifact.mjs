@@ -458,6 +458,10 @@ function isPlaceholderValue(value) {
 function isDynamicRuntimeExpression(value) {
   const normalized = value.trim();
   return (
+    !/["'`]/.test(normalized) &&
+    !/^[A-Za-z_$][\w$]*\(\s*(?:[-+]?\d|true\b|false\b|null\b|undefined\b)/.test(
+      normalized,
+    ) &&
     /^(?:[A-Za-z_$][\w$]*)(?:\??\.[A-Za-z_$][\w$]*|\[[^\]\r\n]+\]|\([^()\r\n]*\))*$/.test(
       normalized,
     ) &&
