@@ -132,6 +132,7 @@ const schema = z
     NEXT_PUBLIC_CREATORX_DATA_MODE: z
       .enum(["demo", "remote"])
       .default("remote"),
+    NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED: z.enum(["0", "1"]).default("0"),
     NEXT_PUBLIC_CREATORX_API_BASE_URL: z.string().trim().optional(),
     NEXT_PUBLIC_CREATORX_OPERATOR_NAME: z.string().trim().optional(),
     NEXT_PUBLIC_CREATORX_SUPPORT_URL: z.string().url().optional(),
@@ -231,6 +232,7 @@ export type CreatorXRuntimeConfig = {
   appInToss: boolean;
   releaseChannel: "development" | "sandbox" | "production";
   dataMode: "demo" | "remote";
+  tossLoginEnabled: boolean;
   apiBaseUrl: URL | null;
   allowBrowserStorageFallback: boolean;
   brandIconUrl: string | null;
@@ -250,6 +252,7 @@ export function parseRuntimeConfig(
     appInToss: value.NEXT_PUBLIC_APP_IN_TOSS === "1",
     releaseChannel: value.NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL,
     dataMode: value.NEXT_PUBLIC_CREATORX_DATA_MODE,
+    tossLoginEnabled: value.NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED === "1",
     apiBaseUrl: value.NEXT_PUBLIC_CREATORX_API_BASE_URL
       ? new URL(value.NEXT_PUBLIC_CREATORX_API_BASE_URL)
       : null,
@@ -276,6 +279,8 @@ export function readPublicRuntimeConfig(): CreatorXRuntimeConfig {
       process.env.NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL,
     NEXT_PUBLIC_CREATORX_DATA_MODE:
       process.env.NEXT_PUBLIC_CREATORX_DATA_MODE,
+    NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED:
+      process.env.NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED,
     NEXT_PUBLIC_CREATORX_API_BASE_URL:
       process.env.NEXT_PUBLIC_CREATORX_API_BASE_URL,
     NEXT_PUBLIC_CREATORX_OPERATOR_NAME:

@@ -32,11 +32,16 @@ export type VerifyCreatorXAccessToken = (
 
 type TokenPrincipal = Required<Pick<AuthPrincipal, "sessionId">> &
   AuthPrincipal;
-type SessionIdentity = {
+export type CreatorXSessionIdentity = {
   id: string;
   userId: string;
   provider: IdentityProvider;
   user: { id: string; role: "USER" | "ADMIN" };
+};
+
+export type CreatorXIdentityInput = {
+  provider: IdentityProvider;
+  subject: string;
 };
 
 function configurationError() {
@@ -161,7 +166,10 @@ export async function verifyCreatorXAccessToken(
   }
 }
 
-function toTokenPrincipal(identity: SessionIdentity, sessionId: string): TokenPrincipal {
+function toTokenPrincipal(
+  identity: CreatorXSessionIdentity,
+  sessionId: string,
+): TokenPrincipal {
   return {
     userId: identity.userId,
     sessionId,
@@ -174,7 +182,11 @@ function expiryDate() {
   return new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 }
 
-async function issueSessionTokens(identity: SessionIdentity, sessionId: string, refreshToken: string) {
+async function issueSessionTokens(
+  identity: CreatorXSessionIdentity,
+  sessionId: string,
+  refreshToken: string,
+) {
   return {
     accessToken: await issueCreatorXAccessToken(toTokenPrincipal(identity, sessionId)),
     refreshToken,
@@ -185,7 +197,7 @@ async function issueSessionTokens(identity: SessionIdentity, sessionId: string, 
 
 async function createSessionForIdentity(
   tx: Prisma.TransactionClient,
-  identity: SessionIdentity,
+  identity: CreatorXSessionIdentity,
   refreshFamilyId: string = randomUUID(),
 ) {
   const refreshToken = createOpaqueRefreshToken();
@@ -230,13 +242,28 @@ export async function createGuestSession(
 ): Promise<CreatorXSessionTokens> {
   const security = readAuthSecurity();
   const subject = createGuestSubject(anonymousKey, security.identityPepper);
+  return createCreatorXSessionForIdentity({ provider: "GUEST", subject });
+}
+
+/**
+ * Issues a CreatorX session for a server-verified identity. Provider-specific
+ * callers must establish the subject before this function is invoked.
+ */
+export async function createCreatorXSessionForIdentity(
+  input: CreatorXIdentityInput,
+): Promise<CreatorXSessionTokens> {
   const created = await runSerializable(async (tx) => {
     const identity = await tx.authIdentity.upsert({
-      where: { provider_subject: { provider: "GUEST", subject } },
+      where: {
+        provider_subject: {
+          provider: input.provider,
+          subject: input.subject,
+        },
+      },
       update: {},
       create: {
-        provider: "GUEST",
-        subject,
+        provider: input.provider,
+        subject: input.subject,
         user: {
           create: {
             role: "USER",
@@ -290,7 +317,7 @@ export async function refreshCreatorXSession(
     }
     if (current.revokedAt || current.expiresAt <= now) throw unauthorized();
 
-    const identity: SessionIdentity = {
+    const identity: CreatorXSessionIdentity = {
       id: current.identity.id,
       userId: current.userId,
       provider: current.identity.provider,

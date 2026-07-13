@@ -48,6 +48,7 @@
     "react-dom": "19.2.1",
     "recharts": "^3.6.0",
     "server-only": "0.0.1",
+    "undici": "8.7.0",
     "zod": "^4.2.1"
   },
   "devDependencies": {

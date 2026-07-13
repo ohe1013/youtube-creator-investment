@@ -36,6 +36,7 @@ const config: CreatorXRuntimeConfig = {
   appInToss: true,
   releaseChannel: "sandbox",
   dataMode: "demo",
+  tossLoginEnabled: false,
   apiBaseUrl: null,
   allowBrowserStorageFallback: true,
   brandIconUrl: null,

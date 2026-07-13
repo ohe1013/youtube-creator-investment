@@ -47,6 +47,7 @@ function runtimeConfig(
     appInToss: false,
     releaseChannel: "development",
     dataMode: "demo",
+    tossLoginEnabled: false,
     apiBaseUrl: null,
     allowBrowserStorageFallback: true,
     brandIconUrl: null,

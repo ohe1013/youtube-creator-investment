@@ -822,4 +822,15 @@ describe("client boundary mutation probes", () => {
       }),
     ).toEqual([]);
   });
+
+  it("allows the dedicated Toss Login typed boundary", () => {
+    expect(
+      rules({
+        "components/root.tsx":
+          '"use client"\nimport { TossLoginClient } from "../lib/data/toss-login-client"; export const client = TossLoginClient;',
+        "lib/data/toss-login-client.ts":
+          'export class TossLoginClient { request(url: string) { return fetch(url); } }',
+      }),
+    ).toEqual([]);
+  });
 });

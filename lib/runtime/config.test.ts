@@ -25,6 +25,30 @@ describe("parseRuntimeConfig", () => {
     ).toBe("demo");
   });
 
+  it("defaults Toss Login to disabled and exposes only an explicit public enablement flag", () => {
+    expect(
+      parseRuntimeConfig({
+        NEXT_PUBLIC_APP_IN_TOSS: "1",
+        NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "sandbox",
+        NEXT_PUBLIC_CREATORX_DATA_MODE: "remote",
+        NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED: "0",
+      }).tossLoginEnabled,
+    ).toBe(false);
+    expect(
+      parseRuntimeConfig({
+        NEXT_PUBLIC_APP_IN_TOSS: "1",
+        NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "sandbox",
+        NEXT_PUBLIC_CREATORX_DATA_MODE: "remote",
+        NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED: "1",
+      }).tossLoginEnabled,
+    ).toBe(true);
+    expect(() =>
+      parseRuntimeConfig({
+        NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED: "enabled",
+      }),
+    ).toThrow();
+  });
+
   it("treats an empty optional icon URL as absent", () => {
     expect(
       parseRuntimeConfig({

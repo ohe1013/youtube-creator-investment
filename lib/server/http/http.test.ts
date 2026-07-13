@@ -124,6 +124,26 @@ describe("public and server environment boundaries", () => {
       parseServerEnv({ ...validProductionServerEnv, VERCEL: undefined }),
     ).toThrow("trusted proxy attestation");
   });
+
+  it("keeps the Toss Login enablement and mTLS material server-only and disabled by default", () => {
+    expect(parseServerEnv({ NODE_ENV: "test" })).toMatchObject({
+      tossLoginEnabled: false,
+      tossMtlsCertificateBase64: null,
+      tossMtlsPrivateKeyBase64: null,
+    });
+    expect(
+      parseServerEnv({
+        NODE_ENV: "test",
+        TOSS_LOGIN_ENABLED: "1",
+        TOSS_MTLS_CERT_BASE64: "base64-certificate",
+        TOSS_MTLS_KEY_BASE64: "base64-private-key",
+      }),
+    ).toMatchObject({
+      tossLoginEnabled: true,
+      tossMtlsCertificateBase64: "base64-certificate",
+      tossMtlsPrivateKeyBase64: "base64-private-key",
+    });
+  });
 });
 
 describe("withApiRoute", () => {

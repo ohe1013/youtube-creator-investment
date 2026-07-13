@@ -1,3 +1,5 @@
+import "server-only";
+
 import { z } from "zod";
 import { parsePublicEnv } from "@/lib/config/public-env";
 import { parseDevelopmentOrigins } from "@/lib/server/http/cors";
@@ -32,6 +34,9 @@ const schema = z.object({
   CRON_SECRET: optionalNonempty,
   CREATORX_DEV_CORS_ORIGINS: z.string().optional(),
   CREATORX_TRUST_PROXY: z.enum(["0", "1"]).default("0"),
+  TOSS_LOGIN_ENABLED: z.enum(["0", "1"]).default("0"),
+  TOSS_MTLS_CERT_BASE64: optionalNonempty,
+  TOSS_MTLS_KEY_BASE64: optionalNonempty,
   VERCEL: z.literal("1").optional(),
 });
 
@@ -45,6 +50,9 @@ export type CreatorXServerEnv = {
   cronSecret: string | null;
   developmentCorsOrigins: string[];
   trustForwardedProto: boolean;
+  tossLoginEnabled: boolean;
+  tossMtlsCertificateBase64: string | null;
+  tossMtlsPrivateKeyBase64: string | null;
 };
 
 export function parseServerEnv(
@@ -87,6 +95,9 @@ export function parseServerEnv(
     cronSecret: value.CRON_SECRET ?? null,
     developmentCorsOrigins,
     trustForwardedProto,
+    tossLoginEnabled: value.TOSS_LOGIN_ENABLED === "1",
+    tossMtlsCertificateBase64: value.TOSS_MTLS_CERT_BASE64 ?? null,
+    tossMtlsPrivateKeyBase64: value.TOSS_MTLS_KEY_BASE64 ?? null,
   };
 }
 
@@ -100,11 +111,16 @@ export function readServerEnv() {
     CRON_SECRET: process.env.CRON_SECRET,
     CREATORX_DEV_CORS_ORIGINS: process.env.CREATORX_DEV_CORS_ORIGINS,
     CREATORX_TRUST_PROXY: process.env.CREATORX_TRUST_PROXY,
+    TOSS_LOGIN_ENABLED: process.env.TOSS_LOGIN_ENABLED,
+    TOSS_MTLS_CERT_BASE64: process.env.TOSS_MTLS_CERT_BASE64,
+    TOSS_MTLS_KEY_BASE64: process.env.TOSS_MTLS_KEY_BASE64,
     VERCEL: process.env.VERCEL,
     NEXT_PUBLIC_APP_IN_TOSS: process.env.NEXT_PUBLIC_APP_IN_TOSS,
     NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL:
       process.env.NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL,
     NEXT_PUBLIC_CREATORX_DATA_MODE: process.env.NEXT_PUBLIC_CREATORX_DATA_MODE,
+    NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED:
+      process.env.NEXT_PUBLIC_CREATORX_TOSS_LOGIN_ENABLED,
     NEXT_PUBLIC_CREATORX_API_BASE_URL:
       process.env.NEXT_PUBLIC_CREATORX_API_BASE_URL,
     NEXT_PUBLIC_CREATORX_OPERATOR_NAME:

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   sessionProvider: vi.fn(),
   signOut: vi.fn(),
   useSession: vi.fn(),
+  appLogin: vi.fn(),
 }));
 
 vi.mock("@/components/runtime/CreatorXDataProvider", () => ({
@@ -46,6 +48,10 @@ vi.mock("next-auth/react", () => ({
   },
 }));
 
+vi.mock("@apps-in-toss/web-framework", () => ({
+  appLogin: mocks.appLogin,
+}));
+
 const portfolio = (balance: number): Portfolio => ({
   balance,
   positions: [],
@@ -58,6 +64,7 @@ function config(
 ): CreatorXRuntimeConfig {
   return {
     appInToss: true,
+    tossLoginEnabled: false,
     releaseChannel: "sandbox",
     dataMode: "demo",
     apiBaseUrl: null,
@@ -107,6 +114,10 @@ beforeEach(() => {
   mocks.signOut.mockReset().mockResolvedValue(undefined);
   mocks.useSession.mockClear();
   mocks.nextSession = { data: null, status: "unauthenticated" };
+  mocks.appLogin.mockReset().mockResolvedValue({
+    authorizationCode: "single-use-authorization-code",
+    referrer: "SANDBOX",
+  });
   mocks.dataRuntime.subject = "device-subject";
   mocks.dataClient = clientWithPortfolio(vi.fn().mockResolvedValue(portfolio(2500)));
 });
@@ -386,7 +397,9 @@ describe("CreatorXSessionProvider", () => {
     expect(screen.getByTestId("session")).toHaveTextContent('"balance":300');
   });
 
-  it("exposes App-in-Toss remote mode as an unauthenticated guest error", async () => {
+  it("shows an actionable disabled state without calling the Toss bridge when Toss Login is not verified", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
     render(
       <CreatorXSessionProvider
         config={config({
@@ -400,11 +413,194 @@ describe("CreatorXSessionProvider", () => {
 
     expect(await screen.findByRole("alert")).toHaveAttribute(
       "data-error-code",
-      "SESSION_UNAVAILABLE",
+      "TOSS_LOGIN_UNAVAILABLE",
     );
     expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
     expect((mocks.dataClient as CreatorXDataClient).getPortfolio).not.toHaveBeenCalled();
     expect(mocks.useSession).not.toHaveBeenCalled();
+    expect(mocks.appLogin).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the same actionable disabled state when the server rejects a mismatched Toss Login deployment", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "TOSS_LOGIN_UNAVAILABLE",
+            message: "do not expose server configuration",
+          },
+        }),
+        { status: 403, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(
+      <CreatorXSessionProvider
+        config={config({
+          dataMode: "remote",
+          apiBaseUrl: new URL("https://api.example.com"),
+          tossLoginEnabled: true,
+        })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveAttribute(
+      "data-error-code",
+      "TOSS_LOGIN_UNAVAILABLE",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Toss Login is not enabled");
+    expect(screen.queryByRole("button", { name: "?ㅼ떆 ?쒕룄" })).toBeNull();
+  });
+
+  it("exchanges only the one-use code and referrer for CreatorX tokens after App-in-Toss login", async () => {
+    const creatorXAccessToken = "creatorx-access-token";
+    const creatorXRefreshToken = "creatorx-refresh-token";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: creatorXAccessToken,
+          refreshToken: creatorXRefreshToken,
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(
+      <CreatorXSessionProvider
+        config={config({
+          dataMode: "remote",
+          apiBaseUrl: new URL("https://api.example.com"),
+          tossLoginEnabled: true,
+        })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+
+    await waitFor(() => expect(mocks.appLogin).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.example.com/api/auth/toss/exchange",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          authorizationCode: "single-use-authorization-code",
+          referrer: "SANDBOX",
+        }),
+        credentials: "omit",
+      },
+    );
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      creatorXAccessToken,
+    );
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      creatorXRefreshToken,
+    );
+    expect((mocks.dataClient as CreatorXDataClient).getPortfolio).not.toHaveBeenCalled();
+  });
+
+  it("keeps only CreatorX tokens in memory long enough to revoke the local Toss session", async () => {
+    const creatorXAccessToken = "creatorx-access-token";
+    const creatorXRefreshToken = "creatorx-refresh-token";
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            accessToken: creatorXAccessToken,
+            refreshToken: creatorXRefreshToken,
+            tokenType: "Bearer",
+            expiresIn: 900,
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(
+      <CreatorXSessionProvider
+        config={config({
+          dataMode: "remote",
+          apiBaseUrl: new URL("https://api.example.com"),
+          tossLoginEnabled: true,
+        })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "sign out" }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "https://api.example.com/api/auth/toss/unlink",
+      {
+        method: "POST",
+        headers: { authorization: "Bearer creatorx-access-token" },
+        credentials: "omit",
+      },
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"unauthenticated"',
+      ),
+    );
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      creatorXRefreshToken,
+    );
+  });
+
+  it("completes the initial Toss Login under React StrictMode", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: "creatorx-access-token",
+          refreshToken: "creatorx-refresh-token",
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(
+      <StrictMode>
+        <CreatorXSessionProvider
+          config={config({
+            dataMode: "remote",
+            apiBaseUrl: new URL("https://api.example.com"),
+            tossLoginEnabled: true,
+          })}
+        >
+          <SessionProbe />
+        </CreatorXSessionProvider>
+      </StrictMode>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
   });
 
   it("throws when the normalized hook is used outside its provider", () => {

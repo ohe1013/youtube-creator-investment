@@ -8,7 +8,10 @@ export type BoundaryViolation = {
 
 const SESSION_ADAPTER = "lib/session/CreatorXSessionProvider.tsx";
 const SIGNIN_ADAPTER = "app/auth/signin/page.tsx";
-const CLIENT_FETCH_ALLOWLIST = new Set(["lib/data/remote-client.ts"]);
+const CLIENT_FETCH_ALLOWLIST = new Set([
+  "lib/data/remote-client.ts",
+  "lib/data/toss-login-client.ts",
+]);
 const SESSION_ADAPTER_IMPORTS = new Set([
   "SessionProvider",
   "getSession",
