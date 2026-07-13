@@ -147,6 +147,220 @@ describe("production preflight", () => {
     ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
   });
 
+  it.each([
+    [
+      "a percent-encoded database pathname",
+      {
+        DATABASE_URL:
+          "postgresql://runtime:password@db.creatorx.example:6543/%70ostgres?pgbouncer=true",
+        DIRECT_URL:
+          "postgresql://migration:password@db.creatorx.example:6543/postgres?sslmode=require",
+      },
+    ],
+    [
+      "percent-encoded hostname dots",
+      {
+        DATABASE_URL:
+          "postgresql://runtime:password@db%2ecreatorx%2eexample:6543/postgres?pgbouncer=true",
+        DIRECT_URL:
+          "postgresql://migration:password@db.creatorx.example:6543/postgres?sslmode=require",
+      },
+    ],
+  ])(
+    "rejects pooled endpoint reuse through %s",
+    (_label, overrides) => {
+      expect(() =>
+        validateProductionEnvironment({
+          ...validProductionEnvironment,
+          ...overrides,
+        }),
+      ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
+    },
+  );
+
+  it("rejects a direct URL on the pooled host and port even for another database name", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DIRECT_URL:
+          "postgresql://migration:password@db.creatorx.example:6543/other-db?sslmode=require",
+      }),
+    ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
+  });
+
+  it("rejects a direct URL on another endpoint when its decoded database name differs", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DIRECT_URL:
+          "postgresql://migration:password@direct.creatorx.example:5432/other-db?sslmode=require",
+      }),
+    ).toThrow("DATABASE_URL and DIRECT_URL must use the same PostgreSQL database");
+  });
+
+  it("accepts one-decoded equivalent database names on distinct pooled and direct endpoints", () => {
+    expect(
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          "postgresql://runtime:password@db.creatorx.example:6543/%70ostgres?pgbouncer=true",
+        DIRECT_URL:
+          "postgresql://migration:password@direct.creatorx.example:5432/postgres?sslmode=require",
+      }),
+    ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
+  });
+
+  it.each([
+    [
+      "a hostless DATABASE_URL",
+      "DATABASE_URL",
+      "postgresql:///postgres?pgbouncer=true",
+    ],
+    [
+      "a localhost DIRECT_URL",
+      "DIRECT_URL",
+      "postgresql://migration:password@localhost:5432/postgres?sslmode=require",
+    ],
+    [
+      "a loopback DATABASE_URL",
+      "DATABASE_URL",
+      "postgresql://runtime:password@127.0.0.1:6543/postgres?pgbouncer=true",
+    ],
+    [
+      "a private-network DIRECT_URL",
+      "DIRECT_URL",
+      "postgresql://migration:password@10.0.0.2:5432/postgres?sslmode=require",
+    ],
+    [
+      "an IPv6 loopback DATABASE_URL",
+      "DATABASE_URL",
+      "postgresql://runtime:password@[::1]:6543/postgres?pgbouncer=true",
+    ],
+  ])("rejects %s without exposing connection material", (_label, key, value) => {
+    let error: Error | null = null;
+    try {
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      });
+    } catch (failure) {
+      if (failure instanceof Error) error = failure;
+    }
+
+    expect(error).toMatchObject({ name: "ProductionPreflightError" });
+    expect(String(error?.message)).toBe(`${key} must be a remote PostgreSQL URL`);
+    expect(String(error?.message)).not.toContain("password");
+  });
+
+  it.each([
+    [
+      "host",
+      "postgresql://migration:password@direct.creatorx.example:6543/postgres?host=db.creatorx.example",
+    ],
+    [
+      "port",
+      "postgresql://migration:password@db.creatorx.example:5432/postgres?port=6543",
+    ],
+    [
+      "dbname",
+      "postgresql://migration:password@db.creatorx.example:6543/not-postgres?dbname=postgres",
+    ],
+  ])(
+    "rejects DIRECT_URL query endpoint override %s before role comparison",
+    (_parameter, directUrl) => {
+      expect(() =>
+        validateProductionEnvironment({
+          ...validProductionEnvironment,
+          DIRECT_URL: directUrl,
+        }),
+      ).toThrow("DIRECT_URL must not override PostgreSQL endpoint via query parameters");
+    },
+  );
+
+  it.each([
+    [
+      "DATABASE_URL",
+      "postgresql://runtime:password@db.creatorx.example:6543/postgres?pgbouncer=true&hostaddr=203.0.113.10",
+    ],
+    [
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example:5432/postgres?hostaddr=203.0.113.10",
+    ],
+  ])("rejects a %s hostaddr query override", (key, value) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      }),
+    ).toThrow(`${key} must not override PostgreSQL endpoint via query parameters`);
+  });
+
+  it.each([
+    [
+      "DATABASE_URL",
+      "postgresql://runtime:password@db.creatorx.example:6543/postgres?pgbouncer=true&service=pool",
+    ],
+    [
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example:5432/postgres?sslmode=require&service=migration",
+    ],
+  ])("rejects a %s service query override", (key, value) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      }),
+    ).toThrow(`${key} must not override PostgreSQL endpoint via query parameters`);
+  });
+
+  it.each([
+    [
+      "DATABASE_URL",
+      "postgresql://runtime:password@db.creatorx.example:6543/%ZZ?pgbouncer=true",
+    ],
+    [
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example:5432/%ZZ?sslmode=require",
+    ],
+  ])("fails closed for a malformed percent escape in %s database pathname", (key, value) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      }),
+    ).toThrow(`${key} must be a PostgreSQL URL`);
+  });
+
+  it.each([
+    [
+      "a literal dot segment",
+      "DATABASE_URL",
+      "postgresql://runtime:password@db.creatorx.example:6543/foo/../postgres?pgbouncer=true",
+    ],
+    [
+      "an encoded dot segment",
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example:5432/%2e%2e/postgres?sslmode=require",
+    ],
+    [
+      "an encoded leading slash",
+      "DATABASE_URL",
+      "postgresql://runtime:password@db.creatorx.example:6543/%2Fpostgres?pgbouncer=true",
+    ],
+    [
+      "an encoded embedded slash",
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example:5432/post%2Fgres?sslmode=require",
+    ],
+  ])("rejects %s in a %s database pathname", (_label, key, value) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      }),
+    ).toThrow(`${key} must use a single PostgreSQL database path segment`);
+  });
+
   it("requires an actual calendar date for the legal effective date", () => {
     expect(() =>
       validateProductionEnvironment({

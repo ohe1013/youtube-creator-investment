@@ -22,6 +22,13 @@ const SANDBOX_SUPPORT_URL =
   "https://github.com/ohe1013/youtube-creator-investment/issues";
 const SANDBOX_PRIVACY_CONTACT = "GitHub Issues";
 const DEFAULT_POSTGRES_PORT = "5432";
+const POSTGRES_ENDPOINT_OVERRIDE_PARAMETERS = new Set([
+  "host",
+  "hostaddr",
+  "port",
+  "dbname",
+  "service",
+]);
 const LOCAL_HOSTNAME_SUFFIXES = [
   ".localhost",
   ".local",
@@ -167,25 +174,84 @@ function assertPostgresUrl(key, value) {
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     fail(`${key} must be a PostgreSQL URL`);
   }
-  return url;
+  const hostname = canonicalPostgresHostname(key, url);
+  if (!hostname || !isRemoteHostname(hostname)) {
+    fail(`${key} must be a remote PostgreSQL URL`);
+  }
+  return {
+    url,
+    hostname,
+    databasePathname: postgresDatabasePathname(
+      key,
+      rawPostgresPathname(key, value),
+    ),
+  };
 }
 
-function isPgbouncerUrl(url) {
-  const values = url.searchParams
+function decodePostgresUriComponent(key, value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    fail(`${key} must be a PostgreSQL URL`);
+  }
+}
+
+function canonicalPostgresHostname(key, url) {
+  return canonicalHostname(decodePostgresUriComponent(key, url.hostname));
+}
+
+function rawPostgresPathname(key, value) {
+  const schemeEnd = value.indexOf(":");
+  const authorityStart = schemeEnd + 3;
+  if (schemeEnd < 0 || value.slice(schemeEnd + 1, authorityStart) !== "//") {
+    fail(`${key} must be a PostgreSQL URL`);
+  }
+
+  const authorityAndPath = value.slice(authorityStart);
+  const separator = authorityAndPath.search(/[/?#]/);
+  if (separator < 0 || authorityAndPath[separator] !== "/") return "";
+
+  const pathnameAndSuffix = authorityAndPath.slice(separator);
+  const suffix = pathnameAndSuffix.search(/[?#]/);
+  return suffix < 0 ? pathnameAndSuffix : pathnameAndSuffix.slice(0, suffix);
+}
+
+function postgresDatabasePathname(key, rawPathname) {
+  const pathname = decodePostgresUriComponent(key, rawPathname);
+  if (
+    !/^\/[^/]+$/.test(pathname) ||
+    pathname === "/." ||
+    pathname === "/.."
+  ) {
+    fail(`${key} must use a single PostgreSQL database path segment`);
+  }
+  return pathname;
+}
+
+function assertNoPostgresEndpointOverrides(key, connection) {
+  for (const parameter of connection.url.searchParams.keys()) {
+    if (POSTGRES_ENDPOINT_OVERRIDE_PARAMETERS.has(parameter.toLowerCase())) {
+      fail(`${key} must not override PostgreSQL endpoint via query parameters`);
+    }
+  }
+}
+
+function isPgbouncerUrl(connection) {
+  const values = connection.url.searchParams
     .getAll("pgbouncer")
     .map((value) => value.toLowerCase());
   return values.length === 1 && values[0] === "true";
 }
 
-function assertPooledRuntimeUrl(url) {
-  if (!isPgbouncerUrl(url)) {
+function assertPooledRuntimeUrl(connection) {
+  if (!isPgbouncerUrl(connection)) {
     fail("DATABASE_URL must be a pooled PostgreSQL URL");
   }
 }
 
-function assertDirectMigrationUrl(url) {
+function assertDirectMigrationUrl(connection) {
   if (
-    url.searchParams
+    connection.url.searchParams
       .getAll("pgbouncer")
       .some((value) => value.toLowerCase() === "true")
   ) {
@@ -195,16 +261,23 @@ function assertDirectMigrationUrl(url) {
 
 function hasSamePostgresEndpoint(left, right) {
   return (
-    canonicalHostname(left.hostname) === canonicalHostname(right.hostname) &&
-    (left.port || DEFAULT_POSTGRES_PORT) ===
-      (right.port || DEFAULT_POSTGRES_PORT) &&
-    left.pathname === right.pathname
+    left.hostname === right.hostname &&
+    (left.url.port || DEFAULT_POSTGRES_PORT) ===
+      (right.url.port || DEFAULT_POSTGRES_PORT)
   );
 }
 
 function assertDistinctPostgresEndpoints(databaseConnection, directConnection) {
   if (hasSamePostgresEndpoint(databaseConnection, directConnection)) {
     fail("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
+  }
+}
+
+function assertSamePostgresDatabase(databaseConnection, directConnection) {
+  if (
+    databaseConnection.databasePathname !== directConnection.databasePathname
+  ) {
+    fail("DATABASE_URL and DIRECT_URL must use the same PostgreSQL database");
   }
 }
 
@@ -275,12 +348,15 @@ export function validateProductionEnvironment(env = process.env) {
   const directUrl = requireValue(env, "DIRECT_URL");
   const databaseConnection = assertPostgresUrl("DATABASE_URL", databaseUrl);
   const directConnection = assertPostgresUrl("DIRECT_URL", directUrl);
+  assertNoPostgresEndpointOverrides("DATABASE_URL", databaseConnection);
+  assertNoPostgresEndpointOverrides("DIRECT_URL", directConnection);
   if (databaseUrl === directUrl) {
     fail("DATABASE_URL and DIRECT_URL must not be the same URL");
   }
   assertPooledRuntimeUrl(databaseConnection);
   assertDirectMigrationUrl(directConnection);
   assertDistinctPostgresEndpoints(databaseConnection, directConnection);
+  assertSamePostgresDatabase(databaseConnection, directConnection);
 
   if (requireValue(env, "CREATORX_ACCESS_TOKEN_SECRET").length < 32) {
     fail("CREATORX_ACCESS_TOKEN_SECRET must be at least 32 characters");
