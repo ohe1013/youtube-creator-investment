@@ -3,6 +3,8 @@ import GoogleProvider from "next-auth/providers/google";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
 
+const INITIAL_CREATORX_BALANCE = 100_000;
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
@@ -15,7 +17,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, user }) {
       if (session.user) {
         session.user.id = user.id;
-        session.user.balance = user.balance;
+        session.user.balance = Number(user.balance);
         session.user.role = user.role;
       }
       return session;
@@ -27,8 +29,8 @@ export const authOptions: NextAuthOptions = {
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          initialBudget: 100000,
-          balance: 100000,
+          initialBudget: INITIAL_CREATORX_BALANCE,
+          balance: INITIAL_CREATORX_BALANCE,
           role: "USER",
         },
       });
