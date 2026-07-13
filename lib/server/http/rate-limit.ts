@@ -23,6 +23,7 @@ export type RateLimitDecision = {
 type BucketRow = {
   count: number;
   expiresAt: Date;
+  databaseNow: Date;
 };
 
 function validateInput(input: RateLimitInput) {
@@ -57,24 +58,27 @@ export async function enforceRateLimit(
   if (!hashSecret) {
     throw new Error("rate-limit hashing secret is not configured");
   }
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + input.windowMs);
   const keyHash = hashRateLimitKey(input.scope, input.identifier, hashSecret);
   const rows = await database.$queryRaw<BucketRow[]>(Prisma.sql`
     INSERT INTO "RateLimitBucket" ("keyHash", "count", "expiresAt", "updatedAt")
-    VALUES (${keyHash}, 1, ${expiresAt}, ${now})
+    VALUES (
+      ${keyHash},
+      1,
+      CURRENT_TIMESTAMP + (${input.windowMs} * INTERVAL '1 millisecond'),
+      CURRENT_TIMESTAMP
+    )
     ON CONFLICT ("keyHash") DO UPDATE SET
       "count" = CASE
-        WHEN "RateLimitBucket"."expiresAt" <= EXCLUDED."updatedAt" THEN 1
+        WHEN "RateLimitBucket"."expiresAt" <= CURRENT_TIMESTAMP THEN 1
         ELSE "RateLimitBucket"."count" + 1
       END,
       "expiresAt" = CASE
-        WHEN "RateLimitBucket"."expiresAt" <= EXCLUDED."updatedAt"
-          THEN EXCLUDED."expiresAt"
+        WHEN "RateLimitBucket"."expiresAt" <= CURRENT_TIMESTAMP
+          THEN CURRENT_TIMESTAMP + (${input.windowMs} * INTERVAL '1 millisecond')
         ELSE "RateLimitBucket"."expiresAt"
       END,
-      "updatedAt" = EXCLUDED."updatedAt"
-    RETURNING "count", "expiresAt"
+      "updatedAt" = CURRENT_TIMESTAMP
+    RETURNING "count", "expiresAt", CURRENT_TIMESTAMP AS "databaseNow"
   `);
   const bucket = rows[0];
   if (!bucket) throw new Error("rate-limit bucket update returned no row");
@@ -84,7 +88,9 @@ export async function enforceRateLimit(
   if (bucket.count > input.maxRequests) {
     const retryAfterSeconds = Math.max(
       1,
-      Math.ceil((bucket.expiresAt.getTime() - Date.now()) / 1000),
+      Math.ceil(
+        (bucket.expiresAt.getTime() - bucket.databaseNow.getTime()) / 1000,
+      ),
     );
     throw new ApiError(429, "RATE_LIMITED", "요청이 너무 많습니다.", {
       limit: input.maxRequests,

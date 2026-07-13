@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parsePublicEnv } from "@/lib/config/public-env";
 import { parseServerEnv } from "@/lib/config/server-env";
 import { ApiError } from "@/lib/server/http/api-error";
@@ -27,11 +27,41 @@ const validProductionPublicEnv = {
     "https://assets.creatorx.example/creatorx-icon.png",
 };
 
+const validProductionServerEnv = {
+  NODE_ENV: "production",
+  ...validProductionPublicEnv,
+  CREATORX_IDENTITY_PEPPER: "p".repeat(32),
+  VERCEL: "1",
+};
+
+function useProductionRuntimeEnvironment(
+  overrides: Record<string, string | undefined> = {},
+) {
+  const environment: Record<string, string | undefined> = {
+    ...validProductionServerEnv,
+    CREATORX_TRUST_PROXY: "0",
+    CREATORX_DEV_CORS_ORIGINS: undefined,
+    ...overrides,
+  };
+  for (const [key, value] of Object.entries(environment)) {
+    vi.stubEnv(key, value);
+  }
+}
+
+afterEach(() => vi.unstubAllEnvs());
+
 describe("public and server environment boundaries", () => {
   it.each([
     [{ NEXT_PUBLIC_CREATORX_DATA_MODE: "demo" }, "remote data mode"],
     [
       { NEXT_PUBLIC_CREATORX_API_BASE_URL: "http://api.creatorx.example" },
+      "remote HTTPS API URL",
+    ],
+    [
+      {
+        NEXT_PUBLIC_CREATORX_API_BASE_URL:
+          "https://user:password@api.creatorx.example",
+      },
       "remote HTTPS API URL",
     ],
     [{ NEXT_PUBLIC_CREATORX_API_BASE_URL: undefined }, "remote HTTPS API URL"],
@@ -67,6 +97,32 @@ describe("public and server environment boundaries", () => {
     "http://localhost:3000#fragment",
   ])("rejects a malformed or non-local development origin: %s", (origin) => {
     expect(() => parseDevelopmentOrigins(origin)).toThrow("local origin");
+  });
+
+  it("requires production Node runtime to agree with the public production release", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validProductionServerEnv,
+        NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "sandbox",
+        NEXT_PUBLIC_CREATORX_DATA_MODE: "demo",
+      }),
+    ).toThrow("public release channel production");
+    expect(parseServerEnv({ NODE_ENV: "test" }).isProduction).toBe(false);
+  });
+
+  it("requires a non-trivial production identity pepper", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validProductionServerEnv,
+        CREATORX_IDENTITY_PEPPER: "p".repeat(31),
+      }),
+    ).toThrow("identity pepper");
+  });
+
+  it("requires a trusted proxy attestation in production", () => {
+    expect(() =>
+      parseServerEnv({ ...validProductionServerEnv, VERCEL: undefined }),
+    ).toThrow("trusted proxy attestation");
   });
 });
 
@@ -116,16 +172,69 @@ describe("withApiRoute", () => {
     expect(text).not.toContain("secret@db");
   });
 
+  it("returns a stable envelope when route option resolution is invalid", async () => {
+    const implementation = vi.fn(async () => Response.json({ ok: true }));
+    const handler = withApiRoute(implementation, {
+      isProduction: true,
+      developmentOrigins: ["http://localhost:3000"],
+    });
+
+    const response = await handler(
+      new Request("https://api.creatorx.example/example", {
+        headers: { "x-request-id": "invalid-options" },
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-request-id")).toBe("invalid-options");
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        requestId: "invalid-options",
+      },
+    });
+    expect(implementation).not.toHaveBeenCalled();
+  });
+
+  it("preserves the App Router dynamic context while adding a request ID", async () => {
+    type DynamicContext = { params: Promise<{ id: string }> };
+    const handler = withApiRoute<DynamicContext>(
+      async (_request, context) =>
+        Response.json({
+          id: (await context.params).id,
+          requestId: context.requestId,
+        }),
+      developmentOptions,
+    );
+
+    const response = await handler(
+      new Request("http://localhost/api/creators/creator-7", {
+        headers: { "x-request-id": "dynamic-context" },
+      }),
+      { params: Promise.resolve({ id: "creator-7" }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      id: "creator-7",
+      requestId: "dynamic-context",
+    });
+  });
+
   it.each(CREATORX_TOSS_ORIGINS)(
     "returns exact CORS headers for Toss origin %s",
     async (origin) => {
       const handler = withApiRoute(
         async () => Response.json({ ok: true }),
-        { isProduction: true, developmentOrigins: [] },
+        {
+          isProduction: true,
+          developmentOrigins: [],
+          trustForwardedProto: true,
+        },
       );
       const response = await handler(
         new Request("https://api.creatorx.example/example", {
-          headers: { origin },
+          headers: { origin, "x-forwarded-proto": "https" },
         }),
       );
 
@@ -174,12 +283,14 @@ describe("withApiRoute", () => {
     const preflight = createCorsPreflightHandler({
       isProduction: true,
       developmentOrigins: [],
+      trustForwardedProto: true,
     });
     const allowed = await preflight(
       new Request("https://api.creatorx.example/example", {
         method: "OPTIONS",
         headers: {
           origin: CREATORX_TOSS_ORIGINS[0],
+          "x-forwarded-proto": "https",
           "access-control-request-method": "POST",
         },
       }),
@@ -189,6 +300,7 @@ describe("withApiRoute", () => {
         method: "OPTIONS",
         headers: {
           origin: "https://evil.example",
+          "x-forwarded-proto": "https",
           "access-control-request-method": "POST",
         },
       }),
@@ -231,16 +343,55 @@ describe("withApiRoute", () => {
     expect(rejected.headers.get("upgrade")).toBe("TLS/1.2");
     expect(forwarded.status).toBe(200);
   });
+
+  it("rejects an HTTPS-looking direct request when no proxy is trusted", async () => {
+    const handler = withApiRoute(
+      async () => Response.json({ ok: true }),
+      {
+        isProduction: true,
+        developmentOrigins: [],
+        trustForwardedProto: false,
+      },
+    );
+
+    const response = await handler(
+      new Request("https://api.creatorx.example/example", {
+        headers: { "x-forwarded-proto": "https" },
+      }),
+    );
+
+    expect(response.status).toBe(426);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "HTTPS_REQUIRED" },
+    });
+  });
+
+  it("does not let route options bypass the actual production runtime", async () => {
+    useProductionRuntimeEnvironment();
+    const handler = withApiRoute(
+      async () => Response.json({ ok: true }),
+      { isProduction: false, developmentOrigins: [] },
+    );
+
+    const response = await handler(
+      new Request("https://api.creatorx.example/example"),
+    );
+
+    expect(response.status).toBe(426);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "HTTPS_REQUIRED" },
+    });
+  });
 });
 
 describe("isSecureRequest", () => {
   it.each([
-    ["https://api.creatorx.example/path", undefined, false, true],
+    ["https://api.creatorx.example/path", undefined, false, false],
     ["http://api.creatorx.example/path", "https", true, true],
     ["http://api.creatorx.example/path", "https", false, false],
     ["http://api.creatorx.example/path", undefined, true, false],
     ["http://api.creatorx.example/path", "https, http", true, false],
-    ["http://api.creatorx.example/path", "HTTPS ", true, true],
+    ["http://api.creatorx.example/path", "HTTPS ", true, false],
   ])(
     "validates transport %s / %s",
     (url, forwardedProto, trustProxy, expected) => {

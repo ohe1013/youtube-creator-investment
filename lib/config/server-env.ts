@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parsePublicEnv } from "@/lib/config/public-env";
 import { parseDevelopmentOrigins } from "@/lib/server/http/cors";
 
 const optionalNonempty = z.preprocess(
@@ -21,7 +22,9 @@ const optionalPostgresUrl = z.preprocess(
 );
 
 const schema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
   DATABASE_URL: optionalPostgresUrl,
   DIRECT_URL: optionalPostgresUrl,
   CREATORX_ACCESS_TOKEN_SECRET: optionalNonempty,
@@ -48,11 +51,30 @@ export function parseServerEnv(
   env: Record<string, string | undefined>,
 ): CreatorXServerEnv {
   const value = schema.parse(env);
+  const publicEnv = parsePublicEnv(env);
+  const trustForwardedProto =
+    value.VERCEL === "1" || value.CREATORX_TRUST_PROXY === "1";
   const developmentCorsOrigins = parseDevelopmentOrigins(
     value.CREATORX_DEV_CORS_ORIGINS,
   );
   if (value.NODE_ENV === "production" && developmentCorsOrigins.length > 0) {
     throw new Error("production cannot enable development CORS origins");
+  }
+  if (
+    value.NODE_ENV === "production" &&
+    publicEnv.releaseChannel !== "production"
+  ) {
+    throw new Error("production requires public release channel production");
+  }
+  if (value.NODE_ENV === "production" && !trustForwardedProto) {
+    throw new Error("production requires a trusted proxy attestation");
+  }
+  if (
+    value.NODE_ENV === "production" &&
+    (!value.CREATORX_IDENTITY_PEPPER ||
+      value.CREATORX_IDENTITY_PEPPER.trim().length < 32)
+  ) {
+    throw new Error("production requires an identity pepper of at least 32 characters");
   }
 
   return {
@@ -64,8 +86,7 @@ export function parseServerEnv(
     identityPepper: value.CREATORX_IDENTITY_PEPPER ?? null,
     cronSecret: value.CRON_SECRET ?? null,
     developmentCorsOrigins,
-    trustForwardedProto:
-      value.VERCEL === "1" || value.CREATORX_TRUST_PROXY === "1",
+    trustForwardedProto,
   };
 }
 
@@ -80,5 +101,21 @@ export function readServerEnv() {
     CREATORX_DEV_CORS_ORIGINS: process.env.CREATORX_DEV_CORS_ORIGINS,
     CREATORX_TRUST_PROXY: process.env.CREATORX_TRUST_PROXY,
     VERCEL: process.env.VERCEL,
+    NEXT_PUBLIC_APP_IN_TOSS: process.env.NEXT_PUBLIC_APP_IN_TOSS,
+    NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL:
+      process.env.NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL,
+    NEXT_PUBLIC_CREATORX_DATA_MODE: process.env.NEXT_PUBLIC_CREATORX_DATA_MODE,
+    NEXT_PUBLIC_CREATORX_API_BASE_URL:
+      process.env.NEXT_PUBLIC_CREATORX_API_BASE_URL,
+    NEXT_PUBLIC_CREATORX_OPERATOR_NAME:
+      process.env.NEXT_PUBLIC_CREATORX_OPERATOR_NAME,
+    NEXT_PUBLIC_CREATORX_SUPPORT_URL:
+      process.env.NEXT_PUBLIC_CREATORX_SUPPORT_URL,
+    NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT:
+      process.env.NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT,
+    NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE:
+      process.env.NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE,
+    NEXT_PUBLIC_CREATORX_ICON_URL:
+      process.env.NEXT_PUBLIC_CREATORX_ICON_URL,
   });
 }

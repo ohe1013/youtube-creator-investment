@@ -97,6 +97,7 @@ function isSandboxSupportPlaceholder(value: string) {
 function isRemoteHttpsUrl(value: string) {
   try {
     const url = new URL(value);
+    if (url.username || url.password) return false;
     const hostname = canonicalHostname(url);
     const ipv4 = parseIpv4(hostname);
     const mapped = mappedIpv4(hostname);

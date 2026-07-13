@@ -5,6 +5,10 @@ export const CREATORX_TOSS_ORIGINS = [
   "https://creatorx.apps.tossmini.com",
 ] as const;
 
+export const CORS_ALLOW_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
+export const CORS_ALLOW_HEADERS =
+  "Authorization, Content-Type, Idempotency-Key, X-Request-Id";
+
 const LOCAL_HOSTNAME_SUFFIXES = [
   ".localhost",
   ".local",
@@ -130,21 +134,20 @@ function appendVary(headers: Headers, value: string) {
   headers.set("vary", values.join(", "));
 }
 
+export function applyCorsHeaders(headers: Headers, allowedOrigin: string | null) {
+  if (!allowedOrigin) return;
+  headers.set("access-control-allow-origin", allowedOrigin);
+  headers.set("access-control-allow-credentials", "true");
+  headers.set("access-control-allow-methods", CORS_ALLOW_METHODS);
+  headers.set("access-control-allow-headers", CORS_ALLOW_HEADERS);
+  appendVary(headers, "Origin");
+}
+
 export function withCors(response: Response, allowedOrigin: string | null) {
   if (!allowedOrigin) return response;
 
   const headers = new Headers(response.headers);
-  headers.set("access-control-allow-origin", allowedOrigin);
-  headers.set("access-control-allow-credentials", "true");
-  headers.set(
-    "access-control-allow-methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  );
-  headers.set(
-    "access-control-allow-headers",
-    "Authorization, Content-Type, Idempotency-Key, X-Request-Id",
-  );
-  appendVary(headers, "Origin");
+  applyCorsHeaders(headers, allowedOrigin);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

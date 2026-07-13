@@ -10,9 +10,9 @@ import {
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export type ApiRouteContext = { requestId: string };
-export type ApiRouteHandler = (
+export type ApiRouteHandler<TContext extends object = Record<string, never>> = (
   request: Request,
-  context: ApiRouteContext,
+  context: TContext & ApiRouteContext,
 ) => Promise<Response>;
 export type ApiRouteOptions = {
   isProduction?: boolean;
@@ -29,10 +29,9 @@ export function isSecureRequest(
   request: Request,
   trustForwardedProto = false,
 ) {
-  if (new URL(request.url).protocol === "https:") return true;
   return (
     trustForwardedProto &&
-    request.headers.get("x-forwarded-proto")?.trim().toLowerCase() === "https"
+    request.headers.get("x-forwarded-proto") === "https"
   );
 }
 
@@ -51,38 +50,44 @@ export function assertSecureTransport(
 }
 
 function resolveOptions(options: ApiRouteOptions) {
-  const serverEnv =
-    options.isProduction === undefined ||
-    options.developmentOrigins === undefined
-      ? readServerEnv()
-      : null;
+  const serverEnv = readServerEnv();
+  if (serverEnv.isProduction) {
+    return {
+      isProduction: true,
+      developmentOrigins: serverEnv.developmentCorsOrigins,
+      trustForwardedProto: serverEnv.trustForwardedProto,
+    };
+  }
   return {
-    isProduction: options.isProduction ?? serverEnv?.isProduction ?? false,
+    isProduction: options.isProduction ?? false,
     developmentOrigins:
-      options.developmentOrigins ?? serverEnv?.developmentCorsOrigins ?? [],
+      options.developmentOrigins ?? serverEnv.developmentCorsOrigins,
     trustForwardedProto:
-      options.trustForwardedProto ?? serverEnv?.trustForwardedProto ?? false,
+      options.trustForwardedProto ?? serverEnv.trustForwardedProto,
   };
 }
 
-export function withApiRoute(
-  handler: ApiRouteHandler,
+export function withApiRoute<TContext extends object = Record<string, never>>(
+  handler: ApiRouteHandler<TContext>,
   options: ApiRouteOptions = {},
 ) {
-  return async (request: Request) => {
+  return async (request: Request, context?: TContext) => {
     const requestId = resolveRequestId(request);
-    const resolvedOptions = resolveOptions(options);
-    const allowedOrigins = resolveAllowedOrigins(resolvedOptions);
     let allowedOrigin: string | null = null;
 
     try {
+      const resolvedOptions = resolveOptions(options);
+      const allowedOrigins = resolveAllowedOrigins(resolvedOptions);
       assertSecureTransport(
         request,
         resolvedOptions.isProduction,
         resolvedOptions.trustForwardedProto,
       );
       allowedOrigin = assertCorsOriginAllowed(request, allowedOrigins);
-      const response = await handler(request, { requestId });
+      const response = await handler(request, {
+        ...(context ?? {}),
+        requestId,
+      } as TContext & ApiRouteContext);
       const headers = new Headers(response.headers);
       headers.set("x-request-id", requestId);
       return withCors(

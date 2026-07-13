@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { withApiRoute } from "@/lib/server/http/route-handler";
 import { enforceRateLimit } from "@/lib/server/http/rate-limit";
 
@@ -101,6 +101,37 @@ describe.sequential("PostgreSQL rate limiting", () => {
       expect(bucket.count).toBe(1);
       expect(bucket.expiresAt.getTime()).toBeGreaterThan(Date.now());
     } finally {
+      await prisma.rateLimitBucket.deleteMany({ where: { keyHash } });
+    }
+  });
+
+  it("uses PostgreSQL time when resetting a bucket despite a stale app clock", async () => {
+    const scope = `database-clock-${randomUUID()}`;
+    const identifier = `ip-${randomUUID()}`;
+    const keyHash = bucketHash(scope, identifier);
+
+    await prisma.$executeRaw`
+      INSERT INTO "RateLimitBucket" ("keyHash", "count", "expiresAt", "updatedAt")
+      VALUES (${keyHash}, 99, CURRENT_TIMESTAMP - INTERVAL '1 second', CURRENT_TIMESTAMP)
+    `;
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2000-01-01T00:00:00.000Z"));
+    try {
+      const decision = await enforceRateLimit({
+        scope,
+        identifier,
+        maxRequests: 2,
+        windowMs: 60_000,
+      });
+      const bucket = await prisma.rateLimitBucket.findUniqueOrThrow({
+        where: { keyHash },
+      });
+
+      expect(decision).toMatchObject({ allowed: true, remaining: 1 });
+      expect(bucket.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
       await prisma.rateLimitBucket.deleteMany({ where: { keyHash } });
     }
   });
