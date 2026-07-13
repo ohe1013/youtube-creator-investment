@@ -236,6 +236,26 @@ describe("production preflight", () => {
       "DATABASE_URL",
       "postgresql://runtime:password@[::1]:6543/postgres?pgbouncer=true",
     ],
+    [
+      "an abbreviated IPv4 loopback DATABASE_URL",
+      "DATABASE_URL",
+      "postgresql://runtime:password@127.1:6543/postgres?pgbouncer=true",
+    ],
+    [
+      "an octal IPv4 loopback DIRECT_URL",
+      "DIRECT_URL",
+      "postgresql://migration:password@0177.0.0.1:5432/postgres?sslmode=require",
+    ],
+    [
+      "a literal multi-host DIRECT_URL",
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example,db.creatorx.example:6543/postgres?sslmode=require",
+    ],
+    [
+      "an encoded multi-host DATABASE_URL",
+      "DATABASE_URL",
+      "postgresql://runtime:password@db.creatorx.example%2Cdirect.creatorx.example:6543/postgres?pgbouncer=true",
+    ],
   ])("rejects %s without exposing connection material", (_label, key, value) => {
     let error: Error | null = null;
     try {
@@ -250,6 +270,18 @@ describe("production preflight", () => {
     expect(error).toMatchObject({ name: "ProductionPreflightError" });
     expect(String(error?.message)).toBe(`${key} must be a remote PostgreSQL URL`);
     expect(String(error?.message)).not.toContain("password");
+  });
+
+  it("accepts canonical public IPv4 PostgreSQL hosts", () => {
+    expect(
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          "postgresql://runtime:password@8.8.8.8:6543/postgres?pgbouncer=true",
+        DIRECT_URL:
+          "postgresql://migration:password@1.1.1.1:5432/postgres?sslmode=require",
+      }),
+    ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
   });
 
   it.each([

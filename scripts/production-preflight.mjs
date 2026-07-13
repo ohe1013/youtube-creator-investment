@@ -92,11 +92,19 @@ function isTossBrandIcon(value) {
 }
 
 function parseIpv4(hostname) {
-  const parts = hostname.split(".").map(Number);
+  const parts = hostname.split(".");
   return parts.length === 4 &&
-    parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
-    ? parts
+    parts.every((part) => /^(?:0|[1-9]\d{0,2})$/.test(part)) &&
+    parts.every((part) => Number(part) <= 255)
+    ? parts.map(Number)
     : null;
+}
+
+function isAmbiguousIpv4Literal(hostname) {
+  return (
+    /^(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+))*$/i.test(hostname) &&
+    !parseIpv4(hostname)
+  );
 }
 
 function mappedIpv4(hostname) {
@@ -137,6 +145,8 @@ function isRemoteHostname(hostname) {
   return (
     normalized !== "localhost" &&
     !normalized.endsWith(".localhost") &&
+    !normalized.includes(",") &&
+    !isAmbiguousIpv4Literal(normalized) &&
     !(!ipv4 && !normalized.includes(".") && !normalized.includes(":")) &&
     !isLocalNamespace &&
     !isPrivateIpv4(ipv4) &&
