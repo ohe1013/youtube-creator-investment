@@ -11,6 +11,7 @@ const SIGNIN_ADAPTER = "app/auth/signin/page.tsx";
 const CLIENT_FETCH_ALLOWLIST = new Set([
   "lib/data/remote-client.ts",
   "lib/data/toss-login-client.ts",
+  "lib/data/creatorx-session-client.ts",
 ]);
 const SESSION_ADAPTER_IMPORTS = new Set([
   "SessionProvider",
@@ -102,7 +103,7 @@ export function isProjectOwnedSourcePath(path: string): boolean {
   ) {
     return false;
   }
-  if (/^lib\/youtube(?:\/|\.)/.test(normalized)) return false;
+  if (/^lib\/server\/youtube(?:\/|\.)/.test(normalized)) return false;
   return true;
 }
 

@@ -1,6 +1,22 @@
 import type { Creator } from "@/lib/data/contracts";
 
-export type AppInTossCreator = Creator;
+/** Numeric in-memory fixtures for the offline App-in-Toss demo. */
+export type AppInTossCreator = Omit<
+  Creator,
+  | "initialPrice"
+  | "currentPrice"
+  | "totalSupply"
+  | "circulatingSupply"
+  | "reserveSupply"
+  | "liquidity"
+> & {
+  initialPrice: number;
+  currentPrice: number;
+  totalSupply: number;
+  circulatingSupply: number;
+  reserveSupply: number;
+  liquidity: number;
+};
 type DemoCreator = Omit<AppInTossCreator, "_count">;
 
 const TODAY = "2026-07-09T09:00:00.000Z";

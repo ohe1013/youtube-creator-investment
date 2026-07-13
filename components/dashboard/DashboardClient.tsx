@@ -7,7 +7,12 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
 import type { Dashboard } from "@/lib/data/contracts";
+import { decimalToDisplayNumber } from "@/lib/data/decimal-display";
 import { creatorDetailHref } from "@/lib/routing/creator";
+
+function formatDecimal(value: string) {
+  return decimalToDisplayNumber(value).toLocaleString();
+}
 
 export function DashboardClient() {
   const { t } = useLanguage();
@@ -79,7 +84,7 @@ export function DashboardClient() {
               {t("dashboard.totalCap")}
             </span>
             <span className="text-sm font-mono font-bold text-up">
-              {data.stats.totalMarketCap.toLocaleString()} P
+              {formatDecimal(data.stats.totalMarketCap)} P
             </span>
           </div>
           <div className="flex flex-col">
@@ -87,7 +92,7 @@ export function DashboardClient() {
               {t("dashboard.vol24h")}
             </span>
             <span className="text-sm font-mono font-bold">
-              {data.stats.totalVolume24h.toLocaleString()} P
+              {formatDecimal(data.stats.totalVolume24h)} P
             </span>
           </div>
           <div className="flex flex-col hidden sm:flex">
@@ -173,7 +178,7 @@ export function DashboardClient() {
                     </td>
                     <td className="px-4 py-4 text-right">
                       <div className="text-sm font-mono font-bold">
-                        {r.currentPrice.toLocaleString()} P
+                        {formatDecimal(r.currentPrice)} P
                       </div>
                     </td>
                     <td className="px-4 py-4 text-right">
@@ -183,7 +188,7 @@ export function DashboardClient() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="text-xs font-mono text-muted">
-                        {r.marketCap.toLocaleString()} P
+                        {formatDecimal(r.marketCap)} P
                       </div>
                     </td>
                   </tr>
@@ -207,7 +212,7 @@ export function DashboardClient() {
                     {t("dashboard.totalAssets")}
                   </span>
                   <span className="text-2xl font-mono font-bold">
-                    {data.user.totalAssets.toLocaleString()} P
+                    {formatDecimal(data.user.totalAssets)} P
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border-exchange/30">
@@ -216,7 +221,7 @@ export function DashboardClient() {
                       {t("common.balance")}
                     </span>
                     <span className="text-sm font-mono font-bold">
-                      {data.user.balance.toLocaleString()} P
+                      {formatDecimal(data.user.balance)} P
                     </span>
                   </div>
                   <div>
@@ -282,7 +287,7 @@ export function DashboardClient() {
                   </div>
                   <div className="ml-auto text-right">
                     <span className="text-xs font-mono font-bold block">
-                      {c.currentPrice.toLocaleString()} P
+                      {formatDecimal(c.currentPrice)} P
                     </span>
                     <span className="text-[10px] text-up font-bold">NEW</span>
                   </div>

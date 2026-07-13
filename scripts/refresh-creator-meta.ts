@@ -1,5 +1,9 @@
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { getChannelStats, searchChannels } from "../lib/youtube";
+import {
+  getChannelStats,
+  searchChannels,
+} from "../lib/server/youtube/youtube-client";
 
 const prisma = new PrismaClient();
 

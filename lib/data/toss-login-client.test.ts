@@ -38,7 +38,7 @@ describe("TossLoginClient", () => {
           authorizationCode: "single-use-code",
           referrer: "SANDBOX",
         }),
-        credentials: "omit",
+        credentials: "same-origin",
         redirect: "error",
       },
     );
@@ -61,7 +61,7 @@ describe("TossLoginClient", () => {
     expect(fetchFn).toHaveBeenCalledWith(
       "https://api.example.com/api/auth/toss/exchange",
       expect.objectContaining({
-        credentials: "omit",
+        credentials: "same-origin",
         redirect: "error",
       }),
     );
@@ -98,7 +98,7 @@ describe("TossLoginClient", () => {
       {
         method: "POST",
         headers: { authorization: "Bearer creatorx-access-token" },
-        credentials: "omit",
+        credentials: "same-origin",
         redirect: "error",
       },
     );

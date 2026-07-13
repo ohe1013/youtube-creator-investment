@@ -32,6 +32,7 @@ const schema = z.object({
   CREATORX_ACCESS_TOKEN_SECRET: optionalNonempty,
   CREATORX_IDENTITY_PEPPER: optionalNonempty,
   CRON_SECRET: optionalNonempty,
+  YOUTUBE_API_KEY: optionalNonempty,
   CREATORX_DEV_CORS_ORIGINS: z.string().optional(),
   CREATORX_TRUST_PROXY: z.enum(["0", "1"]).default("0"),
   TOSS_LOGIN_ENABLED: z.enum(["0", "1"]).default("0"),
@@ -48,6 +49,7 @@ export type CreatorXServerEnv = {
   accessTokenSecret: string | null;
   identityPepper: string | null;
   cronSecret: string | null;
+  youtubeApiKey: string | null;
   developmentCorsOrigins: string[];
   trustForwardedProto: boolean;
   tossLoginEnabled: boolean;
@@ -93,6 +95,7 @@ export function parseServerEnv(
     accessTokenSecret: value.CREATORX_ACCESS_TOKEN_SECRET ?? null,
     identityPepper: value.CREATORX_IDENTITY_PEPPER ?? null,
     cronSecret: value.CRON_SECRET ?? null,
+    youtubeApiKey: value.YOUTUBE_API_KEY ?? null,
     developmentCorsOrigins,
     trustForwardedProto,
     tossLoginEnabled: value.TOSS_LOGIN_ENABLED === "1",
@@ -109,6 +112,7 @@ export function readServerEnv() {
     CREATORX_ACCESS_TOKEN_SECRET: process.env.CREATORX_ACCESS_TOKEN_SECRET,
     CREATORX_IDENTITY_PEPPER: process.env.CREATORX_IDENTITY_PEPPER,
     CRON_SECRET: process.env.CRON_SECRET,
+    YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY,
     CREATORX_DEV_CORS_ORIGINS: process.env.CREATORX_DEV_CORS_ORIGINS,
     CREATORX_TRUST_PROXY: process.env.CREATORX_TRUST_PROXY,
     TOSS_LOGIN_ENABLED: process.env.TOSS_LOGIN_ENABLED,

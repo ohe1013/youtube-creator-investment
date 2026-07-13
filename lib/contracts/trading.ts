@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { z } from "zod";
 
 import { decimalStringSchema, type DecimalString } from "@/lib/contracts/decimal";
 
@@ -17,6 +18,33 @@ export interface PlaceOrderInput {
   limitPrice?: DecimalString;
   maxSlippageBps?: number;
 }
+
+const tradingIdentifierSchema = z.string().trim().min(1).max(128);
+const positiveDecimalStringSchema = decimalStringSchema.refine(
+  (value) => !value.startsWith("-") && !/^0(?:\.0+)?$/.test(value),
+  "Expected a positive decimal string",
+);
+
+export const placeOrderRequestSchema = z.discriminatedUnion("orderType", [
+  z
+    .object({
+      creatorId: tradingIdentifierSchema,
+      side: z.enum(["BUY", "SELL"]),
+      orderType: z.literal("LIMIT"),
+      quantity: positiveDecimalStringSchema,
+      limitPrice: positiveDecimalStringSchema,
+    })
+    .strict(),
+  z
+    .object({
+      creatorId: tradingIdentifierSchema,
+      side: z.enum(["BUY", "SELL"]),
+      orderType: z.literal("MARKET"),
+      quantity: positiveDecimalStringSchema,
+      maxSlippageBps: z.number().int().min(0).max(1_000).optional(),
+    })
+    .strict(),
+]);
 
 export interface TradingOrder {
   id: string;
@@ -48,11 +76,8 @@ export interface TradingPosition {
 
 export interface TradingExecution {
   id: string;
-  makerOrderId: string;
-  takerOrderId: string;
-  buyerId: string;
-  sellerId: string;
   creatorId: string;
+  side: TradingSide;
   price: DecimalString;
   quantity: DecimalString;
   quoteAmount: DecimalString;
@@ -148,23 +173,16 @@ export function serializeTradingPosition(position: {
 
 export function serializeTradingExecution(execution: {
   id: string;
-  makerOrderId: string;
-  takerOrderId: string;
-  buyerId: string;
-  sellerId: string;
   creatorId: string;
   price: DecimalValue;
   quantity: DecimalValue;
   quoteAmount: DecimalValue;
   executedAt: Date;
-}): TradingExecution {
+}, side: TradingSide): TradingExecution {
   return {
     id: execution.id,
-    makerOrderId: execution.makerOrderId,
-    takerOrderId: execution.takerOrderId,
-    buyerId: execution.buyerId,
-    sellerId: execution.sellerId,
     creatorId: execution.creatorId,
+    side,
     price: serializeQuote(execution.price),
     quantity: serializeQuantity(execution.quantity),
     quoteAmount: serializeQuote(execution.quoteAmount),

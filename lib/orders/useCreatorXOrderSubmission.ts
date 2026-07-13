@@ -47,8 +47,8 @@ function orderSignature(input: PlaceOrderInput): string {
     input.creatorId,
     input.side,
     input.orderType,
-    input.price,
     input.quantity,
+    input.orderType === "LIMIT" ? input.limitPrice : input.maxSlippageBps ?? null,
   ]);
 }
 

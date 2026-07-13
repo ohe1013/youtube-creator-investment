@@ -11,16 +11,47 @@ import { CreatorInfo } from "./CreatorInfo";
 import { useLanguage } from "@/lib/LanguageContext";
 import type {
   CreatorStat,
-  CreatorSummary,
   CreatorVideo,
-  OrderBook as CreatorXOrderBook,
 } from "@/lib/data/contracts";
 
 type MobileTab = "CHART" | "ORDER" | "TRADES" | "LIST";
 const MOBILE_TABS: MobileTab[] = ["CHART", "ORDER", "TRADES", "LIST"];
 
+export type MarketCreator = {
+  id: string;
+  youtubeChannelId: string;
+  name: string;
+  thumbnailUrl: string | null;
+  category: string | null;
+  country: string | null;
+  currentSubs: number;
+  currentViews: number;
+  currentVideos: number;
+  currentScore: number;
+  initialPrice: number;
+  currentPrice: number;
+  totalSupply: number;
+  circulatingSupply: number;
+  reserveSupply: number;
+  liquidity: number;
+  isActive: boolean;
+  visibility: "PUBLIC" | "HIDDEN";
+  avgLikes: number;
+  avgComments: number;
+  engagementRate: number;
+  viewsPerSubs: number;
+  createdAt: string;
+  lastSyncedAt: string;
+  _count: { videos: number };
+};
+
+type DisplayOrderBook = {
+  asks: Array<{ price: number; quantity: number }>;
+  bids: Array<{ price: number; quantity: number }>;
+};
+
 interface MarketDashboardProps {
-  selectedCreator: CreatorSummary;
+  selectedCreator: MarketCreator;
   stats: {
     high24h: number;
     low24h: number;
@@ -29,7 +60,7 @@ interface MarketDashboardProps {
   };
   historyStats?: CreatorStat[];
   videos?: Array<CreatorVideo & { thumbnailUrl: string }>;
-  orderBook?: CreatorXOrderBook;
+  orderBook?: DisplayOrderBook;
   chartData: Array<{ date: string | Date; price: number; volume?: number }>;
   trades: Array<{
     id: string;
@@ -38,7 +69,7 @@ interface MarketDashboardProps {
     type: "BUY" | "SELL";
     time: string;
   }>;
-  creators: CreatorSummary[];
+  creators: MarketCreator[];
   userBalance: number;
   userQuantity: number;
   onOrderAccepted: () => Promise<void>;

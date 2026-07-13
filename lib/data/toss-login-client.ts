@@ -31,6 +31,25 @@ function tossLoginUnavailable() {
   );
 }
 
+function assertRootHttpsOrigin(value: URL): URL {
+  const url = new URL(value.toString());
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new CreatorXClientError(
+      "CONFIG_INVALID",
+      "A root HTTPS CreatorX API origin is required.",
+      false,
+    );
+  }
+  return url;
+}
+
 function isUnavailableEnvelope(value: unknown) {
   return (
     typeof value === "object" &&
@@ -49,7 +68,7 @@ export class TossLoginClient {
   private readonly fetchFn: typeof fetch;
 
   constructor({ baseUrl, fetchFn = fetch }: TossLoginClientOptions) {
-    this.baseUrl = new URL(baseUrl.toString());
+    this.baseUrl = assertRootHttpsOrigin(baseUrl);
     this.fetchFn = fetchFn;
   }
 
@@ -65,7 +84,7 @@ export class TossLoginClient {
             authorizationCode: input.authorizationCode,
             referrer: input.referrer,
           }),
-          credentials: "omit",
+          credentials: "same-origin",
           redirect: "error",
         },
       );
@@ -89,7 +108,7 @@ export class TossLoginClient {
         {
           method: "POST",
           headers: { authorization: "Bearer " + accessToken },
-          credentials: "omit",
+          credentials: "same-origin",
           redirect: "error",
         },
       );

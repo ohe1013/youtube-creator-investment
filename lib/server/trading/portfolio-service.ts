@@ -47,7 +47,12 @@ export async function getPortfolioInTransaction(
     availableBalance: serializeQuote(user.balance.minus(user.reservedBalance)),
     positions: positions.map(serializeTradingPosition),
     openOrders: openOrders.map(serializeTradingOrder),
-    executions: executions.map(serializeTradingExecution),
+    executions: executions.map((execution) =>
+      serializeTradingExecution(
+        execution,
+        execution.buyerId === principal.userId ? "BUY" : "SELL",
+      ),
+    ),
   };
 }
 

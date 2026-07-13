@@ -123,6 +123,12 @@ function isRemoteHttpsUrl(value: string) {
   }
 }
 
+function isRootRemoteHttpsOrigin(value: string) {
+  if (!isRemoteHttpsUrl(value)) return false;
+  const url = new URL(value);
+  return url.pathname === "/" && !url.search && !url.hash;
+}
+
 const schema = z
   .object({
     NEXT_PUBLIC_APP_IN_TOSS: z.enum(["0", "1"]).default("0"),
@@ -151,7 +157,7 @@ const schema = z
     }
     if (
       !value.NEXT_PUBLIC_CREATORX_API_BASE_URL ||
-      !isRemoteHttpsUrl(value.NEXT_PUBLIC_CREATORX_API_BASE_URL)
+      !isRootRemoteHttpsOrigin(value.NEXT_PUBLIC_CREATORX_API_BASE_URL)
     ) {
       ctx.addIssue({
         code: "custom",

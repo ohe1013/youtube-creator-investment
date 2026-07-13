@@ -21,10 +21,17 @@ import {
   useCreatorXDataClient,
   useCreatorXDataRuntime,
 } from "@/components/runtime/CreatorXDataProvider";
+import { loadCreatorXBridge } from "@/lib/appintoss/bridge";
+import { CreatorXSessionClient } from "@/lib/data/creatorx-session-client";
 import { CreatorXClientError } from "@/lib/data/errors";
+import { decimalToDisplayNumber } from "@/lib/data/decimal-display";
 import { TossLoginClient } from "@/lib/data/toss-login-client";
-import type { CreatorXSessionTokens } from "@/lib/contracts/session";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
+import {
+  CreatorXTokenRuntimeProvider,
+  useCreatorXTokenRuntime,
+  useOptionalCreatorXTokenRuntime,
+} from "@/lib/session/CreatorXTokenRuntime";
 
 export interface CreatorXSessionValue {
   status: "loading" | "authenticated" | "unauthenticated" | "error";
@@ -71,7 +78,7 @@ function usePortfolioState(): PortfolioState & { refresh(): Promise<void> } {
       if (latestRequest.current !== request) return;
       setState({
         status: "authenticated",
-        balance: portfolio.balance,
+        balance: decimalToDisplayNumber(portfolio.balance),
         error: null,
       });
     } catch (error) {
@@ -87,7 +94,7 @@ function usePortfolioState(): PortfolioState & { refresh(): Promise<void> } {
         if (latestRequest.current !== request) return;
         setState({
           status: "authenticated",
-          balance: portfolio.balance,
+          balance: decimalToDisplayNumber(portfolio.balance),
           error: null,
         });
       },
@@ -257,7 +264,11 @@ function BrowserSessionBranch({ children }: { children: ReactNode }) {
   );
 }
 
-export function RemoteGuestSessionAdapter({ children }: { children: ReactNode }) {
+export function RemoteGuestSessionUnavailableAdapter({
+  children,
+}: {
+  children: ReactNode;
+}) {
   const error = useMemo(
     () =>
       new CreatorXClientError(
@@ -280,6 +291,117 @@ export function RemoteGuestSessionAdapter({ children }: { children: ReactNode })
       signOut,
     }),
     [error, refresh, signOut],
+  );
+  return <SessionBoundary value={value}>{children}</SessionBoundary>;
+}
+
+function guestSessionFailedError() {
+  return new CreatorXClientError(
+    "SESSION_UNAVAILABLE",
+    "CreatorX guest session could not be completed. Please try again.",
+    true,
+  );
+}
+
+export function RemoteGuestSessionAdapter({
+  children,
+  config,
+}: {
+  children: ReactNode;
+  config: CreatorXRuntimeConfig;
+}) {
+  const [state, setState] = useState<{
+    status: "loading" | "authenticated" | "unauthenticated" | "error";
+    balance: number;
+    error: CreatorXClientError | null;
+  }>({ status: "loading", balance: 0, error: null });
+  const latestAttempt = useRef(0);
+  const inFlightSession = useRef<Promise<void> | null>(null);
+  const tokenRuntime = useCreatorXTokenRuntime();
+  const dataClient = useCreatorXDataClient();
+  const sessionClient = useMemo(
+    () =>
+      config.apiBaseUrl === null
+        ? null
+        : new CreatorXSessionClient({ baseUrl: config.apiBaseUrl }),
+    [config.apiBaseUrl],
+  );
+
+  const establishAuthenticatedSession = useCallback(
+    async (attempt: number) => {
+      const portfolio = await dataClient.getPortfolio();
+      if (latestAttempt.current !== attempt) return;
+      setState({
+        status: "authenticated",
+        balance: decimalToDisplayNumber(portfolio.balance),
+        error: null,
+      });
+    },
+    [dataClient],
+  );
+
+  const refresh = useCallback(async () => {
+    if (inFlightSession.current !== null) return inFlightSession.current;
+    const attempt = ++latestAttempt.current;
+    const work = (async () => {
+      setState({ status: "loading", balance: 0, error: null });
+      try {
+        if (sessionClient === null) throw new Error("missing CreatorX API URL");
+        if ((await tokenRuntime.getAccessToken()) !== null) {
+          await establishAuthenticatedSession(attempt);
+          return;
+        }
+        const restored = await tokenRuntime.restore();
+        if (restored !== null) {
+          await establishAuthenticatedSession(attempt);
+          return;
+        }
+        const bridge = await loadCreatorXBridge();
+        const tokens = await sessionClient.createGuest({
+          anonymousKey: await bridge.getAnonymousSubject(),
+        });
+        if (latestAttempt.current !== attempt) return;
+        await tokenRuntime.acceptTokens(tokens);
+        if (latestAttempt.current !== attempt) return;
+        await establishAuthenticatedSession(attempt);
+      } catch (error) {
+        if (latestAttempt.current !== attempt) return;
+        setState({
+          status: "error",
+          balance: 0,
+          error:
+            error instanceof CreatorXClientError ? error : guestSessionFailedError(),
+        });
+      }
+    })();
+    inFlightSession.current = work;
+    try {
+      await work;
+    } finally {
+      if (inFlightSession.current === work) inFlightSession.current = null;
+    }
+  }, [establishAuthenticatedSession, sessionClient, tokenRuntime]);
+
+  const signOut = useCallback(async () => {
+    await tokenRuntime.clear();
+    setState({ status: "unauthenticated", balance: 0, error: null });
+  }, [tokenRuntime]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const value = useMemo<CreatorXSessionValue>(
+    () => ({
+      status: state.status,
+      subject: null,
+      identityKind: "guest",
+      balance: state.balance,
+      error: state.error,
+      refresh,
+      signOut,
+    }),
+    [refresh, signOut, state],
   );
   return <SessionBoundary value={value}>{children}</SessionBoundary>;
 }
@@ -342,12 +464,13 @@ function EnabledTossLoginSession({
 }) {
   const [state, setState] = useState<{
     status: "loading" | "authenticated" | "unauthenticated" | "error";
+    balance: number;
     error: CreatorXClientError | null;
-  }>({ status: "loading", error: null });
-  const [tokens, setTokens] = useState<CreatorXSessionTokens | null>(null);
+  }>({ status: "loading", balance: 0, error: null });
   const latestAttempt = useRef(0);
-  const tokensRef = useRef<CreatorXSessionTokens | null>(null);
   const inFlightLogin = useRef<Promise<void> | null>(null);
+  const tokenRuntime = useCreatorXTokenRuntime();
+  const dataClient = useCreatorXDataClient();
   const tossLoginClient = useMemo(
     () =>
       config.apiBaseUrl === null
@@ -356,30 +479,47 @@ function EnabledTossLoginSession({
     [config.apiBaseUrl],
   );
 
-  useEffect(() => {
-    tokensRef.current = tokens;
-  }, [tokens]);
+  const establishAuthenticatedSession = useCallback(
+    async (attempt: number) => {
+      const portfolio = await dataClient.getPortfolio();
+      if (latestAttempt.current !== attempt) return;
+      setState({
+        status: "authenticated",
+        balance: decimalToDisplayNumber(portfolio.balance),
+        error: null,
+      });
+    },
+    [dataClient],
+  );
 
   const refresh = useCallback(async () => {
-    if (tokensRef.current !== null) return;
     if (inFlightLogin.current !== null) return inFlightLogin.current;
     const attempt = ++latestAttempt.current;
     const work = (async () => {
-      setState({ status: "loading", error: null });
+      setState({ status: "loading", balance: 0, error: null });
       try {
         if (tossLoginClient === null) throw new Error("missing CreatorX API URL");
+        if ((await tokenRuntime.getAccessToken()) !== null) {
+          await establishAuthenticatedSession(attempt);
+          return;
+        }
+        const restored = await tokenRuntime.restore();
+        if (restored !== null) {
+          await establishAuthenticatedSession(attempt);
+          return;
+        }
         const login = await appLogin();
         if (!isTossLoginResult(login)) throw new Error("invalid Toss Login response");
         const parsed = await tossLoginClient.exchange(login);
         if (latestAttempt.current !== attempt) return;
-        // Task 7 owns persistent storage and remote-client handoff. No Toss value
-        // reaches state; this private state carries only the CreatorX session pair.
-        setTokens(parsed);
-        setState({ status: "authenticated", error: null });
+        await tokenRuntime.acceptTokens(parsed);
+        if (latestAttempt.current !== attempt) return;
+        await establishAuthenticatedSession(attempt);
       } catch (error) {
         if (latestAttempt.current !== attempt) return;
         setState({
           status: "error",
+          balance: 0,
           error:
             error instanceof CreatorXClientError &&
             error.code === "TOSS_LOGIN_UNAVAILABLE"
@@ -394,17 +534,19 @@ function EnabledTossLoginSession({
     } finally {
       if (inFlightLogin.current === work) inFlightLogin.current = null;
     }
-  }, [tossLoginClient]);
+  }, [establishAuthenticatedSession, tokenRuntime, tossLoginClient]);
 
   const signOut = useCallback(async () => {
-    if (tokens === null) return;
+    const accessToken = await tokenRuntime.getAccessToken();
     try {
-      if (tossLoginClient !== null) await tossLoginClient.unlink(tokens.accessToken);
+      if (accessToken !== null && tossLoginClient !== null) {
+        await tossLoginClient.unlink(accessToken);
+      }
     } finally {
-      setTokens(null);
-      setState({ status: "unauthenticated", error: null });
+      await tokenRuntime.clear();
+      setState({ status: "unauthenticated", balance: 0, error: null });
     }
-  }, [tokens, tossLoginClient]);
+  }, [tokenRuntime, tossLoginClient]);
 
   useEffect(() => {
     void refresh();
@@ -415,7 +557,7 @@ function EnabledTossLoginSession({
       status: state.status,
       subject: null,
       identityKind: "toss",
-      balance: 0,
+      balance: state.balance,
       error: state.error,
       refresh,
       signOut,
@@ -438,7 +580,7 @@ function RemoteTossLoginSessionAdapter({
   return <EnabledTossLoginSession config={config}>{children}</EnabledTossLoginSession>;
 }
 
-export function CreatorXSessionProvider({
+function CreatorXSessionBranch({
   children,
   config,
 }: {
@@ -449,6 +591,13 @@ export function CreatorXSessionProvider({
     return <BrowserSessionBranch>{children}</BrowserSessionBranch>;
   }
   if (config.dataMode === "remote") {
+    if (!config.tossLoginEnabled && config.releaseChannel !== "production") {
+      return (
+        <RemoteGuestSessionAdapter config={config}>
+          {children}
+        </RemoteGuestSessionAdapter>
+      );
+    }
     return (
       <RemoteTossLoginSessionAdapter config={config}>
         {children}
@@ -456,6 +605,24 @@ export function CreatorXSessionProvider({
     );
   }
   return <DemoSessionAdapter>{children}</DemoSessionAdapter>;
+}
+
+export function CreatorXSessionProvider({
+  children,
+  config,
+}: {
+  children: ReactNode;
+  config: CreatorXRuntimeConfig;
+}) {
+  const tokenRuntime = useOptionalCreatorXTokenRuntime();
+  if (tokenRuntime !== null) {
+    return <CreatorXSessionBranch config={config}>{children}</CreatorXSessionBranch>;
+  }
+  return (
+    <CreatorXTokenRuntimeProvider config={config}>
+      <CreatorXSessionBranch config={config}>{children}</CreatorXSessionBranch>
+    </CreatorXTokenRuntimeProvider>
+  );
 }
 
 export function useCreatorXSession(): CreatorXSessionValue {

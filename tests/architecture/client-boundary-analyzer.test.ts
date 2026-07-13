@@ -743,7 +743,7 @@ describe("client boundary mutation probes", () => {
     ["scripts/helper.js", false],
     ["prisma/seed.ts", false],
     ["app/api/example/route.ts", false],
-    ["lib/youtube.ts", false],
+    ["lib/server/youtube/youtube-client.ts", false],
     ["node_modules/pkg/index.js", false],
     [".next/server/app.js", false],
     ["out/runtime.js", false],
@@ -830,6 +830,17 @@ describe("client boundary mutation probes", () => {
           '"use client"\nimport { TossLoginClient } from "../lib/data/toss-login-client"; export const client = TossLoginClient;',
         "lib/data/toss-login-client.ts":
           'export class TossLoginClient { request(url: string) { return fetch(url); } }',
+      }),
+    ).toEqual([]);
+  });
+
+  it("allows the dedicated CreatorX session rotation boundary", () => {
+    expect(
+      rules({
+        "components/root.tsx":
+          '"use client"\nimport { CreatorXSessionClient } from "../lib/data/creatorx-session-client"; export const client = CreatorXSessionClient;',
+        "lib/data/creatorx-session-client.ts":
+          'export class CreatorXSessionClient { request(url: string) { return fetch(url); } }',
       }),
     ).toEqual([]);
   });

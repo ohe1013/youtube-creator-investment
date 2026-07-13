@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MarketPageClient } from "@/components/market/MarketPageClient";
+import type { MarketCreator } from "@/components/market/MarketDashboard";
 import { appInTossDemoData } from "@/lib/appintoss-demo-data";
 import type {
   CreatorSummary,
@@ -12,7 +13,7 @@ import type {
 } from "@/lib/data/contracts";
 
 type DashboardProbeProps = {
-  selectedCreator: CreatorSummary;
+  selectedCreator: MarketCreator;
   userBalance: number;
   userQuantity: number;
   onOrderAccepted(): Promise<void>;
@@ -62,11 +63,13 @@ vi.mock("@/components/market/MarketDashboard", () => ({
   },
 }));
 
-const baseCreator = appInTossDemoData.creators[0] as CreatorSummary;
+const baseCreator = appInTossDemoData.creators[0] as unknown as CreatorSummary;
 
 function portfolio(balance: number, creatorId: string, quantity: number): Portfolio {
   return {
-    balance,
+    balance: String(balance),
+    reservedBalance: "0",
+    availableBalance: String(balance),
     positions:
       quantity === 0
         ? []
@@ -74,19 +77,16 @@ function portfolio(balance: number, creatorId: string, quantity: number): Portfo
             {
               id: `position-${quantity}`,
               creatorId,
-              quantity,
-              avgPrice: 100,
-              creator: {
-                id: creatorId,
-                name: "Special Creator",
-                currentPrice: 125,
-                thumbnailUrl: null,
-              },
+              quantity: String(quantity),
+              reservedQuantity: "0",
+              avgPrice: "100",
+              createdAt: "2026-07-10T00:00:00.000Z",
+              updatedAt: "2026-07-10T00:00:00.000Z",
             },
           ],
     openOrders: [],
-    trades: [],
-  };
+    executions: [],
+  } as unknown as Portfolio;
 }
 
 function makeCreator(id: string): CreatorSummary {

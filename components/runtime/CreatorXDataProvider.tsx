@@ -25,6 +25,7 @@ import {
   type OrderAttemptStore,
 } from "@/lib/orders/order-attempt-store";
 import type { CreatorXRuntimeConfig } from "@/lib/runtime/config";
+import { useOptionalCreatorXTokenRuntime } from "@/lib/session/CreatorXTokenRuntime";
 import {
   createClientStorage,
   type AsyncKeyValueStore,
@@ -48,6 +49,7 @@ export type CreatorXDataProviderDependencies = {
   getGameUserKey?: () => Promise<NativeSubjectResult>;
   getBrowserOrigin?: () => string | null;
   getAccessToken?: () => Promise<string | null>;
+  refreshAccessToken?: (failedAccessToken: string) => Promise<string | null>;
 };
 
 export type CreatorXDataRuntimeValue = {
@@ -76,6 +78,9 @@ type ResolvedDependencies = {
   getGameUserKey: () => Promise<NativeSubjectResult>;
   getBrowserOrigin: () => string | null;
   getAccessToken: (() => Promise<string | null>) | undefined;
+  refreshAccessToken:
+    | ((failedAccessToken: string) => Promise<string | null>)
+    | undefined;
 };
 
 type BootstrapDescriptor = {
@@ -361,6 +366,7 @@ async function bootstrapRemote(
     client: dependencies.createRemoteClient({
       baseUrl,
       getAccessToken: dependencies.getAccessToken,
+      refreshAccessToken: dependencies.refreshAccessToken,
     }),
     orderAttemptStore: null,
     subject: null,
@@ -461,6 +467,7 @@ export function CreatorXDataProvider({
   config: CreatorXRuntimeConfig;
   dependencies?: CreatorXDataProviderDependencies;
 }) {
+  const tokenRuntime = useOptionalCreatorXTokenRuntime();
   const {
     createDemoClient = defaultCreateDemoClient,
     createRemoteClient = defaultCreateRemoteClient,
@@ -469,6 +476,7 @@ export function CreatorXDataProvider({
     getGameUserKey = defaultGameUserKey,
     getBrowserOrigin = defaultBrowserOrigin,
     getAccessToken,
+    refreshAccessToken,
   } = dependencies;
   const resolvedDependencies = useMemo<ResolvedDependencies>(
     () => ({
@@ -478,16 +486,20 @@ export function CreatorXDataProvider({
       loadNativeStorage,
       getGameUserKey,
       getBrowserOrigin,
-      getAccessToken,
+      getAccessToken: tokenRuntime?.getAccessToken ?? getAccessToken,
+      refreshAccessToken:
+        tokenRuntime?.refreshAccessToken ?? refreshAccessToken,
     }),
     [
       createDemoClient,
       createRemoteClient,
       getAccessToken,
+      refreshAccessToken,
       getBrowserOrigin,
       getGameUserKey,
       loadBrowserStorage,
       loadNativeStorage,
+      tokenRuntime,
     ],
   );
   const apiBaseUrlValue = config.apiBaseUrl?.toString() ?? null;

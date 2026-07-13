@@ -325,10 +325,10 @@ describe("useCreatorXOrderSubmission demo restart durability", () => {
       ),
     ).toEqual([]);
     await expect(clients[1].getPortfolio()).resolves.toMatchObject({
-      balance: 97_440,
-      positions: [{ creatorId: "creator-kpop-lab", quantity: 2 }],
+      balance: "97440",
+      positions: [{ creatorId: "creator-kpop-lab", quantity: "2" }],
       openOrders: [],
-      trades: [{ creatorId: "creator-kpop-lab", quantity: 2 }],
+      executions: [{ creatorId: "creator-kpop-lab", quantity: "2" }],
     });
   });
 });

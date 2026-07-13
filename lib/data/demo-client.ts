@@ -5,7 +5,6 @@ import {
   creatorQuerySchema,
   creatorSchema,
   creatorStatSchema,
-  creatorSummarySchema,
   creatorVideoSchema,
   dashboardSchema,
   historyPointSchema,
@@ -31,6 +30,7 @@ import {
   type RequestOptions,
   type Trade,
 } from "@/lib/data/contracts";
+import { decimalStringSchema, type DecimalString } from "@/lib/contracts/decimal";
 import { CreatorXClientError } from "@/lib/data/errors";
 import type { AsyncKeyValueStore } from "@/lib/storage/client-storage";
 
@@ -47,27 +47,43 @@ const localPositionSchema = z
     avgPrice: z.number().finite().nonnegative(),
   })
   .strict();
-const localOrderSchema = orderSchema
-  .omit({ creator: true })
-  .extend({
+const localOrderRecordSchema = z
+  .object({
+    id: identifierSchema,
+    creatorId: identifierSchema,
+    type: z.enum(["BUY", "SELL"]),
     orderType: z.enum(["LIMIT", "MARKET"]).default("LIMIT"),
+    price: z.number().finite().nonnegative(),
+    quantity: z.number().finite().nonnegative(),
+    filled: z.number().finite().nonnegative(),
+    status: z.enum(["OPEN", "PARTIAL", "FILLED", "CANCELLED"]),
+    createdAt: z.string().datetime({ offset: true }),
+    updatedAt: z.string().datetime({ offset: true }).optional(),
     reservedAvgPrice: z.number().finite().nonnegative().optional(),
   })
-  .refine(
+  .strict();
+const localOrderSchema = localOrderRecordSchema.refine(
     (order) =>
       (order.status === "OPEN" || order.status === "PARTIAL") &&
       order.filled <= order.quantity,
     { message: "Persisted open orders must be active with valid fill data" },
   );
-const localTradeSchema = tradeSchema.omit({ creator: true }).extend({
-  creatorId: identifierSchema,
-  userId: identifierSchema,
-});
+const localTradeSchema = z
+  .object({
+    id: identifierSchema,
+    creatorId: identifierSchema,
+    userId: identifierSchema,
+    price: z.number().finite().nonnegative(),
+    quantity: z.number().finite().nonnegative(),
+    type: z.enum(["BUY", "SELL"]),
+    createdAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
 const localIdempotencyRecordSchema = z
   .object({
     key: z.string(),
     fingerprint: z.string().min(1),
-    response: orderSchema.omit({ creator: true }).strict(),
+    response: localOrderRecordSchema,
   })
   .strict();
 const localStateSchema = z
@@ -218,6 +234,43 @@ function parseResponse<T>(schema: z.ZodType<T>, value: unknown): T {
   return result.data;
 }
 
+/**
+ * Offline demo state previously accepted numeric order inputs. Keep that
+ * migration shim local to the demo implementation; the shared browser/API
+ * contract remains the decimal-string schema.
+ */
+function parseDemoOrderInput(value: unknown) {
+  const modern = placeOrderInputSchema.safeParse(value);
+  if (modern.success) return modern.data;
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "price" in value &&
+    "quantity" in value &&
+    typeof value.price === "number" &&
+    typeof value.quantity === "number" &&
+    "orderType" in value
+  ) {
+    const legacy = value as {
+      creatorId?: unknown;
+      side?: unknown;
+      orderType?: unknown;
+      price: number;
+      quantity: number;
+    };
+    return parseRequest(placeOrderInputSchema, {
+      creatorId: legacy.creatorId,
+      side: legacy.side,
+      orderType: legacy.orderType,
+      quantity: String(legacy.quantity),
+      ...(legacy.orderType === "LIMIT"
+        ? { limitPrice: String(legacy.price) }
+        : {}),
+    });
+  }
+  throw requestError();
+}
+
 function storageError(): CreatorXClientError {
   return new CreatorXClientError(
     "STORAGE_UNAVAILABLE",
@@ -256,8 +309,8 @@ function orderFingerprint(input: PlaceOrderInput): string {
     input.creatorId,
     input.side,
     input.orderType,
-    input.price,
     input.quantity,
+    input.orderType === "LIMIT" ? input.limitPrice : input.maxSlippageBps ?? null,
   ]);
 }
 
@@ -304,8 +357,58 @@ function canonicalizeState(state: ParsedLocalState): LocalState {
   };
 }
 
-function cloneCreator(creator: Creator): Creator {
-  return parseResponse(creatorSchema, creator);
+function decimal(value: number): DecimalString {
+  if (!Number.isFinite(value)) throw invalidStateError();
+  return decimalStringSchema.parse(String(value));
+}
+
+function toPublicCreator(creator: (typeof appInTossDemoData.creators)[number]): Creator {
+  return parseResponse(creatorSchema, {
+    ...creator,
+    initialPrice: decimal(creator.initialPrice),
+    currentPrice: decimal(creator.currentPrice),
+    totalSupply: decimal(creator.totalSupply),
+    circulatingSupply: decimal(creator.circulatingSupply),
+    reserveSupply: decimal(creator.reserveSupply),
+    liquidity: decimal(creator.liquidity),
+  });
+}
+
+function toPublicOrder(order: LocalOrder): Order {
+  const remaining = Math.max(0, order.quantity - order.filled);
+  return parseResponse(orderSchema, {
+    id: order.id,
+    creatorId: order.creatorId,
+    side: order.type,
+    orderType: order.orderType,
+    price: decimal(order.price),
+    quantity: decimal(order.quantity),
+    filled: decimal(order.filled),
+    reservedQuote: decimal(order.type === "BUY" ? remaining * order.price : 0),
+    reservedQuantity: decimal(order.type === "SELL" ? remaining : 0),
+    status: order.status,
+    completedAt: order.status === "FILLED" ? order.createdAt : null,
+    cancelReason: null,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt ?? order.createdAt,
+  });
+}
+
+function toPublicTrade(trade: {
+  id: string;
+  creatorId: string;
+  userId?: string;
+  orderId?: string | null;
+  price: number;
+  quantity: number;
+  type: "BUY" | "SELL";
+  createdAt: string;
+}): Trade {
+  return parseResponse(tradeSchema, {
+    ...trade,
+    price: decimal(trade.price),
+    quantity: decimal(trade.quantity),
+  });
 }
 
 export class DemoDataClient implements CreatorXDataClient {
@@ -352,12 +455,9 @@ export class DemoDataClient implements CreatorXDataClient {
     const page = parsed.page ?? 1;
     const limit = parsed.limit ?? 20;
     const sort = parsed.sort ?? "score";
-    let creators = parseResponse(
-      creatorSummarySchema.array(),
-      appInTossDemoData.creators.filter(
-        (creator) => creator.isActive && creator.visibility === "PUBLIC",
-      ),
-    );
+    let creators = appInTossDemoData.creators
+      .filter((creator) => creator.isActive && creator.visibility === "PUBLIC")
+      .map((creator) => toPublicCreator(creator));
 
     if (parsed.category && parsed.category !== ALL_CATEGORY) {
       creators = creators.filter(
@@ -382,7 +482,8 @@ export class DemoDataClient implements CreatorXDataClient {
           difference = right.currentSubs - left.currentSubs;
           break;
         case "price":
-          difference = right.currentPrice - left.currentPrice;
+          difference =
+            Number(right.currentPrice) - Number(left.currentPrice);
           break;
         case "growth":
         case "score":
@@ -407,7 +508,7 @@ export class DemoDataClient implements CreatorXDataClient {
 
   async getCreator(id: string, options?: RequestOptions): Promise<Creator> {
     this.checkSignal(options);
-    return cloneCreator(this.requireCreator(id));
+    return toPublicCreator(this.requireCreator(id));
   }
 
   async getCreatorStats(
@@ -445,11 +546,11 @@ export class DemoDataClient implements CreatorXDataClient {
     const creator = this.requireCreator(id);
     parseRequest(daysQuerySchema, query);
     const state = await this.readState();
-    const trades = this.tradesForCreator(creator.id, state).reverse();
+    const trades = this.localTradesForCreator(creator.id, state).reverse();
     const history = trades.map((trade) => ({
       date: trade.createdAt,
-      price: trade.price,
-      volume: trade.quantity * trade.price,
+      price: decimal(trade.price),
+      volume: decimal(trade.quantity * trade.price),
     }));
 
     return parseResponse(
@@ -459,8 +560,8 @@ export class DemoDataClient implements CreatorXDataClient {
         : [
             {
               date: appInTossDemoData.generatedAt,
-              price: creator.currentPrice,
-              volume: 0,
+              price: decimal(creator.currentPrice),
+              volume: decimal(0),
             },
           ],
     );
@@ -474,7 +575,9 @@ export class DemoDataClient implements CreatorXDataClient {
     const creator = this.requireCreator(id);
     return parseResponse(
       tradeSchema.array(),
-      this.tradesForCreator(creator.id, await this.readState()),
+      this.localTradesForCreator(creator.id, await this.readState()).map(
+        toPublicTrade,
+      ),
     );
   }
 
@@ -486,17 +589,14 @@ export class DemoDataClient implements CreatorXDataClient {
     const creator = this.requireCreator(id);
     return parseResponse(
       orderBookSchema,
-      this.buildOrderBook(creator.id, await this.readState()),
+      this.toPublicOrderBook(this.buildOrderBook(creator.id, await this.readState())),
     );
   }
 
   async getDashboard(options?: RequestOptions): Promise<Dashboard> {
     this.checkSignal(options);
     const state = await this.readState();
-    const creators = parseResponse(
-      creatorSummarySchema.array(),
-      appInTossDemoData.creators,
-    );
+    const creators = [...appInTossDemoData.creators];
     creators.sort(
       (left, right) =>
         right.currentScore - left.currentScore ||
@@ -519,8 +619,8 @@ export class DemoDataClient implements CreatorXDataClient {
 
     return parseResponse(dashboardSchema, {
       stats: {
-        totalMarketCap,
-        totalVolume24h,
+        totalMarketCap: decimal(totalMarketCap),
+        totalVolume24h: decimal(totalVolume24h),
         totalCreators: creators.length,
         activeTraders: 124,
       },
@@ -529,10 +629,10 @@ export class DemoDataClient implements CreatorXDataClient {
         name: creator.name,
         thumbnailUrl: creator.thumbnailUrl,
         category: creator.category,
-        currentPrice: creator.currentPrice,
+        currentPrice: decimal(creator.currentPrice),
         currentScore: creator.currentScore,
-        circulatingSupply: creator.circulatingSupply,
-        marketCap: creator.currentPrice * creator.circulatingSupply,
+        circulatingSupply: decimal(creator.circulatingSupply),
+        marketCap: decimal(creator.currentPrice * creator.circulatingSupply),
       })),
       newListings: [...creators]
         .sort(
@@ -545,13 +645,13 @@ export class DemoDataClient implements CreatorXDataClient {
           id: creator.id,
           name: creator.name,
           thumbnailUrl: creator.thumbnailUrl,
-          currentPrice: creator.currentPrice,
+          currentPrice: decimal(creator.currentPrice),
           createdAt: creator.createdAt,
         })),
       user: {
-        balance: state.balance,
-        portfolioValue,
-        totalAssets: state.balance + portfolioValue,
+        balance: decimal(state.balance),
+        portfolioValue: decimal(portfolioValue),
+        totalAssets: decimal(state.balance + portfolioValue),
         topHolding: positions[0]?.creator.name ?? null,
       },
     });
@@ -560,35 +660,67 @@ export class DemoDataClient implements CreatorXDataClient {
   async getPortfolio(options?: RequestOptions): Promise<Portfolio> {
     this.checkSignal(options);
     const state = await this.readState();
+    const reservedBalance = state.openOrders
+      .filter((order) => order.type === "BUY")
+      .reduce(
+        (sum, order) => sum + (order.quantity - order.filled) * order.price,
+        0,
+      );
     return parseResponse(portfolioSchema, {
-      balance: state.balance,
-      positions: this.enrichPositions(state.positions),
+      balance: decimal(state.balance + reservedBalance),
+      reservedBalance: decimal(reservedBalance),
+      availableBalance: decimal(state.balance),
+      positions: state.positions
+        .filter((position) => position.quantity > 0)
+        .map((position) => ({
+          id: position.id,
+          creatorId: position.creatorId,
+          quantity: decimal(position.quantity),
+          reservedQuantity: decimal(
+            state.openOrders
+              .filter(
+                (order) =>
+                  order.creatorId === position.creatorId && order.type === "SELL",
+              )
+              .reduce((sum, order) => sum + order.quantity - order.filled, 0),
+          ),
+          avgPrice: decimal(position.avgPrice),
+          createdAt: appInTossDemoData.generatedAt,
+          updatedAt: appInTossDemoData.generatedAt,
+        })),
       openOrders: [...state.openOrders]
         .sort(compareNewest)
-        .map((order) => ({
-          ...order,
-          reservedAvgPrice: undefined,
-          creator: this.creatorIdentity(order.creatorId),
-        })),
-      trades: [...state.trades].sort(compareNewest).map((trade) => ({
-        ...trade,
-        creator: this.creatorIdentity(trade.creatorId),
+        .map(toPublicOrder),
+      executions: [...state.trades].sort(compareNewest).map((trade) => ({
+        id: trade.id,
+        creatorId: trade.creatorId,
+        side: trade.type,
+        price: decimal(trade.price),
+        quantity: decimal(trade.quantity),
+        quoteAmount: decimal(trade.price * trade.quantity),
+        executedAt: trade.createdAt,
       })),
     });
   }
 
   async placeOrder(
-    input: PlaceOrderInput,
+    input: unknown,
     options?: RequestOptions & { idempotencyKey?: string },
   ): Promise<Order> {
     this.checkSignal(options);
-    const parsed = parseRequest(placeOrderInputSchema, input);
+    const parsed = parseDemoOrderInput(input);
     const idempotencyKey =
       options?.idempotencyKey === undefined
         ? null
         : parseRequest(z.string(), options.idempotencyKey);
     const fingerprint = orderFingerprint(parsed);
-    const total = parsed.price * parsed.quantity;
+    const quantity = Number(parsed.quantity);
+    const creator = this.requireCreator(parsed.creatorId);
+    const price =
+      parsed.orderType === "LIMIT"
+        ? Number(parsed.limitPrice)
+        : creator.currentPrice;
+    const total = price * quantity;
     if (!Number.isFinite(total)) throw requestError();
 
     return enqueueMutation(
@@ -604,14 +736,13 @@ export class DemoDataClient implements CreatorXDataClient {
             if (existing.fingerprint !== fingerprint) {
               throw idempotencyKeyReusedError();
             }
-            return parseResponse(orderSchema, existing.response);
+            return toPublicOrder(existing.response);
           }
         }
-        const creator = this.requireCreator(parsed.creatorId);
         const shouldFill =
           parsed.orderType === "MARKET" ||
-          (parsed.side === "BUY" && parsed.price >= creator.currentPrice) ||
-          (parsed.side === "SELL" && parsed.price <= creator.currentPrice);
+          (parsed.side === "BUY" && price >= creator.currentPrice) ||
+          (parsed.side === "SELL" && price <= creator.currentPrice);
         const position = state.positions.find(
           ({ creatorId }) => creatorId === creator.id,
         );
@@ -626,7 +757,7 @@ export class DemoDataClient implements CreatorXDataClient {
         }
         if (
           parsed.side === "SELL" &&
-          (!position || position.quantity < parsed.quantity)
+          (!position || position.quantity < quantity)
         ) {
           throw new CreatorXClientError(
             "INSUFFICIENT_SHARES",
@@ -653,9 +784,9 @@ export class DemoDataClient implements CreatorXDataClient {
           creatorId: creator.id,
           type: parsed.side,
           orderType: parsed.orderType,
-          price: parsed.price,
-          quantity: parsed.quantity,
-          filled: shouldFill ? parsed.quantity : 0,
+          price,
+          quantity,
+          filled: shouldFill ? quantity : 0,
           status: shouldFill ? "FILLED" : "OPEN",
           createdAt,
           reservedAvgPrice:
@@ -672,13 +803,13 @@ export class DemoDataClient implements CreatorXDataClient {
           state.balance -= total;
         } else {
           if (!position) throw invalidStateError();
-          position.quantity -= parsed.quantity;
+          position.quantity -= quantity;
         }
 
         if (shouldFill) {
           if (!tradeId) throw invalidStateError();
           if (parsed.side === "BUY") {
-            this.addPosition(state, creator, parsed.quantity, parsed.price);
+            this.addPosition(state, creator, quantity, price);
           } else {
             state.balance += total;
           }
@@ -686,8 +817,8 @@ export class DemoDataClient implements CreatorXDataClient {
             id: tradeId,
             creatorId: creator.id,
             userId: this.namespace,
-            price: parsed.price,
-            quantity: parsed.quantity,
+            price,
+            quantity,
             type: parsed.side,
             createdAt,
           });
@@ -695,12 +826,12 @@ export class DemoDataClient implements CreatorXDataClient {
           state.openOrders.unshift(order);
         }
 
-        const response = parseResponse(orderSchema, order);
+        const response = toPublicOrder(order);
         if (idempotencyKey !== null) {
           state.idempotencyRecords.push({
             key: idempotencyKey,
             fingerprint,
-            response,
+            response: order,
           });
           state.idempotencyRecords.sort((left, right) =>
             compareText(left.key, right.key),
@@ -712,7 +843,10 @@ export class DemoDataClient implements CreatorXDataClient {
     );
   }
 
-  async cancelOrder(id: string, options?: RequestOptions): Promise<void> {
+  async cancelOrder(
+    id: string,
+    options?: RequestOptions & { idempotencyKey?: string },
+  ): Promise<void> {
     this.checkSignal(options);
     const orderId = parseRequest(identifierSchema, id);
     await enqueueMutation(
@@ -763,7 +897,7 @@ export class DemoDataClient implements CreatorXDataClient {
     options?.signal?.throwIfAborted();
   }
 
-  private requireCreator(id: string): Creator {
+  private requireCreator(id: string): (typeof appInTossDemoData.creators)[number] {
     const creatorId = parseRequest(identifierSchema, id);
     const creator = appInTossDemoData.creators.find(
       ({ id: candidate }) => candidate === creatorId,
@@ -776,12 +910,7 @@ export class DemoDataClient implements CreatorXDataClient {
         404,
       );
     }
-    return parseResponse(creatorSchema, creator);
-  }
-
-  private creatorIdentity(id: string): { id: string; name: string } {
-    const creator = this.requireCreator(id);
-    return { id: creator.id, name: creator.name };
+    return creator;
   }
 
   private enrichPositions(positions: LocalPosition[]) {
@@ -804,7 +933,7 @@ export class DemoDataClient implements CreatorXDataClient {
 
   private addPosition(
     state: LocalState,
-    creator: Creator,
+    creator: (typeof appInTossDemoData.creators)[number],
     quantity: number,
     price: number,
   ): void {
@@ -827,14 +956,17 @@ export class DemoDataClient implements CreatorXDataClient {
     position.avgPrice = (currentValue + addedValue) / position.quantity;
   }
 
-  private tradesForCreator(id: string, state: LocalState): Trade[] {
-    return parseResponse(tradeSchema.array(), [
+  private localTradesForCreator(id: string, state: LocalState) {
+    return [
       ...state.trades.filter(({ creatorId }) => creatorId === id),
-      ...(appInTossDemoData.trades[id] ?? []),
-    ]).sort(compareNewest);
+      ...(appInTossDemoData.trades[id] ?? []).map((trade) => ({
+        ...trade,
+        type: parseRequest(z.enum(["BUY", "SELL"]), trade.type),
+      })),
+    ].sort(compareNewest);
   }
 
-  private buildOrderBook(id: string, state: LocalState): OrderBook {
+  private buildOrderBook(id: string, state: LocalState) {
     const orders = [
       ...(appInTossDemoData.orders[id] ?? []),
       ...state.openOrders.filter(
@@ -861,6 +993,22 @@ export class DemoDataClient implements CreatorXDataClient {
         .map(([price, quantity]) => ({ price, quantity }))
         .sort((left, right) => right.price - left.price),
     };
+  }
+
+  private toPublicOrderBook(orderBook: {
+    asks: Array<{ price: number; quantity: number }>;
+    bids: Array<{ price: number; quantity: number }>;
+  }): OrderBook {
+    return parseResponse(orderBookSchema, {
+      asks: orderBook.asks.map((level) => ({
+        price: decimal(level.price),
+        quantity: decimal(level.quantity),
+      })),
+      bids: orderBook.bids.map((level) => ({
+        price: decimal(level.price),
+        quantity: decimal(level.quantity),
+      })),
+    });
   }
 
   private async readState(): Promise<LocalState> {

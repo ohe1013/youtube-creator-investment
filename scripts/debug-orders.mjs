@@ -15,15 +15,15 @@ async function inspect() {
     );
   });
 
-  console.log("\n--- Inspecting Trades ---");
-  const trades = await prisma.legacyTrade.findMany({
-    orderBy: { createdAt: "desc" },
+  console.log("\n--- Inspecting Trade Executions ---");
+  const executions = await prisma.tradeExecution.findMany({
+    orderBy: { executedAt: "desc" },
     take: 10,
   });
-  console.log(`Found ${trades.length} recent trades.`);
-  trades.forEach((trade) => {
+  console.log(`Found ${executions.length} recent trade executions.`);
+  executions.forEach((execution) => {
     console.log(
-      `Trade ${trade.id}: ${trade.type} Qty:${trade.quantity} Price:${trade.price} Creator:${trade.creatorId}`
+      `Execution ${execution.id}: Buyer:${execution.buyerId} Seller:${execution.sellerId} Qty:${execution.quantity} Price:${execution.price} Creator:${execution.creatorId}`
     );
   });
 

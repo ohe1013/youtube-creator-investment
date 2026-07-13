@@ -82,6 +82,7 @@ export type RemoteDataClientOptions = {
   baseUrl: URL;
   fetchFn?: typeof fetch;
   getAccessToken?: () => Promise<string | null>;
+  refreshAccessToken?: (failedAccessToken: string) => Promise<string | null>;
   maxGetAttempts?: number;
 };
 
@@ -125,6 +126,29 @@ function sessionUnavailableError(): CreatorXClientError {
     "로그인 정보를 확인할 수 없습니다. 다시 시도해 주세요.",
     true,
   );
+}
+
+function configurationError(): CreatorXClientError {
+  return new CreatorXClientError(
+    "CONFIG_INVALID",
+    "A root HTTPS CreatorX API origin is required.",
+    false,
+  );
+}
+
+function assertRootHttpsOrigin(value: URL): URL {
+  const url = new URL(value.toString());
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw configurationError();
+  }
+  return url;
 }
 
 function abortError(): Error {
@@ -250,6 +274,9 @@ export class RemoteDataClient implements CreatorXDataClient {
   private readonly baseUrl: URL;
   private readonly fetchFn: typeof fetch;
   private readonly getAccessToken: (() => Promise<string | null>) | undefined;
+  private readonly refreshAccessToken:
+    | ((failedAccessToken: string) => Promise<string | null>)
+    | undefined;
   private readonly maxGetAttempts: number;
 
   constructor(options: RemoteDataClientOptions) {
@@ -266,9 +293,10 @@ export class RemoteDataClient implements CreatorXDataClient {
       );
     }
 
-    this.baseUrl = new URL(options.baseUrl.toString());
+    this.baseUrl = assertRootHttpsOrigin(options.baseUrl);
     this.fetchFn = options.fetchFn ?? fetch;
     this.getAccessToken = options.getAccessToken;
+    this.refreshAccessToken = options.refreshAccessToken;
     this.maxGetAttempts = maxGetAttempts;
   }
 
@@ -394,10 +422,16 @@ export class RemoteDataClient implements CreatorXDataClient {
     });
   }
 
-  async cancelOrder(id: string, options: RequestOptions = {}): Promise<void> {
+  async cancelOrder(
+    id: string,
+    options: RequestOptions & { idempotencyKey?: string } = {},
+  ): Promise<void> {
     await this.request(z.unknown(), `/api/orders/${this.encodedId(id)}`, {
       method: "DELETE",
       signal: options.signal,
+      headers: options.idempotencyKey === undefined
+        ? undefined
+        : { "Idempotency-Key": options.idempotencyKey },
       allowNoContent: true,
     });
   }
@@ -435,37 +469,69 @@ export class RemoteDataClient implements CreatorXDataClient {
       }
     }
     throwIfAborted(parameters.signal);
-    const headers = new Headers(parameters.headers);
-    if (token !== null) headers.set("Authorization", `Bearer ${token}`);
+    const baseHeaders = new Headers(parameters.headers);
     if (parameters.method === "POST") {
-      headers.set("Content-Type", "application/json");
+      baseHeaders.set("Content-Type", "application/json");
     }
 
     const url = new URL(path, this.baseUrl).toString();
-    const attempts = parameters.method === "GET" ? this.maxGetAttempts : 1;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const maxTransportAttempts = parameters.method === "GET" ? this.maxGetAttempts : 1;
+    let transportAttempt = 1;
+    let refreshed = false;
+    for (;;) {
+      const headers = new Headers(baseHeaders);
+      if (token !== null) headers.set("Authorization", `Bearer ${token}`);
       let response: Response;
       try {
         response = await this.fetchFn(url, {
           method: parameters.method,
           headers,
           body: parameters.body,
-          credentials: "include",
+          credentials: "same-origin",
           signal: parameters.signal,
         });
       } catch (error) {
         preserveAbort(error, parameters.signal);
         if (error instanceof CreatorXClientError) throw error;
-        if (parameters.method === "GET" && attempt < attempts) continue;
+        if (
+          parameters.method === "GET" &&
+          transportAttempt < maxTransportAttempts
+        ) {
+          transportAttempt += 1;
+          continue;
+        }
         throw networkUnavailableError();
       }
 
       if (!response.ok) {
         if (
+          response.status === 401 &&
+          parameters.method === "GET" &&
+          token !== null &&
+          !refreshed &&
+          this.refreshAccessToken
+        ) {
+          refreshed = true;
+          try {
+            const refreshedToken = await this.refreshAccessToken(token);
+            throwIfAborted(parameters.signal);
+            if (refreshedToken === null) throw sessionUnavailableError();
+            token = refreshedToken;
+            continue;
+          } catch (error) {
+            preserveAbort(error, parameters.signal);
+            if (error instanceof CreatorXClientError) throw error;
+            throw sessionUnavailableError();
+          }
+        }
+        if (
           parameters.method === "GET" &&
           transientGetStatuses.has(response.status)
         ) {
-          if (attempt < attempts) continue;
+          if (transportAttempt < maxTransportAttempts) {
+            transportAttempt += 1;
+            continue;
+          }
           throw networkUnavailableError(response.status);
         }
         throw await toHttpError(response, parameters.signal);
@@ -487,7 +553,5 @@ export class RemoteDataClient implements CreatorXDataClient {
       if (!parsed.success) throw invalidResponseError();
       return parsed.data;
     }
-
-    throw networkUnavailableError();
   }
 }

@@ -9,9 +9,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MarketDashboard } from "@/components/market/MarketDashboard";
+import {
+  MarketDashboard,
+  type MarketCreator,
+} from "@/components/market/MarketDashboard";
 import type {
-  CreatorSummary,
   CreatorXDataClient,
   Order,
 } from "@/lib/data/contracts";
@@ -55,7 +57,7 @@ vi.mock("@/components/market/RecentTrades", () => ({
   RecentTrades: () => null,
 }));
 
-const creator: CreatorSummary = {
+const creator: MarketCreator = {
   id: "creator-1",
   youtubeChannelId: "channel-1",
   name: "Creator One",
@@ -146,13 +148,18 @@ describe("MarketDashboard order coordination", () => {
     resolveOrder({
       id: "order-1",
       creatorId: creator.id,
-      type: "BUY",
+      side: "BUY",
       orderType: "MARKET",
-      price: creator.currentPrice,
-      quantity: 2,
-      filled: 2,
+      price: "125",
+      quantity: "2",
+      filled: "2",
+      reservedQuote: "0",
+      reservedQuantity: "0",
       status: "FILLED",
+      completedAt: "2026-07-10T00:00:00.000Z",
+      cancelReason: null,
       createdAt: "2026-07-10T00:00:00.000Z",
-    });
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    } as unknown as Order);
   });
 });

@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  placeOrderRequestSchema,
+} from "@/lib/contracts/trading";
+import { decimalStringSchema } from "@/lib/contracts/decimal";
+
 const finiteNonnegativeNumber = z.number().finite().nonnegative();
 const finitePositiveNumber = z.number().finite().positive();
 const isoDateTime = z.string().datetime({ offset: true });
@@ -29,12 +34,12 @@ export const creatorSummarySchema = z.object({
   currentViews: finiteNonnegativeNumber,
   currentVideos: finiteNonnegativeNumber,
   currentScore: finiteNonnegativeNumber,
-  initialPrice: finiteNonnegativeNumber,
-  currentPrice: finiteNonnegativeNumber,
-  totalSupply: finiteNonnegativeNumber,
-  circulatingSupply: finiteNonnegativeNumber,
-  reserveSupply: finiteNonnegativeNumber,
-  liquidity: finiteNonnegativeNumber,
+  initialPrice: decimalStringSchema,
+  currentPrice: decimalStringSchema,
+  totalSupply: decimalStringSchema,
+  circulatingSupply: decimalStringSchema,
+  reserveSupply: decimalStringSchema,
+  liquidity: decimalStringSchema,
   isActive: z.boolean(),
   visibility: z.enum(["PUBLIC", "HIDDEN"]),
   avgLikes: finiteNonnegativeNumber,
@@ -89,8 +94,8 @@ export type CreatorVideo = z.infer<typeof creatorVideoSchema>;
 
 export const historyPointSchema = z.object({
   date: isoDateTime,
-  price: finiteNonnegativeNumber,
-  volume: finiteNonnegativeNumber,
+  price: decimalStringSchema,
+  volume: decimalStringSchema,
 });
 
 export type HistoryPoint = z.infer<typeof historyPointSchema>;
@@ -105,8 +110,8 @@ export const tradeSchema = z.object({
   creatorId: identifierSchema.optional(),
   userId: identifierSchema.optional(),
   orderId: identifierSchema.nullable().optional(),
-  price: finitePositiveNumber,
-  quantity: finitePositiveNumber,
+  price: decimalStringSchema,
+  quantity: decimalStringSchema,
   type: z.enum(["BUY", "SELL"]),
   createdAt: isoDateTime,
   creator: creatorIdentitySchema.optional(),
@@ -118,12 +123,16 @@ export const orderSchema = z.object({
   id: identifierSchema,
   creatorId: identifierSchema,
   userId: identifierSchema.optional(),
-  type: z.enum(["BUY", "SELL"]),
+  side: z.enum(["BUY", "SELL"]),
   orderType: z.enum(["LIMIT", "MARKET"]),
-  price: finitePositiveNumber,
-  quantity: finitePositiveNumber,
-  filled: finiteNonnegativeNumber,
+  price: decimalStringSchema,
+  quantity: decimalStringSchema,
+  filled: decimalStringSchema,
+  reservedQuote: decimalStringSchema.optional(),
+  reservedQuantity: decimalStringSchema.optional(),
   status: z.enum(["OPEN", "PARTIAL", "FILLED", "CANCELLED"]),
+  completedAt: isoDateTime.nullable().optional(),
+  cancelReason: z.string().nullable().optional(),
   createdAt: isoDateTime,
   updatedAt: isoDateTime.optional(),
   creator: creatorIdentitySchema.optional(),
@@ -136,8 +145,8 @@ const openOrderSchema = orderSchema.extend({
 });
 
 export const priceLevelSchema = z.object({
-  price: finitePositiveNumber,
-  quantity: finitePositiveNumber,
+  price: decimalStringSchema,
+  quantity: decimalStringSchema,
 });
 
 export const orderBookSchema = z.object({
@@ -147,52 +156,60 @@ export const orderBookSchema = z.object({
 
 export type OrderBook = z.infer<typeof orderBookSchema>;
 
-const portfolioCreatorSchema = creatorIdentitySchema.extend({
-  currentPrice: finiteNonnegativeNumber,
-  thumbnailUrl: z.string().min(1).nullable(),
-});
-
 export const positionSchema = z.object({
   id: identifierSchema,
   creatorId: identifierSchema,
-  quantity: finitePositiveNumber,
-  avgPrice: finiteNonnegativeNumber,
-  creator: portfolioCreatorSchema,
+  quantity: decimalStringSchema,
+  reservedQuantity: decimalStringSchema,
+  avgPrice: decimalStringSchema,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
 });
 
 export const portfolioSchema = z.object({
-  balance: finiteNonnegativeNumber,
+  balance: decimalStringSchema,
+  reservedBalance: decimalStringSchema,
+  availableBalance: decimalStringSchema,
   positions: z.array(positionSchema),
   openOrders: z.array(openOrderSchema),
-  trades: z.array(tradeSchema),
+  executions: z.array(
+    z.object({
+      id: identifierSchema,
+      creatorId: identifierSchema,
+      side: z.enum(["BUY", "SELL"]),
+      price: decimalStringSchema,
+      quantity: decimalStringSchema,
+      quoteAmount: decimalStringSchema,
+      executedAt: isoDateTime,
+    }),
+  ),
 });
 
 export type Portfolio = z.infer<typeof portfolioSchema>;
 
-const dashboardRankingSchema = creatorSummarySchema
-  .pick({
-    id: true,
-    name: true,
-    thumbnailUrl: true,
-    category: true,
-    currentPrice: true,
-    currentScore: true,
-    circulatingSupply: true,
-  })
-  .extend({ marketCap: finiteNonnegativeNumber });
+const dashboardRankingSchema = z.object({
+  id: identifierSchema,
+  name: z.string().min(1),
+  thumbnailUrl: z.string().min(1).nullable(),
+  category: z.string().min(1).nullable(),
+  currentPrice: decimalStringSchema,
+  currentScore: finiteNonnegativeNumber,
+  circulatingSupply: decimalStringSchema,
+  marketCap: decimalStringSchema,
+});
 
-const dashboardListingSchema = creatorSummarySchema.pick({
-  id: true,
-  name: true,
-  thumbnailUrl: true,
-  currentPrice: true,
-  createdAt: true,
+const dashboardListingSchema = z.object({
+  id: identifierSchema,
+  name: z.string().min(1),
+  thumbnailUrl: z.string().min(1).nullable(),
+  currentPrice: decimalStringSchema,
+  createdAt: isoDateTime,
 });
 
 export const dashboardSchema = z.object({
   stats: z.object({
-    totalMarketCap: finiteNonnegativeNumber,
-    totalVolume24h: finiteNonnegativeNumber,
+    totalMarketCap: decimalStringSchema,
+    totalVolume24h: decimalStringSchema,
     totalCreators: z.number().int().nonnegative(),
     activeTraders: z.number().int().nonnegative(),
   }),
@@ -200,9 +217,9 @@ export const dashboardSchema = z.object({
   newListings: z.array(dashboardListingSchema),
   user: z
     .object({
-      balance: finiteNonnegativeNumber,
-      portfolioValue: finiteNonnegativeNumber,
-      totalAssets: finiteNonnegativeNumber,
+      balance: decimalStringSchema,
+      portfolioValue: decimalStringSchema,
+      totalAssets: decimalStringSchema,
       topHolding: z.string().min(1).nullable(),
     })
     .nullable(),
@@ -233,17 +250,10 @@ export const paginatedCreatorsSchema = z.object({
 
 export type PaginatedCreators = z.infer<typeof paginatedCreatorsSchema>;
 
-export const placeOrderInputSchema = z
-  .object({
-    creatorId: identifierSchema,
-    side: z.enum(["BUY", "SELL"]),
-    orderType: z.enum(["LIMIT", "MARKET"]),
-    price: finitePositiveNumber,
-    quantity: finitePositiveNumber,
-  })
-  .strict();
+export const placeOrderInputSchema = placeOrderRequestSchema;
 
-export type PlaceOrderInput = z.infer<typeof placeOrderInputSchema>;
+/** Browser input is parsed before transport; wire decimals remain plain strings. */
+export type PlaceOrderInput = z.input<typeof placeOrderRequestSchema>;
 
 export type RequestOptions = { signal?: AbortSignal };
 
@@ -276,5 +286,8 @@ export interface CreatorXDataClient {
     input: PlaceOrderInput,
     options?: RequestOptions & { idempotencyKey?: string },
   ): Promise<Order>;
-  cancelOrder(id: string, options?: RequestOptions): Promise<void>;
+  cancelOrder(
+    id: string,
+    options?: RequestOptions & { idempotencyKey?: string },
+  ): Promise<void>;
 }

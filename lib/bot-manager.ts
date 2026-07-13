@@ -1,5 +1,38 @@
 import { prisma } from "./prisma";
-import { placeOrder } from "./matching-engine";
+import { randomUUID } from "node:crypto";
+
+import { decimalStringSchema, type DecimalString } from "@/lib/contracts/decimal";
+import type { PlaceOrderInput, TradingSide } from "@/lib/contracts/trading";
+import type { AuthPrincipal } from "@/lib/server/auth/types";
+import { placeOrder } from "@/lib/server/trading/matching-service";
+
+function botPrincipal(userId: string): AuthPrincipal {
+  return { userId, provider: "guest", role: "USER" };
+}
+
+function botDecimal(value: number, scale: number): DecimalString {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("Bot order amount must be a positive finite number.");
+  }
+  return decimalStringSchema.parse(value.toFixed(scale));
+}
+
+async function placeBotLimitOrder(
+  userId: string,
+  creatorId: string,
+  side: TradingSide,
+  price: number,
+  quantity: number,
+) {
+  const input: PlaceOrderInput = {
+    creatorId,
+    side,
+    orderType: "LIMIT",
+    limitPrice: botDecimal(price, 4),
+    quantity: botDecimal(quantity, 8),
+  };
+  return await placeOrder(botPrincipal(userId), input, `bot-${randomUUID()}`);
+}
 
 export async function spawnBots(count: number) {
   const bots = [];
@@ -20,8 +53,11 @@ export async function spawnBots(count: number) {
 
 export async function executeBotTrade() {
   // 1. Pick Bot & Creator
-  const botCount = await prisma.user.count({ where: { isBot: true } });
-  if (botCount === 0) await spawnBots(10);
+  let botCount = await prisma.user.count({ where: { isBot: true } });
+  if (botCount === 0) {
+    await spawnBots(10);
+    botCount = 10;
+  }
 
   const randomBot = await prisma.user.findFirst({
     where: { isBot: true },
@@ -76,25 +112,11 @@ export async function executeBotTrade() {
         }
         // Cap quantity to owned
         const sellQty = Math.min(quantity, Number(pos.quantity));
-        await placeOrder(
-          randomBot.id,
-          creator.id,
-          "SELL",
-          price,
-          sellQty,
-          "LIMIT"
-        );
+        await placeBotLimitOrder(randomBot.id, creator.id, "SELL", price, sellQty);
         console.log(`Bot ${randomBot.name} MAKER SELL: ${sellQty} @ ${price}`);
       } else {
         // BUY
-        await placeOrder(
-          randomBot.id,
-          creator.id,
-          "BUY",
-          price,
-          quantity,
-          "LIMIT"
-        );
+        await placeBotLimitOrder(randomBot.id, creator.id, "BUY", price, quantity);
         console.log(`Bot ${randomBot.name} MAKER BUY: ${quantity} @ ${price}`);
       }
     } else {
@@ -123,24 +145,10 @@ export async function executeBotTrade() {
         const pos = randomBot.positions.find((p) => p.creatorId === creator.id);
         if (!pos || Number(pos.quantity) < 1) return;
         const sellQty = Math.min(quantity, Number(pos.quantity));
-        await placeOrder(
-          randomBot.id,
-          creator.id,
-          "SELL",
-          price,
-          sellQty,
-          "LIMIT"
-        ); // Limit acting as Market if prices match
+        await placeBotLimitOrder(randomBot.id, creator.id, "SELL", price, sellQty); // Limit acting as Market if prices match
         console.log(`Bot ${randomBot.name} TAKER SELL: ${sellQty} @ ${price}`);
       } else {
-        await placeOrder(
-          randomBot.id,
-          creator.id,
-          "BUY",
-          price,
-          quantity,
-          "LIMIT"
-        );
+        await placeBotLimitOrder(randomBot.id, creator.id, "BUY", price, quantity);
         console.log(`Bot ${randomBot.name} TAKER BUY: ${quantity} @ ${price}`);
       }
     }

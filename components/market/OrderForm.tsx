@@ -199,13 +199,22 @@ function OrderFormFields({
             onClick={async () => {
               if (isSubmitting || total <= 0) return;
               try {
-                const order = await submit({
-                  creatorId,
-                  side: tab,
-                  orderType,
-                  price,
-                  quantity,
-                });
+                const order = await submit(
+                  orderType === "LIMIT"
+                    ? {
+                        creatorId,
+                        side: tab,
+                        orderType,
+                        limitPrice,
+                        quantity: amount,
+                      }
+                    : {
+                        creatorId,
+                        side: tab,
+                        orderType,
+                        quantity: amount,
+                      },
+                );
                 if (order === null) return;
 
                 const isFilled = order.status === "FILLED";

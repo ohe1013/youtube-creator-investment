@@ -1,140 +1,131 @@
-import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
+
+import { serializeQuantity, serializeQuote } from "@/lib/contracts/trading";
 import { prisma } from "@/lib/prisma";
-import { statsQuerySchema } from "@/lib/validation";
-import { getRecentVideos } from "@/lib/youtube";
+import { ApiError } from "@/lib/server/http/api-error";
+import { corsPreflight, withApiRoute } from "@/lib/server/http/route-handler";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+type RouteContext = { params: Promise<{ id: string }> };
+
+function readDays(value: string | null, fallback: number): number {
+  if (value === null) return fallback;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days <= 0 || days > 3650) {
+    throw new ApiError(400, "INVALID_REQUEST", "days must be a positive integer.");
+  }
+  return days;
+}
+
+function since(days: number): Date {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - days);
+  return date;
+}
+
+function addLevel(
+  levels: Map<string, { price: Prisma.Decimal; quantity: Prisma.Decimal }>,
+  price: Prisma.Decimal,
+  quantity: Prisma.Decimal,
 ) {
-  try {
+  const key = serializeQuote(price);
+  const existing = levels.get(key);
+  if (existing) {
+    existing.quantity = existing.quantity.plus(quantity);
+    return;
+  }
+  levels.set(key, { price, quantity });
+}
+
+export const GET = withApiRoute<RouteContext>(
+  async (request, { params }) => {
     const { id } = await params;
-    const { searchParams } = new URL(request.url);
+    const searchParams = new URL(request.url).searchParams;
+    const publicCreator = await prisma.creator.findFirst({
+      where: { id, isActive: true, visibility: "PUBLIC" },
+      select: { initialPrice: true },
+    });
+    if (!publicCreator) {
+      throw new ApiError(404, "CREATOR_NOT_FOUND", "Creator was not found.");
+    }
 
-    const statsParam = searchParams.get("stats");
-    const videosParam = searchParams.get("videos");
-    const tradesParam = searchParams.get("trades");
-    const historyParam = searchParams.get("history");
-    const orderbookParam = searchParams.get("orderbook");
-
-    if (orderbookParam === "true") {
+    if (searchParams.get("orderbook") === "true") {
       const orders = await prisma.order.findMany({
         where: { creatorId: id, status: { in: ["OPEN", "PARTIAL"] } },
         select: { type: true, price: true, quantity: true, filled: true },
       });
-
-      const askMap = new Map<number, number>();
-      const bidMap = new Map<number, number>();
-
-      orders.forEach((order) => {
-        const price = Number(order.price);
-        const remaining = Number(order.quantity) - Number(order.filled);
-        if (remaining <= 0) return;
-
-        if (order.type === "SELL") {
-          askMap.set(
-            price,
-            (askMap.get(price) || 0) + remaining
-          );
-        } else {
-          bidMap.set(
-            price,
-            (bidMap.get(price) || 0) + remaining
-          );
-        }
+      const asks = new Map<string, { price: Prisma.Decimal; quantity: Prisma.Decimal }>();
+      const bids = new Map<string, { price: Prisma.Decimal; quantity: Prisma.Decimal }>();
+      for (const order of orders) {
+        const remaining = order.quantity.minus(order.filled);
+        if (!remaining.greaterThan(0)) continue;
+        addLevel(order.type === "SELL" ? asks : bids, order.price, remaining);
+      }
+      const serializeLevels = (levels: Map<string, { price: Prisma.Decimal; quantity: Prisma.Decimal }>, descending: boolean) =>
+        [...levels.values()]
+          .sort((left, right) => descending ? right.price.comparedTo(left.price) : left.price.comparedTo(right.price))
+          .map((level) => ({
+            price: serializeQuote(level.price),
+            quantity: serializeQuantity(level.quantity),
+          }));
+      return Response.json({
+        asks: serializeLevels(asks, false),
+        bids: serializeLevels(bids, true),
       });
-
-      const asks = Array.from(askMap.entries())
-        .map(([price, quantity]) => ({ price, quantity }))
-        .sort((a, b) => a.price - b.price);
-
-      const bids = Array.from(bidMap.entries())
-        .map(([price, quantity]) => ({ price, quantity }))
-        .sort((a, b) => b.price - a.price);
-
-      return NextResponse.json({ asks, bids });
     }
 
-    if (historyParam === "true") {
-      const days = searchParams.get("days")
-        ? Number(searchParams.get("days"))
-        : 7;
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - days);
-
-      // Fetch all trades in that period for price movements.
-      const trades = await prisma.legacyTrade.findMany({
-        where: { creatorId: id, createdAt: { gte: startDate } },
-        orderBy: { createdAt: "asc" },
-        select: { createdAt: true, price: true, quantity: true },
+    if (searchParams.get("history") === "true") {
+      const executions = await prisma.tradeExecution.findMany({
+        where: { creatorId: id, executedAt: { gte: since(readDays(searchParams.get("days"), 7)) } },
+        orderBy: [{ executedAt: "asc" }, { id: "asc" }],
+        select: { executedAt: true, price: true, quoteAmount: true },
       });
-
-      // We assume initialPrice was the price before the first trade or the first stat
-      const creator = await prisma.creator.findUnique({
-        where: { id },
-        select: { initialPrice: true },
-      });
-
-      const history = trades.map((t) => ({
-        date: t.createdAt,
-        price: Number(t.price),
-        volume: Number(t.quantity) * Number(t.price),
-      }));
-
-      // If no trades, use currentPrice or a dummy point from stats
-      if (history.length === 0 && creator) {
-        history.push({
-          date: new Date(),
-          price: Number(creator.initialPrice),
-          volume: 0,
+      if (executions.length > 0) {
+        return Response.json({
+          history: executions.map((execution) => ({
+            date: execution.executedAt.toISOString(),
+            price: serializeQuote(execution.price),
+            volume: serializeQuote(execution.quoteAmount),
+          })),
         });
       }
-
-      return NextResponse.json({ history });
+      return Response.json({
+        history: [{
+          date: new Date().toISOString(),
+          price: serializeQuote(publicCreator.initialPrice),
+          volume: "0.0000",
+        }],
+      });
     }
 
-    if (tradesParam === "true") {
-      const trades = await prisma.legacyTrade.findMany({
+    if (searchParams.get("trades") === "true") {
+      const executions = await prisma.tradeExecution.findMany({
         where: { creatorId: id },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ executedAt: "desc" }, { id: "desc" }],
         take: 50,
         select: {
           id: true,
           price: true,
           quantity: true,
-          type: true,
-          createdAt: true,
+          executedAt: true,
+          takerOrder: { select: { type: true } },
         },
       });
-      return NextResponse.json({
-        trades: trades.map((trade) => ({
-          ...trade,
-          price: Number(trade.price),
-          quantity: Number(trade.quantity),
+      return Response.json({
+        trades: executions.map((execution) => ({
+          id: execution.id,
+          price: serializeQuote(execution.price),
+          quantity: serializeQuantity(execution.quantity),
+          type: execution.takerOrder.type,
+          createdAt: execution.executedAt.toISOString(),
         })),
       });
     }
 
-    if (statsParam === "true") {
-      const queryResult = statsQuerySchema.safeParse({
-        days: searchParams.get("days") ? Number(searchParams.get("days")) : 30,
-      });
-
-      if (!queryResult.success) {
-        return NextResponse.json(
-          { error: "Invalid parameters" },
-          { status: 400 }
-        );
-      }
-
-      const { days } = queryResult.data;
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - days);
-
+    if (searchParams.get("stats") === "true") {
       const stats = await prisma.creatorStat.findMany({
         where: {
           creatorId: id,
-          date: { gte: startDate },
+          date: { gte: since(readDays(searchParams.get("days"), 30)) },
           period: "DAILY",
         },
         orderBy: { date: "asc" },
@@ -149,119 +140,47 @@ export async function GET(
           avgComments: true,
         },
       });
-
-      return NextResponse.json({ stats });
+      return Response.json({
+        stats: stats.map((stat) => ({ ...stat, date: stat.date.toISOString() })),
+      });
     }
 
-    if (videosParam === "true") {
-      const creator = await prisma.creator.findUnique({
-        where: { id },
-        select: { id: true, youtubeChannelId: true, currentSubs: true },
-      });
-
-      if (!creator) {
-        return NextResponse.json(
-          { error: "Creator not found" },
-          { status: 404 }
-        );
-      }
-
-      // 1. Fetch from YouTube
-      const ytVideos = await getRecentVideos(creator.youtubeChannelId);
-
-      if (ytVideos.length > 0) {
-        // 2. Persist to DB (Incremental Upsert)
-        await Promise.all(
-          ytVideos.map((v) =>
-            prisma.video.upsert({
-              where: { id: v.id },
-              update: {
-                viewCount: v.viewCount,
-                likeCount: v.likeCount,
-                commentCount: v.commentCount,
-                title: v.title,
-                thumbnailUrl: v.thumbnailUrl,
-              },
-              create: {
-                id: v.id,
-                creatorId: creator.id,
-                title: v.title,
-                thumbnailUrl: v.thumbnailUrl,
-                publishedAt: new Date(v.publishedAt),
-                duration: v.duration,
-                type: v.type, // LONG or SHORTS
-                viewCount: v.viewCount,
-                likeCount: v.likeCount,
-                commentCount: v.commentCount,
-              },
-            })
-          )
-        );
-
-        // 3. Calculate Aggregate Metrics
-        const totalViews = ytVideos.reduce((sum, v) => sum + v.viewCount, 0);
-        const totalLikes = ytVideos.reduce((sum, v) => sum + v.likeCount, 0);
-        const totalComments = ytVideos.reduce(
-          (sum, v) => sum + v.commentCount,
-          0
-        );
-        const avgViews = totalViews / ytVideos.length;
-
-        const engagementRate =
-          totalViews > 0
-            ? ((totalLikes + totalComments) / totalViews) * 100
-            : 0;
-        const viewsPerSubs =
-          creator.currentSubs > 0 ? (avgViews / creator.currentSubs) * 100 : 0;
-
-        // 4. Update Creator
-        await prisma.creator.update({
-          where: { id: creator.id },
-          data: {
-            avgLikes: totalLikes / ytVideos.length,
-            avgComments: totalComments / ytVideos.length,
-            engagementRate,
-            viewsPerSubs,
-          },
-        });
-      }
-
-      const dbVideos = await prisma.video.findMany({
+    if (searchParams.get("videos") === "true") {
+      const videos = await prisma.video.findMany({
         where: { creatorId: id },
-        orderBy: { publishedAt: "desc" },
+        orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
         take: 20,
       });
-
-      return NextResponse.json({ videos: dbVideos });
+      return Response.json({
+        videos: videos.map((video) => ({
+          ...video,
+          publishedAt: video.publishedAt.toISOString(),
+          createdAt: video.createdAt.toISOString(),
+          updatedAt: video.updatedAt.toISOString(),
+        })),
+      });
     }
 
-    const creator = await prisma.creator.findUnique({
-      where: { id },
-      include: {
-        _count: { select: { videos: true } },
-      },
+    const creator = await prisma.creator.findFirst({
+      where: { id, isActive: true, visibility: "PUBLIC" },
+      include: { _count: { select: { videos: true } } },
     });
-
-    if (!creator) {
-      return NextResponse.json({ error: "Creator not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({
+    if (!creator) throw new ApiError(404, "CREATOR_NOT_FOUND", "Creator was not found.");
+    return Response.json({
       creator: {
         ...creator,
-        currentPrice: Number(creator.currentPrice),
-        initialPrice: Number(creator.initialPrice),
-        totalSupply: Number(creator.totalSupply),
-        circulatingSupply: Number(creator.circulatingSupply),
-        reserveSupply: Number(creator.reserveSupply),
-        liquidity: Number(creator.liquidity),
+        initialPrice: serializeQuote(creator.initialPrice),
+        currentPrice: serializeQuote(creator.currentPrice),
+        totalSupply: serializeQuantity(creator.totalSupply),
+        circulatingSupply: serializeQuantity(creator.circulatingSupply),
+        reserveSupply: serializeQuantity(creator.reserveSupply),
+        liquidity: serializeQuote(creator.liquidity),
+        createdAt: creator.createdAt.toISOString(),
+        updatedAt: creator.updatedAt.toISOString(),
+        lastSyncedAt: creator.lastSyncedAt.toISOString(),
       },
     });
-  } catch (error) {
-    console.error("API Error:", error);
-    return NextResponse.json(
-      { error: "Internal Server Error" },
-      { status: 500 }
-    );
-  }
-}
+  },
+);
+
+export const OPTIONS = corsPreflight;

@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLanguage } from "@/lib/LanguageContext";
 import Link from "next/link";
-import Image from "next/image";
 import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
 import type { Portfolio } from "@/lib/data/contracts";
+import { decimalToDisplayNumber } from "@/lib/data/decimal-display";
 import { creatorDetailHref } from "@/lib/routing/creator";
 import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
@@ -78,7 +78,7 @@ export function PortfolioClient() {
     cancellingOrdersRef.current.add(orderId);
     setCancellingOrders(new Set(cancellingOrdersRef.current));
     try {
-      await client.cancelOrder(orderId);
+      await client.cancelOrder(orderId, { idempotencyKey: crypto.randomUUID() });
       requestState.current.pollController?.abort();
       const refreshController = new AbortController();
       await Promise.allSettled([
@@ -126,10 +126,11 @@ export function PortfolioClient() {
   }
 
   const totalAssetsValue =
-    data.balance +
+    decimalToDisplayNumber(data.availableBalance) +
     data.positions.reduce(
       (sum, p) =>
-        sum + p.quantity * (p.creator?.currentPrice || 0),
+        sum +
+        decimalToDisplayNumber(p.quantity) * decimalToDisplayNumber(p.avgPrice),
       0,
     );
 
@@ -152,7 +153,7 @@ export function PortfolioClient() {
               {t("portfolio.availableCash")}
             </span>
             <span className="text-2xl font-mono font-bold">
-              {data.balance.toLocaleString()} P
+              {decimalToDisplayNumber(data.availableBalance).toLocaleString()} P
             </span>
           </div>
         </div>
@@ -207,8 +208,10 @@ export function PortfolioClient() {
               </thead>
               <tbody>
                 {data.positions.map((p) => {
-                  const currentVal = p.quantity * p.creator.currentPrice;
-                  const buyVal = p.quantity * p.avgPrice;
+                  const quantity = decimalToDisplayNumber(p.quantity);
+                  const avgPrice = decimalToDisplayNumber(p.avgPrice);
+                  const currentVal = quantity * avgPrice;
+                  const buyVal = quantity * avgPrice;
                   const pnl = currentVal - buyVal;
                   const pnlPct = buyVal > 0 ? (pnl / buyVal) * 100 : 0;
 
@@ -218,31 +221,21 @@ export function PortfolioClient() {
                       className="border-b border-border-exchange hover:bg-muted/5"
                     >
                       <td className="px-6 py-4 font-bold flex items-center gap-2">
-                        {p.creator.thumbnailUrl && (
-                          <Image
-                            src={p.creator.thumbnailUrl}
-                            width={24}
-                            height={24}
-                            unoptimized
-                            className="w-6 h-6 rounded-full"
-                            alt=""
-                          />
-                        )}
                         <Link
                           href={creatorDetailHref(p.creatorId)}
                           className="hover:underline"
                         >
-                          {p.creator.name}
+                          {p.creatorId}
                         </Link>
                       </td>
                       <td className="px-6 py-4 text-right font-mono">
-                        {p.quantity.toLocaleString()}
+                        {quantity.toLocaleString()}
                       </td>
                       <td className="px-6 py-4 text-right font-mono text-muted">
-                        {Math.round(p.avgPrice || 0).toLocaleString()} P
+                        {Math.round(avgPrice).toLocaleString()} P
                       </td>
                       <td className="px-6 py-4 text-right font-mono font-bold">
-                        {p.creator.currentPrice.toLocaleString()} P
+                        {Math.round(avgPrice).toLocaleString()} P
                       </td>
                       <td className="px-6 py-4 text-right font-mono">
                         {currentVal.toLocaleString()} P
@@ -311,21 +304,27 @@ export function PortfolioClient() {
                     </td>
                     <td
                       className={`px-6 py-4 font-bold ${
-                        o.type === "BUY" ? "text-up" : "text-down"
+                        o.side === "BUY" ? "text-up" : "text-down"
                       }`}
                     >
-                      {o.type === "BUY" ? t("common.buy") : t("common.sell")}
+                      {o.side === "BUY" ? t("common.buy") : t("common.sell")}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {o.price.toLocaleString()}
+                      {decimalToDisplayNumber(o.price).toLocaleString()}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {o.quantity.toLocaleString()}
+                      {decimalToDisplayNumber(o.quantity).toLocaleString()}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {o.filled.toLocaleString()}{" "}
+                      {decimalToDisplayNumber(o.filled).toLocaleString()}{" "}
                       <span className="text-muted text-xs">
-                        ({((o.filled / o.quantity) * 100).toFixed(0)}%)
+                        (
+                        {(
+                          (decimalToDisplayNumber(o.filled) /
+                            decimalToDisplayNumber(o.quantity)) *
+                          100
+                        ).toFixed(0)}
+                        %)
                       </span>
                     </td>
                     <td className="px-6 py-4 text-center">
@@ -370,38 +369,43 @@ export function PortfolioClient() {
                 </tr>
               </thead>
               <tbody>
-                {data.trades.map((trade) => (
+                {data.executions.map((execution) => {
+                  const side = execution.side;
+                  const price = decimalToDisplayNumber(execution.price);
+                  const quantity = decimalToDisplayNumber(execution.quantity);
+                  return (
                   <tr
-                    key={trade.id}
+                    key={execution.id}
                     className="border-b border-border-exchange hover:bg-muted/5"
                   >
                     <td className="px-6 py-4 text-muted text-xs">
-                      {new Date(trade.createdAt).toLocaleString()}
+                      {new Date(execution.executedAt).toLocaleString()}
                     </td>
                     <td className="px-6 py-4 font-bold">
-                      {trade.creator?.name ?? trade.creatorId ?? "-"}
+                      {execution.creatorId}
                     </td>
                     <td
                       className={`px-6 py-4 font-bold ${
-                        trade.type === "BUY" ? "text-up" : "text-down"
+                        side === "BUY" ? "text-up" : "text-down"
                       }`}
                     >
-                      {trade.type === "BUY"
+                      {side === "BUY"
                         ? t("common.buy")
                         : t("common.sell")}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {trade.price.toLocaleString()}
+                      {price.toLocaleString()}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {trade.quantity.toLocaleString()}
+                      {quantity.toLocaleString()}
                     </td>
                     <td className="px-6 py-4 text-right font-mono">
-                      {(trade.price * trade.quantity).toLocaleString()}
+                      {decimalToDisplayNumber(execution.quoteAmount).toLocaleString()}
                     </td>
                   </tr>
-                ))}
-                {data.trades.length === 0 && (
+                  );
+                })}
+                {data.executions.length === 0 && (
                   <tr>
                     <td
                       colSpan={6}

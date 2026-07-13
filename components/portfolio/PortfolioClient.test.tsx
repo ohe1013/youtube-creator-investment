@@ -27,25 +27,41 @@ vi.mock("@/lib/LanguageContext", () => ({
   useLanguage: () => ({ t: (key: string) => key }),
 }));
 
-const portfolio: Portfolio = {
-  balance: 1000,
+const portfolio = {
+  balance: "1000",
+  reservedBalance: "100",
+  availableBalance: "900",
   positions: [],
   openOrders: [
     {
       id: "order-1",
       creatorId: "creator/with?special",
-      type: "BUY",
+      side: "BUY",
       orderType: "LIMIT",
-      price: 50,
-      quantity: 2,
-      filled: 0,
+      price: "50",
+      quantity: "2",
+      filled: "0",
+      reservedQuote: "100",
+      reservedQuantity: "0",
       status: "OPEN",
+      completedAt: null,
+      cancelReason: null,
       createdAt: "2026-07-10T00:00:00.000Z",
-      creator: { id: "creator/with?special", name: "Creator One" },
+      updatedAt: "2026-07-10T00:00:00.000Z",
     },
   ],
-  trades: [],
-};
+  executions: [
+    {
+      id: "execution-1",
+      creatorId: "creator-1",
+      side: "BUY",
+      price: "50",
+      quantity: "2",
+      quoteAmount: "100",
+      executedAt: "2026-07-10T00:00:00.000Z",
+    },
+  ],
+} as unknown as Portfolio;
 
 beforeEach(() => {
   mocks.session.status = "authenticated";
@@ -53,6 +69,7 @@ beforeEach(() => {
   mocks.session.refresh.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal("confirm", vi.fn(() => true));
   vi.stubGlobal("alert", vi.fn());
+  vi.stubGlobal("crypto", { randomUUID: () => "cancel-key" });
 });
 
 afterEach(() => {
@@ -74,10 +91,14 @@ it("cancels through the typed client then immediately reloads portfolio and sess
   fireEvent.click(await screen.findByRole("button", { name: "portfolio.openOrders" }));
   fireEvent.click(await screen.findByRole("button", { name: "portfolio.cancel" }));
 
-  await waitFor(() => expect(cancelOrder).toHaveBeenCalledWith("order-1"));
+  await waitFor(() =>
+    expect(cancelOrder).toHaveBeenCalledWith("order-1", {
+      idempotencyKey: expect.any(String),
+    }),
+  );
   await waitFor(() => expect(getPortfolio).toHaveBeenCalledTimes(2));
   expect(mocks.session.refresh).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("link", { name: "Creator One" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "creator/with?special" })).toHaveAttribute(
     "href",
     "/creator?id=creator%2Fwith%3Fspecial",
   );
@@ -100,11 +121,29 @@ it("does not request a private portfolio for an unauthenticated browser", async 
   expect(getPortfolio).not.toHaveBeenCalled();
 });
 
+it("renders the server-derived portfolio execution side without a client subject", async () => {
+  const getPortfolio = vi
+    .fn<CreatorXDataClient["getPortfolio"]>()
+    .mockResolvedValue(portfolio);
+  mocks.client = { getPortfolio, cancelOrder: vi.fn() } as unknown as CreatorXDataClient;
+
+  render(<PortfolioClient />);
+  fireEvent.click(await screen.findByRole("button", { name: "portfolio.tradeHistory" }));
+
+  expect(await screen.findByText("common.buy")).toBeInTheDocument();
+  expect(screen.queryByText("common.sell")).toBeNull();
+});
+
 it("locks duplicate cancellation and ignores a stale pre-cancel poll", async () => {
   vi.useFakeTimers();
   let resolveStalePoll: ((value: Portfolio) => void) | undefined;
   let resolveCancel: (() => void) | undefined;
-  const withoutOrder: Portfolio = { ...portfolio, balance: 1100, openOrders: [] };
+  const withoutOrder: Portfolio = {
+    ...portfolio,
+    balance: "1100" as never,
+    availableBalance: "1000" as never,
+    openOrders: [],
+  };
   const getPortfolio = vi
     .fn<CreatorXDataClient["getPortfolio"]>()
     .mockResolvedValueOnce(portfolio)

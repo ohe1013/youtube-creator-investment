@@ -38,9 +38,11 @@ async function main() {
   // 3. Verify results
   console.log("\n--- Verification Results ---");
 
-  const totalTrades = await prisma.legacyTrade.count();
-  const botTrades = await prisma.legacyTrade.count({
-    where: { user: { isBot: true } },
+  const totalExecutions = await prisma.tradeExecution.count();
+  const botExecutions = await prisma.tradeExecution.count({
+    where: {
+      OR: [{ buyer: { isBot: true } }, { seller: { isBot: true } }],
+    },
   });
 
   const creatorsWithPriceChange = await prisma.creator.findMany({
@@ -50,8 +52,8 @@ async function main() {
     select: { name: true, currentPrice: true, initialPrice: true },
   });
 
-  console.log(`Total trades in system: ${totalTrades}`);
-  console.log(`Trades made by bots in this run/total: ${botTrades}`);
+  console.log(`Total trade executions in system: ${totalExecutions}`);
+  console.log(`Trade executions involving bots: ${botExecutions}`);
 
   if (creatorsWithPriceChange.length > 0) {
     console.log("\nCreators with price movements:");

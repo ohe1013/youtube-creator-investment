@@ -8,6 +8,7 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly details?: unknown,
+    public readonly safeToExpose = status < 500,
   ) {
     super(message);
     this.name = "ApiError";
@@ -23,7 +24,7 @@ function readRetryAfterSeconds(details: unknown) {
 }
 
 export function toErrorResponse(error: unknown, requestId: string) {
-  const isPublicError = error instanceof ApiError && error.status < 500;
+  const isPublicError = error instanceof ApiError && error.safeToExpose;
   const status = isPublicError ? error.status : 500;
   const body: ApiErrorBody = {
     error: {

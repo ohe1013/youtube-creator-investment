@@ -1,5 +1,8 @@
 import * as dotenv from "dotenv";
-import { searchChannels, getChannelStats } from "./lib/youtube";
+import {
+  getChannelStats,
+  searchChannels,
+} from "./lib/server/youtube/youtube-client";
 
 dotenv.config();
 

@@ -21,10 +21,11 @@ export function readBearer(request: Request) {
   return match?.[1] ?? null;
 }
 
-export async function resolveRequestPrincipal(
+/** Resolves auth when present without forcing anonymous public reads to 401. */
+export async function resolveOptionalRequestPrincipal(
   request: Request,
   dependencies: RequestAuthDependencies = {},
-): Promise<AuthPrincipal> {
+): Promise<AuthPrincipal | null> {
   const authorization = request.headers.get("authorization");
   if (authorization !== null) {
     const bearer = readBearer(request);
@@ -37,7 +38,15 @@ export async function resolveRequestPrincipal(
   const browser = await (
     dependencies.authenticateBrowser ?? authenticateNextAuthRequest
   )();
-  if (browser) return browser;
+  return browser;
+}
+
+export async function resolveRequestPrincipal(
+  request: Request,
+  dependencies: RequestAuthDependencies = {},
+): Promise<AuthPrincipal> {
+  const principal = await resolveOptionalRequestPrincipal(request, dependencies);
+  if (principal) return principal;
 
   throw new ApiError(401, "UNAUTHORIZED", "Authentication is required.");
 }

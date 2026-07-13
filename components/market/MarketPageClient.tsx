@@ -9,7 +9,10 @@ import {
   useState,
 } from "react";
 import { useSearchParams } from "next/navigation";
-import { MarketDashboard } from "@/components/market/MarketDashboard";
+import {
+  MarketDashboard,
+  type MarketCreator,
+} from "@/components/market/MarketDashboard";
 import { useCreatorXDataClient } from "@/components/runtime/CreatorXDataProvider";
 import type {
   CreatorStat,
@@ -20,9 +23,10 @@ import type {
   Portfolio,
   Trade,
 } from "@/lib/data/contracts";
+import { decimalToDisplayNumber } from "@/lib/data/decimal-display";
 import { useCreatorXSession } from "@/lib/session/CreatorXSessionProvider";
 
-type Creator = CreatorSummary;
+type Creator = MarketCreator;
 type ChartPoint = { date: string; price: number; volume: number };
 type RecentTrade = {
   id: string;
@@ -30,6 +34,10 @@ type RecentTrade = {
   quantity: number;
   type: "BUY" | "SELL";
   time: string;
+};
+type DisplayOrderBook = {
+  asks: Array<{ price: number; quantity: number }>;
+  bids: Array<{ price: number; quantity: number }>;
 };
 type LoadState = {
   selectedCreator: Creator;
@@ -42,7 +50,7 @@ type LoadState = {
   };
   historyStats: CreatorStat[];
   videos: Array<CreatorVideo & { thumbnailUrl: string }>;
-  orderBook: CreatorXOrderBook;
+  orderBook: DisplayOrderBook;
   chartData: ChartPoint[];
   trades: RecentTrade[];
   userBalance: number;
@@ -52,8 +60,33 @@ type LoadState = {
 function toChartPoint(point: HistoryPoint): ChartPoint {
   return {
     date: point.date,
-    price: point.price,
-    volume: point.volume,
+    price: decimalToDisplayNumber(point.price),
+    volume: decimalToDisplayNumber(point.volume),
+  };
+}
+
+function toMarketCreator(creator: CreatorSummary): MarketCreator {
+  return {
+    ...creator,
+    initialPrice: decimalToDisplayNumber(creator.initialPrice),
+    currentPrice: decimalToDisplayNumber(creator.currentPrice),
+    totalSupply: decimalToDisplayNumber(creator.totalSupply),
+    circulatingSupply: decimalToDisplayNumber(creator.circulatingSupply),
+    reserveSupply: decimalToDisplayNumber(creator.reserveSupply),
+    liquidity: decimalToDisplayNumber(creator.liquidity),
+  };
+}
+
+function toDisplayOrderBook(orderBook: CreatorXOrderBook) {
+  return {
+    asks: orderBook.asks.map((level) => ({
+      price: decimalToDisplayNumber(level.price),
+      quantity: decimalToDisplayNumber(level.quantity),
+    })),
+    bids: orderBook.bids.map((level) => ({
+      price: decimalToDisplayNumber(level.price),
+      quantity: decimalToDisplayNumber(level.quantity),
+    })),
   };
 }
 
@@ -110,7 +143,7 @@ function MarketPageContent() {
           { sort: "subs", limit: 50 },
           { signal: controller.signal },
         );
-        const creators = creatorsData.creators;
+        const creators = creatorsData.creators.map(toMarketCreator);
         const selectedCreator =
           ticker === null
             ? creators[0]
@@ -159,26 +192,13 @@ function MarketPageContent() {
               { asks: [], bids: [] } as CreatorXOrderBook,
             ),
             canReadPortfolio
-              ? optional(
-                  client.getPortfolio({ signal: controller.signal }),
-                  {
-                    balance: 0,
-                    positions: [],
-                    openOrders: [],
-                    trades: [],
-                  } as Portfolio,
-                )
-              : Promise.resolve({
-                  balance: 0,
-                  positions: [],
-                  openOrders: [],
-                  trades: [],
-                } as Portfolio),
+              ? optional(client.getPortfolio({ signal: controller.signal }), null as Portfolio | null)
+              : Promise.resolve(null as Portfolio | null),
           ]);
         if (controller.signal.aborted) return;
         const chartData = history.map(toChartPoint);
         const stats = calculateStats(selectedCreator, chartData);
-        const selectedPosition = portfolio.positions.find(
+        const selectedPosition = portfolio?.positions.find(
           (position) => position.creatorId === selectedCreator.id
         );
 
@@ -191,7 +211,7 @@ function MarketPageContent() {
             ...video,
             thumbnailUrl: video.thumbnailUrl ?? "",
           })),
-          orderBook,
+          orderBook: toDisplayOrderBook(orderBook),
           chartData:
             chartData.length > 0
               ? chartData
@@ -204,13 +224,13 @@ function MarketPageContent() {
                 ],
           trades: trades.map((trade) => ({
             id: trade.id,
-            price: trade.price,
-            quantity: trade.quantity,
+            price: decimalToDisplayNumber(trade.price),
+            quantity: decimalToDisplayNumber(trade.quantity),
             type: trade.type,
             time: new Date(trade.createdAt).toLocaleTimeString(),
           })),
-          userBalance: portfolio.balance,
-          userQuantity: selectedPosition?.quantity || 0,
+          userBalance: decimalToDisplayNumber(portfolio?.balance),
+          userQuantity: decimalToDisplayNumber(selectedPosition?.quantity),
         });
       } catch (loadError) {
         if (!controller.signal.aborted) {
@@ -246,8 +266,8 @@ function MarketPageContent() {
         );
         return {
           ...current,
-          userBalance: portfolio.balance,
-          userQuantity: position?.quantity ?? 0,
+          userBalance: decimalToDisplayNumber(portfolio.balance),
+          userQuantity: decimalToDisplayNumber(position?.quantity),
         };
       });
     } finally {

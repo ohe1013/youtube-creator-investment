@@ -1,5 +1,8 @@
 import { refreshCreatorXSessionRequestSchema } from "@/lib/contracts/session";
-import { refreshCreatorXSession } from "@/lib/server/auth/providers/guest";
+import {
+  assertGuestSessionsAllowed,
+  refreshCreatorXSession,
+} from "@/lib/server/auth/providers/guest";
 import { ApiError } from "@/lib/server/http/api-error";
 import { corsPreflight, withApiRoute } from "@/lib/server/http/route-handler";
 
@@ -13,6 +16,7 @@ async function readRefreshRequest(request: Request) {
 }
 
 export const POST = withApiRoute(async (request) => {
+  assertGuestSessionsAllowed();
   const { refreshToken } = await readRefreshRequest(request);
   const tokens = await refreshCreatorXSession(refreshToken);
   return Response.json(tokens, {

@@ -1,87 +1,56 @@
-import { Prisma } from "@prisma/client";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { GET } from "@/app/api/portfolio/route";
 
 const mocks = vi.hoisted(() => ({
-  getServerSession: vi.fn(),
-  findUser: vi.fn(),
-  findPositions: vi.fn(),
-  findOrders: vi.fn(),
-  findTrades: vi.fn(),
+  requirePrincipal: vi.fn(),
+  enforcePrincipalRateLimit: vi.fn(),
+  getPortfolio: vi.fn(),
 }));
 
-vi.mock("next-auth", () => ({
-  getServerSession: mocks.getServerSession,
+vi.mock("@/lib/server/auth/request-auth", () => ({
+  requirePrincipal: mocks.requirePrincipal,
 }));
-
-vi.mock("@/lib/auth", () => ({ authOptions: {} }));
-
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
-    user: { findUnique: mocks.findUser },
-    position: { findMany: mocks.findPositions },
-    order: { findMany: mocks.findOrders },
-    legacyTrade: { findMany: mocks.findTrades },
-  },
+vi.mock("@/lib/server/http/creatorx-route", () => ({
+  enforcePrincipalRateLimit: mocks.enforcePrincipalRateLimit,
+  rateLimitHeaders: () => ({ "RateLimit-Limit": "60" }),
+}));
+vi.mock("@/lib/server/trading/portfolio-service", () => ({
+  getPortfolio: mocks.getPortfolio,
 }));
 
 beforeEach(() => {
-  mocks.getServerSession.mockReset().mockResolvedValue({
-    user: { id: "user-1" },
-  });
-  mocks.findUser.mockReset().mockResolvedValue({
-    balance: new Prisma.Decimal("1000.0000"),
-  });
-  mocks.findPositions.mockReset().mockResolvedValue([
-    {
-      id: "position-1",
-      userId: "user-1",
-      creatorId: "creator-1",
-      quantity: new Prisma.Decimal("3.00000000"),
-      reservedQuantity: new Prisma.Decimal("1.00000000"),
-      avgPrice: new Prisma.Decimal("100.0000"),
-      createdAt: new Date("2026-07-01T00:00:00.000Z"),
-      updatedAt: new Date("2026-07-02T00:00:00.000Z"),
-      creator: {
-        id: "creator-1",
-        name: "Creator One",
-        currentPrice: new Prisma.Decimal("125.0000"),
-        thumbnailUrl: null,
+  mocks.requirePrincipal.mockReset().mockResolvedValue({ userId: "user-1" });
+  mocks.enforcePrincipalRateLimit
+    .mockReset()
+    .mockResolvedValue({ limit: 60, remaining: 59, resetAt: Date.now() + 60_000 });
+  mocks.getPortfolio.mockReset().mockResolvedValue({
+    balance: "1000.0000",
+    reservedBalance: "187.5000",
+    availableBalance: "812.5000",
+    positions: [
+      {
+        id: "position-1",
+        creatorId: "creator-1",
+        quantity: "3.00000000",
+        reservedQuantity: "1.00000000",
+        avgPrice: "100.0000",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-02T00:00:00.000Z",
       },
-    },
-  ]);
-  mocks.findOrders.mockReset().mockResolvedValue([
-    {
-      id: "order-1",
-      userId: "user-1",
-      creatorId: "creator-1",
-      type: "BUY",
-      orderType: "LIMIT",
-      price: new Prisma.Decimal("125.0000"),
-      quantity: new Prisma.Decimal("2.00000000"),
-      filled: new Prisma.Decimal("0.50000000"),
-      reservedQuote: new Prisma.Decimal("187.5000"),
-      reservedQuantity: new Prisma.Decimal("0.00000000"),
-      status: "PARTIAL",
-      completedAt: null,
-      cancelReason: null,
-      createdAt: new Date("2026-07-03T00:00:00.000Z"),
-      updatedAt: new Date("2026-07-04T00:00:00.000Z"),
-      creator: { id: "creator-1", name: "Creator One" },
-    },
-  ]);
-  mocks.findTrades.mockReset().mockResolvedValue([]);
+    ],
+    openOrders: [],
+    executions: [],
+  });
 });
 
-it("keeps internal reservation and completion fields out of the legacy portfolio response", async () => {
-  const response = await GET();
-  expect(response.status).toBe(200);
+it("returns the Task 6 portfolio DTO with reservation fields intact", async () => {
+  const response = await GET(new Request("https://creatorx.example/api/portfolio"));
 
-  const body = await response.json();
-  expect(body.positions[0]).not.toHaveProperty("reservedQuantity");
-  expect(body.openOrders[0]).not.toHaveProperty("reservedQuote");
-  expect(body.openOrders[0]).not.toHaveProperty("reservedQuantity");
-  expect(body.openOrders[0]).not.toHaveProperty("completedAt");
-  expect(body.openOrders[0]).not.toHaveProperty("cancelReason");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    reservedBalance: "187.5000",
+    positions: [{ reservedQuantity: "1.00000000" }],
+  });
+  expect(mocks.getPortfolio).toHaveBeenCalledWith({ userId: "user-1" });
 });

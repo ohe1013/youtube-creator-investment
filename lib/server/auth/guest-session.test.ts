@@ -1,7 +1,9 @@
 import { createHmac } from "node:crypto";
 import { decodeJwt, SignJWT } from "jose";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { POST as createGuestRoute } from "@/app/api/auth/guest/route";
+import { POST as refreshGuestRoute } from "@/app/api/auth/guest/refresh/route";
 import {
   ACCESS_TOKEN_AUDIENCE,
   ACCESS_TOKEN_ISSUER,
@@ -11,14 +13,79 @@ import {
   issueCreatorXAccessToken,
   verifyCreatorXAccessToken,
 } from "@/lib/server/auth/guest-session";
-import { resolveRequestPrincipal } from "@/lib/server/auth/request-auth";
+import {
+  resolveOptionalRequestPrincipal,
+  resolveRequestPrincipal,
+} from "@/lib/server/auth/request-auth";
+import { assertGuestSessionsAllowed } from "@/lib/server/auth/providers/guest";
 
 const security = {
   accessTokenSecret: "unit-test-access-secret-with-at-least-thirty-two-bytes",
   identityPepper: "unit-test-identity-pepper-with-at-least-thirty-two-bytes",
 };
 
+const productionEnv = {
+  NODE_ENV: "production",
+  VERCEL: "1",
+  CREATORX_IDENTITY_PEPPER: "p".repeat(32),
+  NEXT_PUBLIC_APP_IN_TOSS: "1",
+  NEXT_PUBLIC_CREATORX_RELEASE_CHANNEL: "production",
+  NEXT_PUBLIC_CREATORX_DATA_MODE: "remote",
+  NEXT_PUBLIC_CREATORX_API_BASE_URL: "https://api.creatorx.example",
+  NEXT_PUBLIC_CREATORX_OPERATOR_NAME: "CreatorX Operator",
+  NEXT_PUBLIC_CREATORX_SUPPORT_URL: "https://support.creatorx.example",
+  NEXT_PUBLIC_CREATORX_PRIVACY_CONTACT: "privacy@creatorx.example",
+  NEXT_PUBLIC_CREATORX_LEGAL_EFFECTIVE_DATE: "2026-07-10",
+  NEXT_PUBLIC_CREATORX_ICON_URL:
+    "https://assets.creatorx.example/creatorx-icon.png",
+} as const;
+
+afterEach(() => vi.unstubAllEnvs());
+
 describe("CreatorX guest-session token security", () => {
+  it("permits guest issuance only outside production", () => {
+    expect(() => assertGuestSessionsAllowed(false)).not.toThrow();
+    expect(() => assertGuestSessionsAllowed(true)).toThrowError(
+      expect.objectContaining({
+        code: "GUEST_SESSION_UNAVAILABLE",
+        status: 403,
+      }),
+    );
+  });
+
+  it("makes both guest session endpoints fail closed in production", async () => {
+    for (const [key, value] of Object.entries(productionEnv)) {
+      vi.stubEnv(key, value);
+    }
+    const headers = {
+      "content-type": "application/json",
+      "x-forwarded-proto": "https",
+    };
+    const [created, refreshed] = await Promise.all([
+      createGuestRoute(
+        new Request("https://api.creatorx.example/api/auth/guest", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ anonymousKey: "sandbox-key" }),
+        }),
+      ),
+      refreshGuestRoute(
+        new Request("https://api.creatorx.example/api/auth/guest/refresh", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ refreshToken: "guest-refresh-token" }),
+        }),
+      ),
+    ]);
+
+    for (const response of [created, refreshed]) {
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "GUEST_SESSION_UNAVAILABLE" },
+      });
+    }
+  });
+
   it("derives the guest subject with the server pepper and never returns the anonymous key", () => {
     const anonymousKey = "anonymous-device-key";
 
@@ -156,6 +223,18 @@ describe("CreatorX guest-session token security", () => {
 });
 
 describe("unified request principal resolution", () => {
+  it("keeps a public request anonymous when neither auth mechanism resolves a principal", async () => {
+    const authenticateBrowser = vi.fn().mockResolvedValue(null);
+
+    await expect(
+      resolveOptionalRequestPrincipal(
+        new Request("https://creatorx.test/api/dashboard"),
+        { authenticateBrowser },
+      ),
+    ).resolves.toBeNull();
+    expect(authenticateBrowser).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to a browser NextAuth session only when no bearer token is supplied", async () => {
     const authenticateBrowser = vi.fn().mockResolvedValue({
       userId: "browser-user",

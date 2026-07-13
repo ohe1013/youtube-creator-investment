@@ -92,6 +92,21 @@ describe.sequential("transactional trading conservation and matching", () => {
     expect(portfolio.positions).toEqual([
       expect.objectContaining({ creatorId: TRADING_CREATOR_ID, quantity: "2.00000000" }),
     ]);
+    expect(portfolio.executions[0]).toMatchObject({
+      creatorId: TRADING_CREATOR_ID,
+      side: "BUY",
+      price: "10.0000",
+      quantity: "2.00000000",
+      quoteAmount: "20.0000",
+    });
+    for (const internalField of [
+      "buyerId",
+      "sellerId",
+      "makerOrderId",
+      "takerOrderId",
+    ]) {
+      expect(portfolio.executions[0]).not.toHaveProperty(internalField);
+    }
     expect(decimalEquals(after.totalQuote, before.totalQuote.toFixed())).toBe(true);
     expect(decimalEquals(after.totalQuantity, before.totalQuantity.toFixed())).toBe(true);
     expect(decimalEquals(after.reservedQuote, "0")).toBe(true);

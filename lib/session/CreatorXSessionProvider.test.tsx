@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   signOut: vi.fn(),
   useSession: vi.fn(),
   appLogin: vi.fn(),
+  getUserKeyForGame: vi.fn(),
 }));
 
 vi.mock("@/components/runtime/CreatorXDataProvider", () => ({
@@ -50,13 +51,16 @@ vi.mock("next-auth/react", () => ({
 
 vi.mock("@apps-in-toss/web-framework", () => ({
   appLogin: mocks.appLogin,
+  getUserKeyForGame: mocks.getUserKeyForGame,
 }));
 
 const portfolio = (balance: number): Portfolio => ({
-  balance,
+  balance: String(balance) as never,
+  reservedBalance: "0" as never,
+  availableBalance: String(balance) as never,
   positions: [],
   openOrders: [],
-  trades: [],
+  executions: [],
 });
 
 function config(
@@ -118,12 +122,16 @@ beforeEach(() => {
     authorizationCode: "single-use-authorization-code",
     referrer: "SANDBOX",
   });
+  mocks.getUserKeyForGame
+    .mockReset()
+    .mockResolvedValue({ type: "HASH", hash: "sandbox-game-user-key" });
   mocks.dataRuntime.subject = "device-subject";
   mocks.dataClient = clientWithPortfolio(vi.fn().mockResolvedValue(portfolio(2500)));
 });
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -397,12 +405,76 @@ describe("CreatorXSessionProvider", () => {
     expect(screen.getByTestId("session")).toHaveTextContent('"balance":300');
   });
 
-  it("shows an actionable disabled state without calling the Toss bridge when Toss Login is not verified", async () => {
+  it.each(["sandbox", "development"] as const)(
+    "creates a server-owned guest session in %s remote mode without calling Toss Login",
+    async (releaseChannel) => {
+    const creatorXAccessToken = "guest-access-token";
+    const creatorXRefreshToken = "guest-refresh-token";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: creatorXAccessToken,
+          refreshToken: creatorXRefreshToken,
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(
+      <StrictMode>
+        <CreatorXSessionProvider
+          config={config({
+            releaseChannel,
+            dataMode: "remote",
+            apiBaseUrl: new URL("https://api.example.com"),
+          })}
+        >
+          <SessionProbe />
+        </CreatorXSessionProvider>
+      </StrictMode>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+    expect(screen.getByTestId("session")).toHaveTextContent(
+      '"identityKind":"guest"',
+    );
+    expect(screen.getByTestId("session")).toHaveTextContent('"balance":2500');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.example.com/api/auth/guest",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ anonymousKey: "sandbox-game-user-key" }),
+        credentials: "same-origin",
+        redirect: "error",
+      },
+    );
+    expect(mocks.getUserKeyForGame).toHaveBeenCalledTimes(1);
+    expect(mocks.appLogin).not.toHaveBeenCalled();
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      creatorXAccessToken,
+    );
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      creatorXRefreshToken,
+    );
+    },
+  );
+
+  it("keeps production remote mode fail-closed when Toss Login is not verified", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     render(
       <CreatorXSessionProvider
         config={config({
+          releaseChannel: "production",
           dataMode: "remote",
           apiBaseUrl: new URL("https://api.example.com"),
         })}
@@ -499,7 +571,7 @@ describe("CreatorXSessionProvider", () => {
           authorizationCode: "single-use-authorization-code",
           referrer: "SANDBOX",
         }),
-        credentials: "omit",
+        credentials: "same-origin",
         redirect: "error",
       },
     );
@@ -509,7 +581,12 @@ describe("CreatorXSessionProvider", () => {
     expect(screen.getByTestId("session")).not.toHaveTextContent(
       creatorXRefreshToken,
     );
-    expect((mocks.dataClient as CreatorXDataClient).getPortfolio).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        (mocks.dataClient as CreatorXDataClient).getPortfolio,
+      ).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByTestId("session")).toHaveTextContent('"balance":2500');
   });
 
   it("keeps only CreatorX tokens in memory long enough to revoke the local Toss session", async () => {
@@ -556,7 +633,7 @@ describe("CreatorXSessionProvider", () => {
       {
         method: "POST",
         headers: { authorization: "Bearer creatorx-access-token" },
-        credentials: "omit",
+        credentials: "same-origin",
         redirect: "error",
       },
     );
@@ -602,6 +679,54 @@ describe("CreatorXSessionProvider", () => {
       expect(screen.getByTestId("session")).toHaveTextContent(
         '"status":"authenticated"',
       ),
+    );
+  });
+
+  it("rotates a persisted CreatorX refresh token before app login and never persists its access token", async () => {
+    window.localStorage.setItem("creatorx:session:refresh:v1", "stored-refresh-token");
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: "rotated-access-token",
+          refreshToken: "rotated-refresh-token",
+          tokenType: "Bearer",
+          expiresIn: 900,
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(
+      <CreatorXSessionProvider
+        config={config({
+          dataMode: "remote",
+          apiBaseUrl: new URL("https://api.example.com"),
+          tossLoginEnabled: true,
+        })}
+      >
+        <SessionProbe />
+      </CreatorXSessionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session")).toHaveTextContent(
+        '"status":"authenticated"',
+      ),
+    );
+    expect(mocks.appLogin).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://api.example.com/api/auth/guest/refresh",
+      expect.objectContaining({ method: "POST", credentials: "same-origin" }),
+    );
+    expect(window.localStorage.getItem("creatorx:session:refresh:v1")).toBe(
+      "rotated-refresh-token",
+    );
+    expect(window.localStorage.getItem("creatorx:session:refresh:v1")).not.toContain(
+      "rotated-access-token",
+    );
+    expect(screen.getByTestId("session")).not.toHaveTextContent(
+      "rotated-access-token",
     );
   });
 

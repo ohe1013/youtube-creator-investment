@@ -1,5 +1,8 @@
 import { createGuestSessionRequestSchema } from "@/lib/contracts/session";
-import { createGuestSession } from "@/lib/server/auth/providers/guest";
+import {
+  assertGuestSessionsAllowed,
+  createGuestSession,
+} from "@/lib/server/auth/providers/guest";
 import { ApiError } from "@/lib/server/http/api-error";
 import { corsPreflight, withApiRoute } from "@/lib/server/http/route-handler";
 
@@ -13,6 +16,7 @@ async function readGuestRequest(request: Request) {
 }
 
 export const POST = withApiRoute(async (request) => {
+  assertGuestSessionsAllowed();
   const { anonymousKey } = await readGuestRequest(request);
   const tokens = await createGuestSession(anonymousKey);
   return Response.json(tokens, {

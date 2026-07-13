@@ -1,7 +1,38 @@
 import { PrismaClient } from "@prisma/client";
-import { placeOrder } from "../lib/matching-engine";
+import { randomUUID } from "node:crypto";
+
+import { decimalStringSchema } from "../lib/contracts/decimal";
+import type { TradingSide } from "../lib/contracts/trading";
+import { placeOrder } from "../lib/server/trading/matching-service";
 
 const prisma = new PrismaClient();
+
+function seedDecimal(value: number) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("Liquidity seed orders require positive integer amounts.");
+  }
+  return decimalStringSchema.parse(String(value));
+}
+
+async function placeSeedOrder(
+  userId: string,
+  creatorId: string,
+  side: TradingSide,
+  price: number,
+  quantity: number,
+) {
+  return await placeOrder(
+    { userId, provider: "guest", role: "USER" },
+    {
+      creatorId,
+      side,
+      orderType: "LIMIT",
+      limitPrice: seedDecimal(price),
+      quantity: seedDecimal(quantity),
+    },
+    `seed-${randomUUID()}`,
+  );
+}
 
 async function main() {
   console.log("🌱 Seeding Liquidity...");
@@ -64,7 +95,7 @@ async function main() {
       }
 
       try {
-        await placeOrder(bot.id, creator.id, "SELL", askPrice, qty, "LIMIT");
+        await placeSeedOrder(bot.id, creator.id, "SELL", askPrice, qty);
         // console.log(`  Deployed ASK: ${qty} @ ${askPrice}`);
       } catch (e) {
         console.error(`  Failed to sell: ${(e as Error).message}`);
@@ -89,7 +120,7 @@ async function main() {
       });
 
       try {
-        await placeOrder(bot.id, creator.id, "BUY", bidPrice, qty, "LIMIT");
+        await placeSeedOrder(bot.id, creator.id, "BUY", bidPrice, qty);
         // console.log(`  Deployed BID: ${qty} @ ${bidPrice}`);
       } catch (e) {
         console.error(`  Failed to buy: ${(e as Error).message}`);

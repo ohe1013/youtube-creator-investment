@@ -1,32 +1,29 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { cancelOrder } from "@/lib/matching-engine";
+import { requirePrincipal } from "@/lib/server/auth/request-auth";
+import {
+  enforcePrincipalRateLimit,
+  rateLimitHeaders,
+  requireIdempotencyKey,
+} from "@/lib/server/http/creatorx-route";
+import { corsPreflight, withApiRoute } from "@/lib/server/http/route-handler";
+import { cancelOrder } from "@/lib/server/trading/matching-service";
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+type RouteContext = { params: Promise<{ id: string }> };
 
+export const DELETE = withApiRoute<RouteContext>(
+  async (request, { params, requestId }) => {
+    const principal = await requirePrincipal(request);
+    const rateLimit = await enforcePrincipalRateLimit(principal, "cancel-order");
+    const idempotencyKey = requireIdempotencyKey(request);
     const { id } = await params;
-    const userId = session.user.id;
-
-    await cancelOrder(userId, id);
-
-    return NextResponse.json({ success: true, message: "Order cancelled" });
-  } catch (error) {
-    console.error("Cancel Order Error:", error);
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Failed to cancel order",
+    const result = await cancelOrder(principal, id, idempotencyKey);
+    return Response.json(result, {
+      status: result.responseStatus,
+      headers: {
+        ...rateLimitHeaders(rateLimit),
+        "x-request-id": requestId,
       },
-      { status: 400 }
-    );
-  }
-}
+    });
+  },
+);
+
+export const OPTIONS = corsPreflight;

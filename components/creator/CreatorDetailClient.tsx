@@ -16,6 +16,7 @@ import type {
   OrderBook as CreatorXOrderBook,
   Trade,
 } from "@/lib/data/contracts";
+import { decimalToDisplayNumber } from "@/lib/data/decimal-display";
 import { useCreatorXOrderSubmission } from "@/lib/orders/useCreatorXOrderSubmission";
 
 
@@ -123,13 +124,16 @@ export function CreatorDetailClient({ id }: { id: string }) {
     if (history.length === 0)
       return { change24h: 0, high24h: 0, low24h: 100, volume24h: 0 };
 
-    const prices = history.map((h) => h.price);
+    const prices = history.map((h) => decimalToDisplayNumber(h.price));
     const high = Math.max(...prices);
     const low = Math.min(...prices);
-    const volume = history.reduce((sum, h) => sum + (h.volume || 0), 0);
+    const volume = history.reduce(
+      (sum, h) => sum + decimalToDisplayNumber(h.volume),
+      0,
+    );
 
-    const firstPrice = history[0].price;
-    const lastPrice = history[history.length - 1].price;
+    const firstPrice = decimalToDisplayNumber(history[0].price);
+    const lastPrice = decimalToDisplayNumber(history[history.length - 1].price);
     const change = ((lastPrice - firstPrice) / firstPrice) * 100;
 
     return { change24h: change, high24h: high, low24h: low, volume24h: volume };
@@ -165,15 +169,22 @@ export function CreatorDetailClient({ id }: { id: string }) {
   const handleTrade = async () => {
     if (!creator || isSubmitting) return;
     try {
-      const p =
-        orderType === "MARKET" ? creator.currentPrice : Number(inputPrice);
-      const order = await submit({
-        creatorId: creator.id,
-        side,
-        orderType,
-        price: p,
-        quantity: Number(inputQuantity),
-      });
+      const order = await submit(
+        orderType === "LIMIT"
+          ? {
+              creatorId: creator.id,
+              side,
+              orderType,
+              limitPrice: inputPrice,
+              quantity: inputQuantity,
+            }
+          : {
+              creatorId: creator.id,
+              side,
+              orderType,
+              quantity: inputQuantity,
+            },
+      );
       if (order === null) return;
       alert(`Order Placed: ${side} ${inputQuantity} @ ${order.price}`);
       setInputQuantity("");
@@ -184,6 +195,27 @@ export function CreatorDetailClient({ id }: { id: string }) {
   };
 
   const isPositive = change24h >= 0;
+  const displayCreator = {
+    ...creator,
+    currentPrice: decimalToDisplayNumber(creator.currentPrice),
+    circulatingSupply: decimalToDisplayNumber(creator.circulatingSupply),
+    liquidity: decimalToDisplayNumber(creator.liquidity),
+  };
+  const chartData = history.map((point) => ({
+    date: point.date,
+    price: decimalToDisplayNumber(point.price),
+    volume: decimalToDisplayNumber(point.volume),
+  }));
+  const displayOrderBook = {
+    asks: orderBook.asks.map((level) => ({
+      price: decimalToDisplayNumber(level.price),
+      quantity: decimalToDisplayNumber(level.quantity),
+    })),
+    bids: orderBook.bids.map((level) => ({
+      price: decimalToDisplayNumber(level.price),
+      quantity: decimalToDisplayNumber(level.quantity),
+    })),
+  };
 
   return (
     <div
@@ -217,7 +249,7 @@ export function CreatorDetailClient({ id }: { id: string }) {
               isPositive ? "text-up" : "text-down"
             }`}
           >
-            {creator.currentPrice.toLocaleString()} P
+            {displayCreator.currentPrice.toLocaleString()} P
           </span>
         </div>
         <div className="flex flex-col">
@@ -257,28 +289,28 @@ export function CreatorDetailClient({ id }: { id: string }) {
       >
         <div className="flex-1 border-r border-border-exchange overflow-hidden flex flex-col min-w-0">
           <div className="h-[450px] border-b border-border-exchange">
-            <MarketChart data={history} />
+            <MarketChart data={chartData} />
           </div>
           <div className="flex-1 overflow-y-auto">
-            <CreatorInfo creator={creator} stats={stats} videos={videos} />
+            <CreatorInfo creator={displayCreator} stats={stats} videos={videos} />
           </div>
         </div>
         <div className="w-full lg:w-80 flex flex-col bg-background h-full border-t lg:border-t-0 border-border-exchange">
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             <div className="h-1/2 overflow-y-auto border-b border-border-exchange">
               <OrderBook
-                currentPrice={creator.currentPrice}
-                liquidity={creator.liquidity}
-                asks={orderBook.asks}
-                bids={orderBook.bids}
+                currentPrice={displayCreator.currentPrice}
+                liquidity={displayCreator.liquidity}
+                asks={displayOrderBook.asks}
+                bids={displayOrderBook.bids}
               />
             </div>
             <div className="h-1/2 overflow-y-auto">
               <RecentTrades
                 trades={trades.map((t) => ({
                   id: t.id,
-                  price: t.price,
-                  quantity: t.quantity,
+                  price: decimalToDisplayNumber(t.price),
+                  quantity: decimalToDisplayNumber(t.quantity),
                   time: new Date(t.createdAt).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -346,7 +378,9 @@ export function CreatorDetailClient({ id }: { id: string }) {
                   type="number"
                   disabled={orderType === "MARKET"}
                   value={
-                    orderType === "MARKET" ? creator.currentPrice : inputPrice
+                    orderType === "MARKET"
+                      ? creator.currentPrice
+                      : inputPrice
                   }
                   onChange={(e) => setInputPrice(e.target.value)}
                   className={`w-full bg-background border border-border-exchange rounded px-12 py-2 text-right text-sm mono focus:border-primary outline-none ${

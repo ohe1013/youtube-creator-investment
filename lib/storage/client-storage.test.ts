@@ -6,12 +6,38 @@ import {
   creatorSchema,
   creatorSummarySchema,
   creatorVideoSchema,
+  orderBookSchema,
   orderSchema,
   portfolioSchema,
   tradeSchema,
 } from "@/lib/data/contracts";
 import { appInTossDemoData } from "@/lib/appintoss-demo-data";
+import { DemoDataClient } from "@/lib/data/demo-client";
 import { createClientStorage } from "@/lib/storage/client-storage";
+
+function createMemoryStore() {
+  const values = new Map<string, string>();
+  return {
+    async getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    async setItem(key: string, value: string) {
+      values.set(key, value);
+    },
+    async removeItem(key: string) {
+      values.delete(key);
+    },
+  };
+}
+
+function createDemoClient() {
+  return new DemoDataClient({
+    store: createMemoryStore(),
+    namespace: "contract-test-user",
+    now: () => new Date("2026-07-10T00:00:00.000Z"),
+    idFactory: () => "contract-test-order",
+  });
+}
 
 describe("CreatorX data contracts", () => {
   it("keeps creator summaries distinct from full creator details", () => {
@@ -26,12 +52,12 @@ describe("CreatorX data contracts", () => {
       currentViews: 250_000,
       currentVideos: 42,
       currentScore: 81.5,
-      initialPrice: 100,
-      currentPrice: 120,
-      totalSupply: 1_000_000,
-      circulatingSupply: 200_000,
-      reserveSupply: 800_000,
-      liquidity: 10_000,
+      initialPrice: "100",
+      currentPrice: "120",
+      totalSupply: "1000000",
+      circulatingSupply: "200000",
+      reserveSupply: "800000",
+      liquidity: "10000",
       isActive: true,
       visibility: "PUBLIC",
       avgLikes: 1_200,
@@ -47,23 +73,41 @@ describe("CreatorX data contracts", () => {
     expect(creatorSchema.safeParse(summary).success).toBe(false);
   });
 
-  it("validates every bundled creator as a full creator detail", () => {
-    expect(() => creatorSchema.array().parse(appInTossDemoData.creators)).not.toThrow();
+  it("validates every bundled creator through the public decimal-string boundary", async () => {
+    const client = createDemoClient();
+    const creators = await client.listCreators({ page: 1, limit: 100 });
+    const details = await Promise.all(
+      appInTossDemoData.creators.map(({ id }) => client.getCreator(id)),
+    );
+
+    expect(() => creatorSummarySchema.array().parse(creators.creators)).not.toThrow();
+    expect(() => creatorSchema.array().parse(details)).not.toThrow();
   });
 
-  it("validates bundled stats, videos, trades, and orders", () => {
+  it("validates bundled public stats, videos, trades, and order-book data", async () => {
+    const client = createDemoClient();
+    const ids = appInTossDemoData.creators.map(({ id }) => id);
+    const stats = (await Promise.all(ids.map((id) => client.getCreatorStats(id, { days: 30 })))).flat();
+    const videos = (await Promise.all(ids.map((id) => client.getCreatorVideos(id)))).flat();
+    const trades = (await Promise.all(ids.map((id) => client.getCreatorTrades(id)))).flat();
+    const orderBooks = await Promise.all(ids.map((id) => client.getOrderBook(id)));
+    const order = await client.placeOrder({
+      creatorId: ids[0]!,
+      side: "BUY",
+      orderType: "LIMIT",
+      quantity: "1",
+      limitPrice: "1",
+    });
+
     expect(() =>
-      creatorStatSchema.array().parse(Object.values(appInTossDemoData.stats).flat()),
+      creatorStatSchema.array().parse(stats),
     ).not.toThrow();
     expect(() =>
-      creatorVideoSchema.array().parse(Object.values(appInTossDemoData.videos).flat()),
+      creatorVideoSchema.array().parse(videos),
     ).not.toThrow();
-    expect(() =>
-      tradeSchema.array().parse(Object.values(appInTossDemoData.trades).flat()),
-    ).not.toThrow();
-    expect(() =>
-      orderSchema.array().parse(Object.values(appInTossDemoData.orders).flat()),
-    ).not.toThrow();
+    expect(() => tradeSchema.array().parse(trades)).not.toThrow();
+    expect(() => orderBookSchema.array().parse(orderBooks)).not.toThrow();
+    expect(() => orderSchema.parse(order)).not.toThrow();
   });
 
   it("rejects a zero maximum subscriber filter", () => {
@@ -80,17 +124,24 @@ describe("CreatorX data contracts", () => {
     const order = {
       id: "order-1",
       creatorId: "creator-1",
-      type: "BUY",
+      side: "BUY",
       orderType: "LIMIT",
-      price: 100,
-      quantity: 2,
-      filled: 0,
+      price: "100",
+      quantity: "2",
+      filled: "0",
+      reservedQuote: "200",
+      reservedQuantity: "0",
+      completedAt: null,
+      cancelReason: null,
       createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
     };
     const portfolio = {
-      balance: 1_000,
+      balance: "1000",
+      reservedBalance: "200",
+      availableBalance: "800",
       positions: [],
-      trades: [],
+      executions: [],
     };
 
     for (const status of ["OPEN", "PARTIAL"] as const) {

@@ -113,6 +113,26 @@ describe("parseRuntimeConfig", () => {
     );
   });
 
+  it("requires a root HTTPS API origin without rejecting remote support or icon paths", () => {
+    const config = parseRuntimeConfig({
+      ...validProductionEnvironment,
+      NEXT_PUBLIC_CREATORX_SUPPORT_URL: "https://support.creatorx.example/help",
+      NEXT_PUBLIC_CREATORX_ICON_URL:
+        "https://assets.creatorx.example/brand/creatorx-icon-512.png",
+    });
+
+    expect(config.legal.supportUrl).toBe("https://support.creatorx.example/help");
+    expect(config.brandIconUrl).toBe(
+      "https://assets.creatorx.example/brand/creatorx-icon-512.png",
+    );
+    expect(() =>
+      parseRuntimeConfig({
+        ...validProductionEnvironment,
+        NEXT_PUBLIC_CREATORX_API_BASE_URL: "https://api.creatorx.example/v1",
+      }),
+    ).toThrow("remote HTTPS API URL");
+  });
+
   it.each([
     "not a URL",
     "https://localhost/api",

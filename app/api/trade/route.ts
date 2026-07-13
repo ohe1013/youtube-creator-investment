@@ -1,43 +1,32 @@
-import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { placeOrder } from "@/lib/matching-engine";
-import { placeOrderInputSchema } from "@/lib/data/contracts";
+import { placeOrderRequestSchema } from "@/lib/contracts/trading";
+import { requirePrincipal } from "@/lib/server/auth/request-auth";
+import {
+  enforcePrincipalRateLimit,
+  rateLimitHeaders,
+  requireIdempotencyKey,
+} from "@/lib/server/http/creatorx-route";
+import { ApiError } from "@/lib/server/http/api-error";
+import { corsPreflight, withApiRoute } from "@/lib/server/http/route-handler";
+import { placeOrder } from "@/lib/server/trading/matching-service";
 
-export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export const POST = withApiRoute(async (request, { requestId }) => {
+  const principal = await requirePrincipal(request);
+  const rateLimit = await enforcePrincipalRateLimit(principal, "place-order");
+  const idempotencyKey = requireIdempotencyKey(request);
+  const body = await request.json().catch(() => null);
+  const parsed = placeOrderRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ApiError(400, "INVALID_ORDER_INPUT", "The order input is invalid.");
   }
 
-  try {
-    const json: unknown = await req.json();
-    const tradeResult = placeOrderInputSchema.safeParse(json);
+  const result = await placeOrder(principal, parsed.data, idempotencyKey);
+  return Response.json(result, {
+    status: result.responseStatus,
+    headers: {
+      ...rateLimitHeaders(rateLimit),
+      "x-request-id": requestId,
+    },
+  });
+});
 
-    if (!tradeResult.success) {
-      return NextResponse.json(
-        { error: tradeResult.error.message },
-        { status: 400 }
-      );
-    }
-
-    const { creatorId, side, price, quantity, orderType } = tradeResult.data;
-
-    const order = await placeOrder(
-      session.user.id,
-      creatorId,
-      side,
-      price,
-      quantity,
-      orderType
-    );
-
-    return NextResponse.json({ order });
-  } catch (error) {
-    console.error("Trade error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Trade failed" },
-      { status: 400 }
-    );
-  }
-}
+export const OPTIONS = corsPreflight;

@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { appInTossDemoData } from "@/lib/appintoss-demo-data";
 import {
-  orderSchema,
   type PlaceOrderInput,
   type RequestOptions,
 } from "@/lib/data/contracts";
@@ -11,14 +10,14 @@ import { CreatorXClientError } from "@/lib/data/errors";
 import { RemoteDataClient } from "@/lib/data/remote-client";
 import type { AsyncKeyValueStore } from "@/lib/storage/client-storage";
 
-const API_BASE_URL = new URL("https://api.example.com/base/ignored");
+const API_BASE_URL = new URL("https://api.example.com/");
 const CREATOR_ID = appInTossDemoData.creators[0].id;
 const ORDER_INPUT: PlaceOrderInput = {
   creatorId: CREATOR_ID,
   side: "BUY",
   orderType: "LIMIT",
-  price: 1_200,
-  quantity: 2,
+  limitPrice: "1200",
+  quantity: "2",
 };
 
 function createFetchMock() {
@@ -59,7 +58,7 @@ async function createWireFixtures() {
     orderBook: await demo.getOrderBook(CREATOR_ID),
     dashboard: await demo.getDashboard(),
     portfolio: await demo.getPortfolio(),
-    order: orderSchema.parse(appInTossDemoData.orders[CREATOR_ID][0]),
+    order: await demo.placeOrder(ORDER_INPUT),
   };
 }
 
@@ -157,7 +156,7 @@ describe("RemoteDataClient", () => {
         url,
         expect.objectContaining({
           method: "GET",
-          credentials: "include",
+          credentials: "same-origin",
           signal,
         }),
       );
@@ -256,6 +255,84 @@ describe("RemoteDataClient", () => {
       expect(fetchFn).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("refreshes once after one authenticated GET 401 and replays only that GET", async () => {
+    const fetchFn = createFetchMock()
+      .mockResolvedValueOnce(
+        Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(Response.json({ categories: ["K-POP"] }));
+    const getAccessToken = vi.fn().mockResolvedValue("access-token-a");
+    const refreshAccessToken = vi.fn().mockResolvedValue("access-token-b");
+    const client = new RemoteDataClient({
+      baseUrl: API_BASE_URL,
+      fetchFn,
+      getAccessToken,
+      refreshAccessToken,
+    });
+
+    await expect(client.listCategories()).resolves.toEqual(["K-POP"]);
+    expect(refreshAccessToken).toHaveBeenCalledWith("access-token-a");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchFn.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer access-token-a",
+    );
+    expect(new Headers(fetchFn.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer access-token-b",
+    );
+  });
+
+  it("treats a second authenticated GET 401 as terminal after one refresh replay", async () => {
+    const fetchFn = createFetchMock()
+      .mockResolvedValueOnce(
+        Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+      );
+    const refreshAccessToken = vi.fn().mockResolvedValue("access-token-b");
+    const client = new RemoteDataClient({
+      baseUrl: API_BASE_URL,
+      fetchFn,
+      getAccessToken: async () => "access-token-a",
+      refreshAccessToken,
+    });
+
+    await expect(client.listCategories()).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+      status: 401,
+    });
+    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchFn.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer access-token-a",
+    );
+    expect(new Headers(fetchFn.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer access-token-b",
+    );
+  });
+
+  it("does not refresh or replay a mutation after an unauthorized response", async () => {
+    const fetchFn = createFetchMock().mockResolvedValue(
+      Response.json({ error: { code: "UNAUTHORIZED" } }, { status: 401 }),
+    );
+    const refreshAccessToken = vi.fn().mockResolvedValue("access-token-b");
+    const client = new RemoteDataClient({
+      baseUrl: API_BASE_URL,
+      fetchFn,
+      getAccessToken: async () => "access-token-a",
+      refreshAccessToken,
+    });
+
+    await expect(client.placeOrder(ORDER_INPUT)).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+    await expect(client.cancelOrder("order-1")).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
 
   it("never retries an abort or an existing CreatorXClientError", async () => {
     const abortError = new DOMException("aborted", "AbortError");
@@ -395,13 +472,14 @@ describe("RemoteDataClient", () => {
       "https://api.example.com/api/trade",
       expect.objectContaining({
         method: "POST",
-        credentials: "include",
+        credentials: "same-origin",
         signal,
-        body: JSON.stringify(ORDER_INPUT),
+        body: expect.any(String),
       }),
     );
     const request = fetchFn.mock.calls[0][1];
     const headers = new Headers(request?.headers);
+    expect(JSON.parse(String(request?.body))).toEqual(ORDER_INPUT);
     expect(headers.get("Authorization")).toBe("Bearer access-token");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.get("Idempotency-Key")).toBe("caller-key-123");

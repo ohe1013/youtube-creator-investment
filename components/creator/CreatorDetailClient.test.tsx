@@ -26,7 +26,7 @@ vi.mock("@/components/market/OrderBook", () => ({ OrderBook: () => null }));
 vi.mock("@/components/market/RecentTrades", () => ({ RecentTrades: () => null }));
 vi.mock("@/components/market/MarketChart", () => ({ MarketChart: () => null }));
 
-const creator: Creator = {
+const creator = {
   id: "creator/special?",
   youtubeChannelId: "youtube-1",
   name: "Creator One",
@@ -53,19 +53,24 @@ const creator: Creator = {
   updatedAt: "2026-07-10T00:00:00.000Z",
   lastSyncedAt: "2026-07-10T00:00:00.000Z",
   _count: { videos: 30 },
-};
+} as unknown as Creator;
 
-const acceptedOrder: Order = {
+const acceptedOrder = {
   id: "order-1",
   creatorId: creator.id,
-  type: "BUY",
+  side: "BUY",
   orderType: "LIMIT",
-  price: 125,
-  quantity: 2,
-  filled: 0,
+  price: "125",
+  quantity: "2",
+  filled: "0",
+  reservedQuote: "250",
+  reservedQuantity: "0",
   status: "OPEN",
+  completedAt: null,
+  cancelReason: null,
   createdAt: "2026-07-10T00:00:00.000Z",
-};
+  updatedAt: "2026-07-10T00:00:00.000Z",
+} as unknown as Order;
 
 beforeEach(() => {
   mocks.refresh.mockReset().mockResolvedValue(undefined);
@@ -108,8 +113,8 @@ it("submits the inline order through the typed client with one idempotency key",
       creatorId: creator.id,
       side: "BUY",
       orderType: "LIMIT",
-      price: 125,
-      quantity: 2,
+      limitPrice: "125",
+      quantity: "2",
     },
     { idempotencyKey: "inline-key" },
   );

@@ -7,6 +7,7 @@ import { CreatorXDataProvider } from "@/components/runtime/CreatorXDataProvider"
 import { LanguageProvider } from "@/lib/LanguageContext";
 import { parseRuntimeConfig } from "@/lib/runtime/config";
 import { CreatorXSessionProvider } from "@/lib/session/CreatorXSessionProvider";
+import { CreatorXTokenRuntimeProvider } from "@/lib/session/CreatorXTokenRuntime";
 
 const config = parseRuntimeConfig({
   NEXT_PUBLIC_APP_IN_TOSS: process.env.NEXT_PUBLIC_APP_IN_TOSS,
@@ -38,11 +39,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
     >
       <LanguageProvider>
         <AppInTossRuntime enabled={config.appInToss} />
-        <CreatorXDataProvider config={config}>
-          <CreatorXSessionProvider config={config}>
-            {children}
-          </CreatorXSessionProvider>
-        </CreatorXDataProvider>
+        <CreatorXTokenRuntimeProvider config={config}>
+          <CreatorXDataProvider config={config}>
+            <CreatorXSessionProvider config={config}>
+              {children}
+            </CreatorXSessionProvider>
+          </CreatorXDataProvider>
+        </CreatorXTokenRuntimeProvider>
       </LanguageProvider>
     </ThemeProvider>
   );

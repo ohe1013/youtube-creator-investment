@@ -31,14 +31,19 @@ vi.mock("@/lib/LanguageContext", () => ({
 const acceptedOrder: Order = {
   id: "order-1",
   creatorId: "creator-1",
-  type: "BUY",
+  side: "BUY",
   orderType: "MARKET",
-  price: 125,
-  quantity: 2,
-  filled: 2,
+  price: "125",
+  quantity: "2",
+  filled: "2",
+  reservedQuote: "0",
+  reservedQuantity: "0",
   status: "FILLED",
+  completedAt: "2026-07-10T00:00:00.000Z",
+  cancelReason: null,
   createdAt: "2026-07-10T00:00:00.000Z",
-};
+  updatedAt: "2026-07-10T00:00:00.000Z",
+} as unknown as Order;
 
 function renderForm(
   placeOrder: CreatorXDataClient["placeOrder"],
@@ -80,8 +85,7 @@ function ConcurrentSubmissionHarness() {
             creatorId: "creator-a",
             side: "BUY",
             orderType: "MARKET",
-            price: 100,
-            quantity: 1,
+            quantity: "1",
           });
         }}
       >
@@ -94,8 +98,7 @@ function ConcurrentSubmissionHarness() {
             creatorId: "creator-b",
             side: "BUY",
             orderType: "MARKET",
-            price: 200,
-            quantity: 1,
+            quantity: "1",
           });
         }}
       >
@@ -146,9 +149,9 @@ describe("OrderForm", () => {
       ...acceptedOrder,
       id: "order-a",
       creatorId: "creator-a",
-      price: 100,
-      quantity: 1,
-    });
+      price: "100",
+      quantity: "1",
+    } as unknown as Order);
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("submission-state")).toHaveTextContent("busy");
 
@@ -156,9 +159,9 @@ describe("OrderForm", () => {
       ...acceptedOrder,
       id: "order-b",
       creatorId: "creator-b",
-      price: 200,
-      quantity: 1,
-    });
+      price: "200",
+      quantity: "1",
+    } as unknown as Order);
     await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("submission-state")).toHaveTextContent("idle");
   });
@@ -178,8 +181,7 @@ describe("OrderForm", () => {
         creatorId: "creator-1",
         side: "BUY",
         orderType: "MARKET",
-        price: 125,
-        quantity: 2,
+        quantity: "2",
       },
       { idempotencyKey: "key-1" },
     );
@@ -362,7 +364,7 @@ describe("OrderForm", () => {
           true,
         ),
       )
-      .mockResolvedValueOnce({ ...acceptedOrder, quantity: 3 });
+      .mockResolvedValueOnce({ ...acceptedOrder, quantity: "3" } as unknown as Order);
     renderForm(placeOrder);
     enterQuantity("2");
     submitBuy();
