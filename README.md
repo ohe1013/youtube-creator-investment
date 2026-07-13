@@ -1,5 +1,17 @@
 # YouTube Creator Investment Platform
 
+## Apps-in-Toss Android Sandbox
+
+Follow the [Android Sandbox operator runbook](docs/apps-in-toss-sandbox.md). From the repository root, install the pinned project-local Android tools, run the preflight doctor, and then start the Sandbox development session:
+
+```powershell
+npm run sandbox:android:install-tools -- -AcceptLicense
+npm run sandbox:android:doctor
+npm run sandbox:android:dev
+```
+
+The registered app identity and Sandbox deep link are `creatorx` and `intoss://creatorx`.
+
 유튜브 크리에이터의 성장을 추적하고 가상 투자 게임을 즐길 수 있는 플랫폼입니다.
 
 ## 🚀 주요 기능
