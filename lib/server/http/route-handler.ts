@@ -10,9 +10,14 @@ import {
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export type ApiRouteContext = { requestId: string };
-export type ApiRouteHandler<TContext extends object = Record<string, never>> = (
+export type ApiRouteHandler<TContext extends object = object> = (
   request: Request,
   context: TContext & ApiRouteContext,
+) => Promise<Response>;
+export type StaticApiRouteHandler = (request: Request) => Promise<Response>;
+export type DynamicApiRouteHandler<TContext extends object> = (
+  request: Request,
+  context: TContext,
 ) => Promise<Response>;
 export type ApiRouteOptions = {
   isProduction?: boolean;
@@ -67,7 +72,15 @@ function resolveOptions(options: ApiRouteOptions) {
   };
 }
 
-export function withApiRoute<TContext extends object = Record<string, never>>(
+export function withApiRoute(
+  handler: ApiRouteHandler<object>,
+  options?: ApiRouteOptions,
+): StaticApiRouteHandler;
+export function withApiRoute<TContext extends object>(
+  handler: ApiRouteHandler<TContext>,
+  options?: ApiRouteOptions,
+): DynamicApiRouteHandler<TContext>;
+export function withApiRoute<TContext extends object>(
   handler: ApiRouteHandler<TContext>,
   options: ApiRouteOptions = {},
 ) {
