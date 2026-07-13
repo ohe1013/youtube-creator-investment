@@ -75,6 +75,39 @@ describe("CreatorX guest-session token security", () => {
     }
   });
 
+  it("derives exp from the exact iat epoch second across a clock boundary", async () => {
+    vi.useFakeTimers();
+    const issuedAt = new Date("2026-07-13T00:00:00.999Z");
+    vi.setSystemTime(issuedAt);
+    const originalSetIssuedAt = SignJWT.prototype.setIssuedAt;
+    const setIssuedAt = vi
+      .spyOn(SignJWT.prototype, "setIssuedAt")
+      .mockImplementation(function (this: SignJWT, input) {
+        const result = originalSetIssuedAt.call(this, input);
+        vi.setSystemTime(new Date("2026-07-13T00:00:01.000Z"));
+        return result;
+      });
+
+    try {
+      const accessToken = await issueCreatorXAccessToken(
+        {
+          userId: "user-boundary",
+          sessionId: "session-boundary",
+          provider: "guest",
+          role: "USER",
+        },
+        security,
+      );
+      const payload = decodeJwt(accessToken);
+
+      expect(payload.iat).toBe(Math.floor(issuedAt.getTime() / 1000));
+      expect(payload.exp).toBe(payload.iat! + ACCESS_TOKEN_TTL_SECONDS);
+    } finally {
+      setIssuedAt.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects expired or wrong-type access tokens", async () => {
     const secret = new TextEncoder().encode(security.accessTokenSecret);
     const expiredAt = Math.floor(

@@ -17,7 +17,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, user }) {
       if (session.user) {
         session.user.id = user.id;
-        session.user.balance = Number(user.balance);
+        session.user.balance = user.balance.toFixed(4);
         session.user.role = user.role;
       }
       return session;

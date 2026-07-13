@@ -1,9 +1,9 @@
 import type { DefaultSession } from "next-auth";
-import type { UserRole } from "@prisma/client";
+import type { Prisma, UserRole } from "@prisma/client";
 
 declare module "next-auth" {
   interface User {
-    balance: number;
+    balance: Prisma.Decimal;
     role: UserRole;
   }
 
@@ -13,7 +13,7 @@ declare module "next-auth" {
   interface Session {
     user: DefaultSession["user"] & {
       id: string;
-      balance: number;
+      balance: string;
       role: UserRole;
     };
   }

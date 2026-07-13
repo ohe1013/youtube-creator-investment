@@ -104,6 +104,8 @@ export async function issueCreatorXAccessToken(
   principal: TokenPrincipal,
   security: Pick<AuthSecurity, "accessTokenSecret"> = readAuthSecurity(),
 ) {
+  const issuedAt = Math.floor(Date.now() / 1000);
+
   return new SignJWT({
     type: ACCESS_TOKEN_TYPE,
     sid: principal.sessionId,
@@ -115,8 +117,8 @@ export async function issueCreatorXAccessToken(
     .setAudience(ACCESS_TOKEN_AUDIENCE)
     .setSubject(principal.userId)
     .setJti(randomUUID())
-    .setIssuedAt()
-    .setExpirationTime(`${ACCESS_TOKEN_TTL_SECONDS}s`)
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + ACCESS_TOKEN_TTL_SECONDS)
     .sign(accessTokenKey(security));
 }
 
