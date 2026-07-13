@@ -2,11 +2,16 @@
 
 ## Apps-in-Toss Android Sandbox
 
-Follow the [Android Sandbox operator runbook](docs/apps-in-toss-sandbox.md). From the repository root, install the pinned project-local Android tools, run the preflight doctor, and then start the Sandbox development session:
+Follow the [Android Sandbox operator runbook](docs/apps-in-toss-sandbox.md). First complete the actual Toss Business console registration for `creatorx`. Then, from the repository root, install the pinned project-local Android tools and run the doctor with that registration explicitly confirmed:
 
 ```powershell
 npm run sandbox:android:install-tools -- -AcceptLicense
-npm run sandbox:android:doctor
+npm run sandbox:android:doctor -- -ConsoleRegistrationConfirmed
+```
+
+Start the Sandbox development session only after the doctor exits `0`:
+
+```powershell
 npm run sandbox:android:dev
 ```
 
