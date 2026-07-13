@@ -27,18 +27,19 @@ export async function GET(
       const bidMap = new Map<number, number>();
 
       orders.forEach((order) => {
-        const remaining = order.quantity - order.filled;
+        const price = Number(order.price);
+        const remaining = Number(order.quantity) - Number(order.filled);
         if (remaining <= 0) return;
 
         if (order.type === "SELL") {
           askMap.set(
-            order.price,
-            (askMap.get(order.price) || 0) + remaining
+            price,
+            (askMap.get(price) || 0) + remaining
           );
         } else {
           bidMap.set(
-            order.price,
-            (bidMap.get(order.price) || 0) + remaining
+            price,
+            (bidMap.get(price) || 0) + remaining
           );
         }
       });
@@ -62,7 +63,7 @@ export async function GET(
       startDate.setDate(startDate.getDate() - days);
 
       // Fetch all trades in that period for price movements.
-      const trades = await prisma.trade.findMany({
+      const trades = await prisma.legacyTrade.findMany({
         where: { creatorId: id, createdAt: { gte: startDate } },
         orderBy: { createdAt: "asc" },
         select: { createdAt: true, price: true, quantity: true },
@@ -76,15 +77,15 @@ export async function GET(
 
       const history = trades.map((t) => ({
         date: t.createdAt,
-        price: t.price,
-        volume: t.quantity * t.price,
+        price: Number(t.price),
+        volume: Number(t.quantity) * Number(t.price),
       }));
 
       // If no trades, use currentPrice or a dummy point from stats
       if (history.length === 0 && creator) {
         history.push({
           date: new Date(),
-          price: creator.initialPrice,
+          price: Number(creator.initialPrice),
           volume: 0,
         });
       }
@@ -93,7 +94,7 @@ export async function GET(
     }
 
     if (tradesParam === "true") {
-      const trades = await prisma.trade.findMany({
+      const trades = await prisma.legacyTrade.findMany({
         where: { creatorId: id },
         orderBy: { createdAt: "desc" },
         take: 50,
@@ -105,7 +106,13 @@ export async function GET(
           createdAt: true,
         },
       });
-      return NextResponse.json({ trades });
+      return NextResponse.json({
+        trades: trades.map((trade) => ({
+          ...trade,
+          price: Number(trade.price),
+          quantity: Number(trade.quantity),
+        })),
+      });
     }
 
     if (statsParam === "true") {
@@ -239,7 +246,14 @@ export async function GET(
       return NextResponse.json({ error: "Creator not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ creator });
+    return NextResponse.json({
+      creator: {
+        ...creator,
+        currentPrice: Number(creator.currentPrice),
+        initialPrice: Number(creator.initialPrice),
+        liquidity: Number(creator.liquidity),
+      },
+    });
   } catch (error) {
     console.error("API Error:", error);
     return NextResponse.json(

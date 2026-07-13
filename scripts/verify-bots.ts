@@ -38,8 +38,8 @@ async function main() {
   // 3. Verify results
   console.log("\n--- Verification Results ---");
 
-  const totalTrades = await prisma.trade.count();
-  const botTrades = await prisma.trade.count({
+  const totalTrades = await prisma.legacyTrade.count();
+  const botTrades = await prisma.legacyTrade.count({
     where: { user: { isBot: true } },
   });
 

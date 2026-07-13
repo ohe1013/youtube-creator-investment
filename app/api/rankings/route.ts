@@ -32,13 +32,15 @@ export async function GET(request: NextRequest) {
       .map((user) => {
         const totalPositionValue = user.positions.reduce(
           (sum, position) =>
-            sum + position.quantity * position.creator.currentPrice,
+            sum +
+            Number(position.quantity) * Number(position.creator.currentPrice),
           0
         );
 
-        const totalAssets = user.balance + totalPositionValue;
-        const profitLoss = totalAssets - user.initialBudget;
-        const profitLossPercent = (profitLoss / user.initialBudget) * 100;
+        const initialBudget = Number(user.initialBudget);
+        const totalAssets = Number(user.balance) + totalPositionValue;
+        const profitLoss = totalAssets - initialBudget;
+        const profitLossPercent = (profitLoss / initialBudget) * 100;
 
         return {
           userId: user.id,

@@ -16,7 +16,7 @@ async function inspect() {
   });
 
   console.log("\n--- Inspecting Trades ---");
-  const trades = await prisma.trade.findMany({
+  const trades = await prisma.legacyTrade.findMany({
     orderBy: { createdAt: "desc" },
     take: 10,
   });

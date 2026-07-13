@@ -18,7 +18,7 @@ export async function placeOrder(
     if (side === "BUY") {
       const user = await tx.user.findUnique({ where: { id: userId } });
       const requiredAmount = price * quantity; // Conservative locking for Limit
-      if (!user || user.balance < requiredAmount) {
+      if (!user || Number(user.balance) < requiredAmount) {
         throw new Error("Insufficient balance");
       }
 
@@ -35,7 +35,7 @@ export async function placeOrder(
       const position = await tx.position.findUnique({
         where: { userId_creatorId: { userId, creatorId } },
       });
-      if (!position || position.quantity < quantity) {
+      if (!position || Number(position.quantity) < quantity) {
         throw new Error("Insufficient position");
       }
       // Deduct shares immediately (lock shares)
@@ -93,24 +93,25 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
     take: 50, // Batch match
   });
 
-  let remainingQty = order.quantity - order.filled;
+  const orderQuantity = Number(order.quantity);
+  let remainingQty = orderQuantity - Number(order.filled);
 
   for (const match of candidates) {
     if (remainingQty <= 0) break;
 
-    const matchRemaining = match.quantity - match.filled;
+    const matchRemaining = Number(match.quantity) - Number(match.filled);
     const fillQty = Math.min(remainingQty, matchRemaining);
     if (fillQty <= 0) continue;
 
     // Execution Price is Maker's Price
-    const tradePrice = match.price;
+    const tradePrice = Number(match.price);
     const tradeValue = fillQty * tradePrice;
 
     // --- EXECUTE TRADE ---
 
     // 1. Create Trade Records
     // Taker Trade
-    await tx.trade.create({
+    await tx.legacyTrade.create({
       data: {
         userId: order.userId,
         creatorId: order.creatorId,
@@ -122,7 +123,7 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
     });
 
     // Maker Trade
-    await tx.trade.create({
+    await tx.legacyTrade.create({
       data: {
         userId: match.userId,
         creatorId: match.creatorId,
@@ -158,8 +159,8 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
           data: {
             quantity: { increment: fillQty },
             avgPrice:
-              (pos.avgPrice * pos.quantity + tradeValue) /
-              (pos.quantity + fillQty),
+              (Number(pos.avgPrice) * Number(pos.quantity) + tradeValue) /
+              (Number(pos.quantity) + fillQty),
           },
         });
       } else {
@@ -179,7 +180,7 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
     // If Taker BUY: Deducted (limit * qty). Filled at tradePrice.
     // Refund diff: (limit - tradePrice) * fillQty
     if (order.type === "BUY") {
-      const lockPrice = order.price;
+      const lockPrice = Number(order.price);
       const refund = (lockPrice - tradePrice) * fillQty;
       if (refund > 0) {
         await tx.user.update({
@@ -203,8 +204,8 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
           data: {
             quantity: { increment: fillQty },
             avgPrice:
-              (pos.avgPrice * pos.quantity + tradeValue) /
-              (pos.quantity + fillQty),
+              (Number(pos.avgPrice) * Number(pos.quantity) + tradeValue) /
+              (Number(pos.quantity) + fillQty),
           },
         });
       } else {
@@ -227,8 +228,9 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
     }
 
     // 3. Update Maker Order Status
-    const matchNewFilled = match.filled + fillQty;
-    const matchStatus = matchNewFilled >= match.quantity ? "FILLED" : "PARTIAL";
+    const matchNewFilled = Number(match.filled) + fillQty;
+    const matchStatus =
+      matchNewFilled >= Number(match.quantity) ? "FILLED" : "PARTIAL";
     await tx.order.update({
       where: { id: match.id },
       data: { filled: matchNewFilled, status: matchStatus },
@@ -247,13 +249,13 @@ async function matchOrder(tx: Prisma.TransactionClient, orderId: string) {
   const status =
     remainingQty <= 0
       ? "FILLED"
-      : remainingQty < order.quantity
+      : remainingQty < orderQuantity
       ? "PARTIAL"
       : "OPEN";
   await tx.order.update({
     where: { id: order.id },
     data: {
-      filled: order.quantity - remainingQty,
+      filled: orderQuantity - remainingQty,
       status,
     },
   });
@@ -273,11 +275,11 @@ export async function cancelOrder(userId: string, orderId: string) {
       throw new Error("Cannot cancel order");
     }
 
-    const remainingQty = order.quantity - order.filled;
+    const remainingQty = Number(order.quantity) - Number(order.filled);
 
     // Refund
     if (order.type === "BUY") {
-      const lockedFund = remainingQty * order.price;
+      const lockedFund = remainingQty * Number(order.price);
       await tx.user.update({
         where: { id: userId },
         data: { balance: { increment: lockedFund } },

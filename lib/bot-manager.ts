@@ -45,7 +45,7 @@ export async function executeBotTrade() {
   const isMaker = Math.random() < 0.7; // 70% chance to place passive limit order
 
   try {
-    const currentPrice = creator.currentPrice;
+    const currentPrice = Number(creator.currentPrice);
 
     if (isMaker) {
       // --- MAKER STRATEGY ---
@@ -63,19 +63,19 @@ export async function executeBotTrade() {
       if (price < 1) price = 1;
 
       // Quantity logic
-      const balanceToUse = randomBot.balance * 0.05; // Use 5% of balance for makers
+      const balanceToUse = Number(randomBot.balance) * 0.05; // Use 5% of balance for makers
       const quantity = Math.max(1, Math.floor(balanceToUse / price));
 
       if (side === "SELL") {
         // Check if bot has shares to sell
         const pos = randomBot.positions.find((p) => p.creatorId === creator.id);
-        if (!pos || pos.quantity < 1) {
+        if (!pos || Number(pos.quantity) < 1) {
           // Can't sell what we don't have. Switch to BUY or skip.
           // Let's Skip to avoid error spam
           return;
         }
         // Cap quantity to owned
-        const sellQty = Math.min(quantity, pos.quantity);
+        const sellQty = Math.min(quantity, Number(pos.quantity));
         await placeOrder(
           randomBot.id,
           creator.id,
@@ -121,8 +121,8 @@ export async function executeBotTrade() {
 
       if (side === "SELL") {
         const pos = randomBot.positions.find((p) => p.creatorId === creator.id);
-        if (!pos || pos.quantity < 1) return;
-        const sellQty = Math.min(quantity, pos.quantity);
+        if (!pos || Number(pos.quantity) < 1) return;
+        const sellQty = Math.min(quantity, Number(pos.quantity));
         await placeOrder(
           randomBot.id,
           creator.id,

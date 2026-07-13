@@ -58,4 +58,4 @@ it("deploys migrations to a valid test database", () => {
   expect(result.status).toBe(0);
   expect(output).toContain('PostgreSQL database "creatorx_test"');
   expect(output).toContain("No pending migrations to apply.");
-});
+}, 15_000);

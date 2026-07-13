@@ -32,7 +32,8 @@ async function main() {
   for (const creator of creators) {
     console.log(`Processing ${creator.name} (${creator.currentPrice} P)...`);
 
-    const price = creator.currentPrice > 0 ? creator.currentPrice : 100;
+    const currentPrice = Number(creator.currentPrice);
+    const price = currentPrice > 0 ? currentPrice : 100;
 
     // --- SEED ASKS (SELLS) ---
     // Bots need Shares to sell

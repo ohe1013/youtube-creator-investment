@@ -20,7 +20,7 @@ export async function GET() {
     });
 
     const totalMarketCap = activeCreators.reduce(
-      (sum, c) => sum + c.currentPrice * (c.circulatingSupply || 0),
+      (sum, c) => sum + Number(c.currentPrice) * (c.circulatingSupply || 0),
       0
     );
 
@@ -28,12 +28,12 @@ export async function GET() {
     const oneDayAgo = new Date();
     oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-    const last24hTrades = await prisma.trade.findMany({
+    const last24hTrades = await prisma.legacyTrade.findMany({
       where: { createdAt: { gte: oneDayAgo } },
       select: { price: true, quantity: true },
     });
     const totalVolume24h = last24hTrades.reduce(
-      (sum, t) => sum + t.price * t.quantity,
+      (sum, t) => sum + Number(t.price) * Number(t.quantity),
       0
     );
 
@@ -76,13 +76,14 @@ export async function GET() {
       });
       if (user) {
         const portfolioValue = user.positions.reduce(
-          (sum, p) => sum + p.quantity * p.creator.currentPrice,
+          (sum, p) =>
+            sum + Number(p.quantity) * Number(p.creator.currentPrice),
           0
         );
         userSnapshot = {
-          balance: user.balance,
+          balance: Number(user.balance),
           portfolioValue,
-          totalAssets: user.balance + portfolioValue,
+          totalAssets: Number(user.balance) + portfolioValue,
           topHolding: user.positions[0]?.creator.name || null,
         };
       }
@@ -97,9 +98,15 @@ export async function GET() {
       },
       rankings: topRankings.map((r) => ({
         ...r,
-        marketCap: r.currentPrice * (r.circulatingSupply || 200000),
+        currentPrice: Number(r.currentPrice),
+        marketCap: Number(r.currentPrice) * (r.circulatingSupply || 200000),
       })),
-      newListings,
+      newListings: newListings.map((creator) => ({
+        ...creator,
+        currentPrice: Number(creator.currentPrice),
+        initialPrice: Number(creator.initialPrice),
+        liquidity: Number(creator.liquidity),
+      })),
       user: userSnapshot,
     });
   } catch (error) {

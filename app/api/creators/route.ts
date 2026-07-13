@@ -109,6 +109,9 @@ export async function GET(request: NextRequest) {
 
     const summaries: CreatorSummary[] = creators.map((creator) => ({
       ...creator,
+      initialPrice: Number(creator.initialPrice),
+      currentPrice: Number(creator.currentPrice),
+      liquidity: Number(creator.liquidity),
       createdAt: creator.createdAt.toISOString(),
       lastSyncedAt: creator.lastSyncedAt.toISOString(),
     }));

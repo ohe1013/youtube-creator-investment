@@ -9,30 +9,31 @@ datasource db {
 }
 
 model Creator {
-  id                String        @id @default(cuid())
-  youtubeChannelId  String        @unique
+  id                String           @id @default(cuid())
+  youtubeChannelId  String           @unique
   name              String
   thumbnailUrl      String?
   category          String?
   country           String?
-  currentSubs       Float         @default(0)
-  currentViews      Float         @default(0)
-  currentVideos     Float         @default(0)
-  currentScore      Float         @default(0)
-  currentPrice      Float         @default(100)
-  isActive          Boolean       @default(true)
-  visibility        Visibility    @default(PUBLIC)
-  lastSyncedAt      DateTime      @updatedAt
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-  circulatingSupply Float         @default(200000)
-  initialPrice      Float         @default(100)
-  liquidity         Float         @default(10000)
-  reserveSupply     Float         @default(800000)
-  totalSupply       Float         @default(1000000)
+  currentSubs       Float            @default(0)
+  currentViews      Float            @default(0)
+  currentVideos     Float            @default(0)
+  currentScore      Float            @default(0)
+  currentPrice      Decimal          @default(100) @db.Decimal(20, 4)
+  isActive          Boolean          @default(true)
+  visibility        Visibility       @default(PUBLIC)
+  lastSyncedAt      DateTime         @updatedAt
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  circulatingSupply Float            @default(200000)
+  initialPrice      Decimal          @default(100) @db.Decimal(20, 4)
+  liquidity         Decimal          @default(10000) @db.Decimal(20, 4)
+  reserveSupply     Float            @default(800000)
+  totalSupply       Float            @default(1000000)
   stats             CreatorStat[]
   positions         Position[]
-  trades            Trade[]
+  legacyTrades      LegacyTrade[]
+  tradeExecutions   TradeExecution[]
   videos            Video[]
 
   // Aggregated Content Stats (Managed by Cron)
@@ -96,47 +97,54 @@ model Video {
 }
 
 model User {
-  id            String     @id @default(cuid())
-  name          String?
-  email         String?    @unique
-  emailVerified DateTime?
-  image         String?
-  role          UserRole   @default(USER)
-  initialBudget Float      @default(100000)
-  balance       Float      @default(100000)
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-  isBot         Boolean    @default(false)
-  accounts      Account[]
-  positions     Position[]
-  sessions      Session[]
-  trades        Trade[]
-  orders        Order[]
+  id                 String              @id @default(cuid())
+  name               String?
+  email              String?             @unique
+  emailVerified      DateTime?
+  image              String?
+  role               UserRole            @default(USER)
+  initialBudget      Decimal             @default(100000) @db.Decimal(20, 4)
+  balance            Decimal             @default(100000) @db.Decimal(20, 4)
+  reservedBalance    Decimal             @default(0) @db.Decimal(20, 4)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  isBot              Boolean             @default(false)
+  accounts           Account[]
+  positions          Position[]
+  sessions           Session[]
+  legacyTrades       LegacyTrade[]
+  orders             Order[]
+  identities         AuthIdentity[]
+  appSessions        AppSession[]
+  idempotencyRecords IdempotencyRecord[]
+  boughtExecutions   TradeExecution[]    @relation("ExecutionBuyer")
+  soldExecutions     TradeExecution[]    @relation("ExecutionSeller")
 }
 
 model Position {
-  id        String   @id @default(cuid())
-  userId    String
-  creatorId String
-  quantity  Float
-  avgPrice  Float
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  creator   Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String   @id @default(cuid())
+  userId           String
+  creatorId        String
+  quantity         Decimal  @db.Decimal(20, 8)
+  reservedQuantity Decimal  @default(0) @db.Decimal(20, 8)
+  avgPrice         Decimal  @db.Decimal(20, 4)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  creator          Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, creatorId])
   @@index([userId])
 }
 
-model Trade {
+model LegacyTrade {
   id        String    @id @default(cuid())
   userId    String
   creatorId String
   orderId   String? // Link to the Order that generated this trade (if any)
   type      TradeType
-  quantity  Float
-  price     Float
+  quantity  Decimal   @db.Decimal(20, 8)
+  price     Decimal   @db.Decimal(20, 4)
   createdAt DateTime  @default(now())
   creator   Creator   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -144,6 +152,7 @@ model Trade {
 
   @@index([userId, createdAt])
   @@index([creatorId])
+  @@index([orderId])
 }
 
 model Account {
@@ -205,6 +214,11 @@ enum TradeType {
   SELL
 }
 
+enum IdentityProvider {
+  GUEST
+  TOSS
+}
+
 enum OrderType {
   LIMIT
   MARKET
@@ -218,23 +232,115 @@ enum OrderStatus {
 }
 
 model Order {
-  id        String      @id @default(cuid())
-  userId    String
-  creatorId String
-  type      TradeType // BUY or SELL side
-  orderType OrderType   @default(LIMIT)
-  price     Float // Limit Price
-  quantity  Float // Original Quantity
-  filled    Float       @default(0) // Filled Quantity
-  status    OrderStatus @default(OPEN)
+  id               String      @id @default(cuid())
+  userId           String
+  creatorId        String
+  type             TradeType // BUY or SELL side
+  orderType        OrderType   @default(LIMIT)
+  price            Decimal     @db.Decimal(20, 4) // Limit Price
+  quantity         Decimal     @db.Decimal(20, 8) // Original Quantity
+  filled           Decimal     @default(0) @db.Decimal(20, 8) // Filled Quantity
+  reservedQuote    Decimal     @default(0) @db.Decimal(20, 4)
+  reservedQuantity Decimal     @default(0) @db.Decimal(20, 8)
+  status           OrderStatus @default(OPEN)
+  completedAt      DateTime?
+  cancelReason     String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  creator Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trades  Trade[]
+  creator         Creator          @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  legacyTrades    LegacyTrade[]
+  makerExecutions TradeExecution[] @relation("MakerOrderExecution")
+  takerExecutions TradeExecution[] @relation("TakerOrderExecution")
 
   @@index([creatorId, status, type, price]) // For matching engine (Price-Time priority)
   @@index([userId])
+}
+
+model AuthIdentity {
+  id        String           @id @default(cuid())
+  provider  IdentityProvider
+  subject   String
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions  AppSession[]
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([provider, subject])
+  @@index([userId])
+}
+
+model AppSession {
+  id               String       @id @default(cuid())
+  userId           String
+  identityId       String
+  refreshFamilyId  String
+  refreshTokenHash String       @unique
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  replacedById     String?      @unique
+  lastUsedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  identity         AuthIdentity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  replacedBy       AppSession?  @relation("SessionReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces         AppSession?  @relation("SessionReplacement")
+
+  @@index([userId])
+  @@index([identityId])
+  @@index([refreshFamilyId])
+  @@index([expiresAt])
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(cuid())
+  userId         String
+  operation      String
+  key            String
+  requestHash    String
+  state          String
+  responseStatus Int?
+  responseBody   Json?
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, operation, key])
+  @@index([expiresAt])
+}
+
+model TradeExecution {
+  id           String   @id @default(cuid())
+  makerOrderId String
+  takerOrderId String
+  buyerId      String
+  sellerId     String
+  creatorId    String
+  price        Decimal  @db.Decimal(20, 4)
+  quantity     Decimal  @db.Decimal(20, 8)
+  quoteAmount  Decimal  @db.Decimal(20, 4)
+  executedAt   DateTime @default(now())
+  makerOrder   Order    @relation("MakerOrderExecution", fields: [makerOrderId], references: [id], onDelete: Restrict)
+  takerOrder   Order    @relation("TakerOrderExecution", fields: [takerOrderId], references: [id], onDelete: Restrict)
+  buyer        User     @relation("ExecutionBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller       User     @relation("ExecutionSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  creator      Creator  @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+
+  @@index([makerOrderId])
+  @@index([takerOrderId])
+  @@index([buyerId, executedAt])
+  @@index([sellerId, executedAt])
+  @@index([creatorId, executedAt])
+}
+
+model RateLimitBucket {
+  keyHash   String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
 }

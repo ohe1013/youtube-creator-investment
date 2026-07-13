@@ -48,7 +48,7 @@ export async function GET() {
     });
 
     // 4. Trade History
-    const trades = await prisma.trade.findMany({
+    const trades = await prisma.legacyTrade.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
       take: 50,
@@ -58,10 +58,30 @@ export async function GET() {
     });
 
     return NextResponse.json({
-      balance: user?.balance || 0,
-      positions,
-      openOrders,
-      trades,
+      balance: user ? Number(user.balance) : 0,
+      positions: positions.map((position) => ({
+        ...position,
+        quantity: Number(position.quantity),
+        reservedQuantity: Number(position.reservedQuantity),
+        avgPrice: Number(position.avgPrice),
+        creator: {
+          ...position.creator,
+          currentPrice: Number(position.creator.currentPrice),
+        },
+      })),
+      openOrders: openOrders.map((order) => ({
+        ...order,
+        price: Number(order.price),
+        quantity: Number(order.quantity),
+        filled: Number(order.filled),
+        reservedQuote: Number(order.reservedQuote),
+        reservedQuantity: Number(order.reservedQuantity),
+      })),
+      trades: trades.map((trade) => ({
+        ...trade,
+        price: Number(trade.price),
+        quantity: Number(trade.quantity),
+      })),
     });
   } catch (error) {
     console.error("Portfolio Fetch Error:", error);
