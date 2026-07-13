@@ -35,6 +35,18 @@ Do not set `CREATORX_DEV_CORS_ORIGINS` in production. Vercel's `VERCEL=1` attest
 
 The API CORS allowlist is code-managed and contains only the private and published CreatorX Toss origins. Do not add wildcard or static CORS headers in `vercel.json`.
 
+## Accepted Supabase PostgreSQL topology
+
+`npm run production:preflight` intentionally accepts only these non-secret endpoint shapes for the same `<project-ref>` and database name:
+
+| URL | Host and port | Required username shape |
+| --- | --- | --- |
+| `DIRECT_URL` | `db.<project-ref>.supabase.co:5432` | Any approved direct database role. |
+| `DATABASE_URL` (shared Supavisor) | `aws-<region>.pooler.supabase.com:5432` or `:6543` | A role ending in `.<project-ref>`, such as `postgres.<project-ref>`. |
+| `DATABASE_URL` (dedicated runtime) | `db.<project-ref>.supabase.co:6543` | An approved runtime database role. |
+
+Set `pgbouncer=true` on `DATABASE_URL` for Prisma compatibility; it does not make a direct endpoint into a runtime pooler. `DIRECT_URL` must remain the direct `db.<project-ref>.supabase.co:5432` endpoint and must not set that option. The preflight derives the project ref from `DIRECT_URL`, then rejects a runtime URL for another project, a direct endpoint used as runtime, a pooler used as direct, or a generic remote PostgreSQL URL. Never paste credentials into this runbook or release evidence.
+
 ## Release sequence
 
 1. Configure the values above in the Vercel Production environment scope and keep Preview/Development values separate.

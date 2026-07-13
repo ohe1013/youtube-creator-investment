@@ -12,12 +12,20 @@ import {
 } from "../../scripts/production-preflight.mjs";
 import { scanClientSecrets } from "../../scripts/scan-client-secrets.mjs";
 
+const SUPABASE_PROJECT_REF = "creatorxprojectref";
+const OTHER_SUPABASE_PROJECT_REF = "othercreatorxprojectref";
+const SUPABASE_POOLER_HOST = "aws-0-ap-northeast-2.pooler.supabase.com";
+const SUPABASE_DIRECT_HOST = `db.${SUPABASE_PROJECT_REF}.supabase.co`;
+const SUPABASE_SHARED_RUNTIME_URL =
+  `postgresql://postgres.${SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:6543/postgres?pgbouncer=true`;
+const SUPABASE_DIRECT_URL =
+  `postgresql://postgres:password@${SUPABASE_DIRECT_HOST}:5432/postgres?sslmode=require`;
+
 const validProductionEnvironment = {
   NODE_ENV: "production",
   VERCEL: "1",
-  DATABASE_URL:
-    "postgresql://runtime:password@db.creatorx.example:6543/postgres?pgbouncer=true",
-  DIRECT_URL: "postgresql://migration:password@db.creatorx.example:5432/postgres",
+  DATABASE_URL: SUPABASE_SHARED_RUNTIME_URL,
+  DIRECT_URL: SUPABASE_DIRECT_URL,
   CREATORX_ACCESS_TOKEN_SECRET: "a".repeat(64),
   CREATORX_IDENTITY_PEPPER: "p".repeat(32),
   CRON_SECRET: "c".repeat(48),
@@ -112,12 +120,117 @@ describe("production preflight", () => {
     ).toThrow("remote HTTPS URL");
   });
 
-  it("requires the pooled runtime and direct migration database URLs to remain separate", () => {
+  it.each(["6543", "5432"])(
+    "accepts a shared Supavisor runtime on port %s for the direct project",
+    (runtimePort) => {
+      expect(
+        validateProductionEnvironment({
+          ...validProductionEnvironment,
+          DATABASE_URL:
+            `postgresql://postgres%2E${SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:${runtimePort}/postgres?pgbouncer=true`,
+        }),
+      ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
+    },
+  );
+
+  it("accepts a dedicated Supabase runtime on port 6543 for the direct project", () => {
+    expect(
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          `postgresql://postgres:password@${SUPABASE_DIRECT_HOST}:6543/postgres?pgbouncer=true`,
+      }),
+    ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
+  });
+
+  it("rejects the direct Supabase endpoint as DATABASE_URL even with pgbouncer compatibility", () => {
     expect(() =>
       validateProductionEnvironment({
         ...validProductionEnvironment,
         DATABASE_URL:
-          "postgresql://runtime:password@direct.creatorx.example:5432/postgres",
+          `postgresql://postgres:password@${SUPABASE_DIRECT_HOST}:5432/postgres?pgbouncer=true`,
+      }),
+    ).toThrow("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
+  });
+
+  it("rejects a Supavisor endpoint as DIRECT_URL", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DIRECT_URL:
+          `postgresql://postgres.${SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:5432/postgres?sslmode=require`,
+      }),
+    ).toThrow("DIRECT_URL must use a Supabase direct PostgreSQL URL");
+  });
+
+  it("rejects a runtime URL for another Supabase project", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          `postgresql://postgres:password@db.${OTHER_SUPABASE_PROJECT_REF}.supabase.co:6543/postgres?pgbouncer=true`,
+      }),
+    ).toThrow("DATABASE_URL must target the same Supabase project as DIRECT_URL");
+  });
+
+  it.each([
+    [
+      "no username",
+      `postgresql://${SUPABASE_POOLER_HOST}:6543/postgres?pgbouncer=true`,
+    ],
+    [
+      "a different project reference in the username",
+      `postgresql://postgres.${OTHER_SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:6543/postgres?pgbouncer=true`,
+    ],
+  ])("rejects a shared Supavisor runtime with %s", (_label, databaseUrl) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL: databaseUrl,
+      }),
+    ).toThrow(
+      "DATABASE_URL must use a Supabase pooler username for the DIRECT_URL project",
+    );
+  });
+
+  it("fails closed for malformed percent escapes in a shared pooler username", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          `postgresql://postgres%ZZ${SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:6543/postgres?pgbouncer=true`,
+      }),
+    ).toThrow("DATABASE_URL must be a PostgreSQL URL");
+  });
+
+  it.each([
+    [
+      "a generic runtime provider URL",
+      "DATABASE_URL",
+      "postgresql://runtime:password@runtime.creatorx.example:6543/postgres?pgbouncer=true",
+      "DATABASE_URL must use a supported Supabase runtime PostgreSQL URL",
+    ],
+    [
+      "a generic direct provider URL",
+      "DIRECT_URL",
+      "postgresql://migration:password@direct.creatorx.example:5432/postgres?sslmode=require",
+      "DIRECT_URL must use a Supabase direct PostgreSQL URL",
+    ],
+  ])("rejects %s", (_label, key, value, message) => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        [key]: value,
+      }),
+    ).toThrow(message);
+  });
+
+  it("keeps pgbouncer=true as a Prisma runtime compatibility requirement", () => {
+    expect(() =>
+      validateProductionEnvironment({
+        ...validProductionEnvironment,
+        DATABASE_URL:
+          `postgresql://postgres.${SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:6543/postgres`,
       }),
     ).toThrow("DATABASE_URL must be a pooled PostgreSQL URL");
 
@@ -125,7 +238,7 @@ describe("production preflight", () => {
       validateProductionEnvironment({
         ...validProductionEnvironment,
         DIRECT_URL:
-          "postgresql://migration:password@direct.creatorx.example:6543/postgres?pgbouncer=true",
+          `postgresql://postgres:password@${SUPABASE_DIRECT_HOST}:5432/postgres?pgbouncer=true`,
       }),
     ).toThrow("DIRECT_URL must be a direct PostgreSQL URL");
 
@@ -137,63 +250,12 @@ describe("production preflight", () => {
     ).toThrow("DATABASE_URL and DIRECT_URL must not be the same URL");
   });
 
-  it("rejects direct migration URLs that reuse the pooled database endpoint", () => {
-    expect(() =>
-      validateProductionEnvironment({
-        ...validProductionEnvironment,
-        DIRECT_URL:
-          "postgres://migration:other-password@DB.CREATORX.EXAMPLE.:6543/postgres?sslmode=require",
-      }),
-    ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
-  });
-
-  it.each([
-    [
-      "a percent-encoded database pathname",
-      {
-        DATABASE_URL:
-          "postgresql://runtime:password@db.creatorx.example:6543/%70ostgres?pgbouncer=true",
-        DIRECT_URL:
-          "postgresql://migration:password@db.creatorx.example:6543/postgres?sslmode=require",
-      },
-    ],
-    [
-      "percent-encoded hostname dots",
-      {
-        DATABASE_URL:
-          "postgresql://runtime:password@db%2ecreatorx%2eexample:6543/postgres?pgbouncer=true",
-        DIRECT_URL:
-          "postgresql://migration:password@db.creatorx.example:6543/postgres?sslmode=require",
-      },
-    ],
-  ])(
-    "rejects pooled endpoint reuse through %s",
-    (_label, overrides) => {
-      expect(() =>
-        validateProductionEnvironment({
-          ...validProductionEnvironment,
-          ...overrides,
-        }),
-      ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
-    },
-  );
-
-  it("rejects a direct URL on the pooled host and port even for another database name", () => {
-    expect(() =>
-      validateProductionEnvironment({
-        ...validProductionEnvironment,
-        DIRECT_URL:
-          "postgresql://migration:password@db.creatorx.example:6543/other-db?sslmode=require",
-      }),
-    ).toThrow("DATABASE_URL and DIRECT_URL must use different PostgreSQL endpoints");
-  });
-
   it("rejects a direct URL on another endpoint when its decoded database name differs", () => {
     expect(() =>
       validateProductionEnvironment({
         ...validProductionEnvironment,
         DIRECT_URL:
-          "postgresql://migration:password@direct.creatorx.example:5432/other-db?sslmode=require",
+          `postgresql://postgres:password@${SUPABASE_DIRECT_HOST}:5432/other-db?sslmode=require`,
       }),
     ).toThrow("DATABASE_URL and DIRECT_URL must use the same PostgreSQL database");
   });
@@ -203,9 +265,7 @@ describe("production preflight", () => {
       validateProductionEnvironment({
         ...validProductionEnvironment,
         DATABASE_URL:
-          "postgresql://runtime:password@db.creatorx.example:6543/%70ostgres?pgbouncer=true",
-        DIRECT_URL:
-          "postgresql://migration:password@direct.creatorx.example:5432/postgres?sslmode=require",
+          `postgresql://postgres.${SUPABASE_PROJECT_REF}:password@${SUPABASE_POOLER_HOST}:6543/%70ostgres?pgbouncer=true`,
       }),
     ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
   });
@@ -272,16 +332,14 @@ describe("production preflight", () => {
     expect(String(error?.message)).not.toContain("password");
   });
 
-  it("accepts canonical public IPv4 PostgreSQL hosts", () => {
-    expect(
+  it("rejects a generic remote numeric runtime host outside the Supabase topology", () => {
+    expect(() =>
       validateProductionEnvironment({
         ...validProductionEnvironment,
         DATABASE_URL:
           "postgresql://runtime:password@8.8.8.8:6543/postgres?pgbouncer=true",
-        DIRECT_URL:
-          "postgresql://migration:password@1.1.1.1:5432/postgres?sslmode=require",
       }),
-    ).toEqual({ releaseChannel: "production", tossLoginEnabled: false });
+    ).toThrow("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
   });
 
   it.each([

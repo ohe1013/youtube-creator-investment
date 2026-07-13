@@ -29,6 +29,10 @@ const POSTGRES_ENDPOINT_OVERRIDE_PARAMETERS = new Set([
   "dbname",
   "service",
 ]);
+const SUPABASE_DIRECT_HOSTNAME = /^db\.([a-z0-9]+)\.supabase\.co$/;
+const SUPABASE_POOLER_HOSTNAME_SUFFIX = ".pooler.supabase.com";
+const SUPABASE_POOLER_RUNTIME_PORTS = new Set(["5432", "6543"]);
+const SUPABASE_DEDICATED_RUNTIME_PORT = "6543";
 const LOCAL_HOSTNAME_SUFFIXES = [
   ".localhost",
   ".local",
@@ -269,11 +273,58 @@ function assertDirectMigrationUrl(connection) {
   }
 }
 
+function effectivePostgresPort(connection) {
+  return connection.url.port || DEFAULT_POSTGRES_PORT;
+}
+
+function supabaseProjectRef(hostname) {
+  return SUPABASE_DIRECT_HOSTNAME.exec(hostname)?.[1] ?? null;
+}
+
+function assertSupabaseDirectUrl(connection) {
+  const projectRef = supabaseProjectRef(connection.hostname);
+  if (!projectRef || effectivePostgresPort(connection) !== DEFAULT_POSTGRES_PORT) {
+    fail("DIRECT_URL must use a Supabase direct PostgreSQL URL");
+  }
+  return projectRef;
+}
+
+function assertSupabaseRuntimeUrl(connection, projectRef) {
+  const dedicatedProjectRef = supabaseProjectRef(connection.hostname);
+  const port = effectivePostgresPort(connection);
+  if (dedicatedProjectRef) {
+    if (dedicatedProjectRef !== projectRef) {
+      fail("DATABASE_URL must target the same Supabase project as DIRECT_URL");
+    }
+    if (port !== SUPABASE_DEDICATED_RUNTIME_PORT) {
+      fail("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
+    }
+    return;
+  }
+
+  if (connection.hostname.endsWith(SUPABASE_POOLER_HOSTNAME_SUFFIX)) {
+    if (!SUPABASE_POOLER_RUNTIME_PORTS.has(port)) {
+      fail("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
+    }
+    const username = decodePostgresUriComponent(
+      "DATABASE_URL",
+      connection.url.username,
+    );
+    if (!username.endsWith(`.${projectRef}`)) {
+      fail(
+        "DATABASE_URL must use a Supabase pooler username for the DIRECT_URL project",
+      );
+    }
+    return;
+  }
+
+  fail("DATABASE_URL must use a supported Supabase runtime PostgreSQL URL");
+}
+
 function hasSamePostgresEndpoint(left, right) {
   return (
     left.hostname === right.hostname &&
-    (left.url.port || DEFAULT_POSTGRES_PORT) ===
-      (right.url.port || DEFAULT_POSTGRES_PORT)
+    effectivePostgresPort(left) === effectivePostgresPort(right)
   );
 }
 
@@ -365,6 +416,8 @@ export function validateProductionEnvironment(env = process.env) {
   }
   assertPooledRuntimeUrl(databaseConnection);
   assertDirectMigrationUrl(directConnection);
+  const directProjectRef = assertSupabaseDirectUrl(directConnection);
+  assertSupabaseRuntimeUrl(databaseConnection, directProjectRef);
   assertDistinctPostgresEndpoints(databaseConnection, directConnection);
   assertSamePostgresDatabase(databaseConnection, directConnection);
 
