@@ -417,6 +417,57 @@ function Invoke-CreatorXAdb {
     }
 }
 
+function Invoke-CreatorXAdbStream {
+    [CmdletBinding(DefaultParameterSetName = 'ExplicitPath')]
+    param(
+        [Parameter(Mandatory = $true, ParameterSetName = 'ExplicitPath')]
+        [ValidateNotNullOrEmpty()]
+        [string] $AdbPath,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'ProjectRoot')]
+        [ValidateNotNullOrEmpty()]
+        [string] $ProjectRoot,
+
+        [Parameter(ParameterSetName = 'ProjectRoot')]
+        [string] $PinPath = (Join-Path $PSScriptRoot 'platform-tools.json'),
+
+        [string] $Serial,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]] $Arguments
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'ProjectRoot') {
+        $AdbPath = Get-CreatorXAdbPath -ProjectRoot $ProjectRoot -PinPath $PinPath
+    }
+    if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
+        throw "ADB_MISSING Project-local adb was not found at '$AdbPath'."
+    }
+
+    $commandArguments = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($Serial)) {
+        $commandArguments.Add('-s')
+        $commandArguments.Add($Serial)
+    }
+    foreach ($argument in @($Arguments)) {
+        $commandArguments.Add([string] $argument)
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $AdbPath @commandArguments 2>&1 | ForEach-Object { [string] $_ }
+        $exitCode = [int] $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw "ADB_COMMAND_FAILED adb exited with code $exitCode."
+    }
+}
+
 Export-ModuleMember -Function @(
     'Assert-CreatorXSafeAndroidPath',
     'Remove-CreatorXAndroidPath',
@@ -426,5 +477,6 @@ Export-ModuleMember -Function @(
     'ConvertFrom-CreatorXAdbDevicesOutput',
     'Resolve-CreatorXDevice',
     'Test-CreatorXReverseRules',
-    'Invoke-CreatorXAdb'
+    'Invoke-CreatorXAdb',
+    'Invoke-CreatorXAdbStream'
 )

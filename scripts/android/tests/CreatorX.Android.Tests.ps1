@@ -2,6 +2,95 @@ BeforeAll {
     $script:AndroidRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     $script:ModulePath = Join-Path $script:AndroidRoot 'CreatorX.Android.psm1'
     Import-Module $script:ModulePath -Force -ErrorAction Stop
+
+    function Invoke-CreatorXDoctorFailureFixture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $TestRoot,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Device', 'Reverse')]
+        [string] $FailureStage
+    )
+
+    $projectRoot = Join-Path $TestRoot "doctor-$FailureStage"
+    $androidRoot = Join-Path $projectRoot 'scripts\android'
+    New-Item -ItemType Directory -Path $androidRoot -Force | Out-Null
+    Copy-Item `
+        -LiteralPath (Join-Path $script:AndroidRoot 'doctor.ps1') `
+        -Destination (Join-Path $androidRoot 'doctor.ps1')
+    "export default { appName: 'creatorx', type: 'game', permissions: [] }" |
+        Set-Content -LiteralPath (Join-Path $projectRoot 'granite.config.ts') -Encoding UTF8
+
+    $moduleSource = @'
+$script:InvokeCount = 0
+
+function Get-CreatorXAdbPath {
+    param([string] $ProjectRoot)
+    return Join-Path $ProjectRoot '.tools\android\platform-tools\adb.exe'
+}
+
+function Invoke-CreatorXAdb {
+    param([string] $ProjectRoot, [string] $Serial, [string[]] $Arguments)
+    $script:InvokeCount += 1
+    if (
+        '__FAILURE_STAGE__' -eq 'Device' -or
+        ('__FAILURE_STAGE__' -eq 'Reverse' -and $script:InvokeCount -gt 1)
+    ) {
+        if ('__FAILURE_STAGE__' -eq 'Device') {
+            throw 'ADB_MISSING adb disappeared before the devices call.'
+        }
+        throw 'UNSAFE_REPARSE_POINT adb path changed before the reverse call.'
+    }
+    return [pscustomobject]@{
+        ExitCode = 0
+        Output = @('List of devices attached', 'SERIAL device')
+    }
+}
+
+function ConvertFrom-CreatorXAdbDevicesOutput {
+    param([object[]] $Lines)
+    return [pscustomobject]@{ Serial = 'SERIAL'; State = 'device'; Details = '' }
+}
+
+function Resolve-CreatorXDevice {
+    param([object[]] $Devices, [string] $RequestedSerial)
+    return @($Devices)[0]
+}
+
+function Test-CreatorXReverseRules {
+    param([object[]] $Lines, [int[]] $Ports)
+    return [pscustomobject]@{ Success = $true; MissingPorts = @() }
+}
+
+Export-ModuleMember -Function @(
+    'Get-CreatorXAdbPath',
+    'Invoke-CreatorXAdb',
+    'ConvertFrom-CreatorXAdbDevicesOutput',
+    'Resolve-CreatorXDevice',
+    'Test-CreatorXReverseRules'
+)
+'@.Replace('__FAILURE_STAGE__', $FailureStage)
+    $moduleSource |
+        Set-Content -LiteralPath (Join-Path $androidRoot 'CreatorX.Android.psm1') -Encoding UTF8
+
+    $arguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        (Join-Path $androidRoot 'doctor.ps1'),
+        '-ConsoleRegistrationConfirmed'
+    )
+    if ($FailureStage -eq 'Reverse') {
+        $arguments += @('-Mode', 'Running')
+    }
+    $output = @(& powershell.exe @arguments 2>&1 | ForEach-Object { [string] $_ })
+    return [pscustomobject]@{
+        ExitCode = [int] $LASTEXITCODE
+        Output = [string[]] $output
+    }
+}
 }
 
 Describe 'ConvertFrom-CreatorXAdbDevicesOutput' {
@@ -180,6 +269,57 @@ exit 7
         ($script:stderrResult.Output -join "`n") | Should -Match 'daemon not running'
         ($script:stderrResult.Output -join "`n") | Should -Match 'List of devices attached'
     }
+
+    It 'streams normal native stderr while restoring the caller error preference' {
+        $previousPreference = $ErrorActionPreference
+
+        try {
+            $ErrorActionPreference = 'Stop'
+            $script:streamOutput = @(Invoke-CreatorXAdbStream `
+                -AdbPath (Get-Command node).Source `
+                -Arguments @(
+                    '-e',
+                    "process.stderr.write('stream stderr\\n'); process.stdout.write('stream stdout\\n')"
+                ))
+            $ErrorActionPreference | Should -Be 'Stop'
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+
+        ($script:streamOutput -join "`n") | Should -Match 'stream stderr'
+        ($script:streamOutput -join "`n") | Should -Match 'stream stdout'
+    }
+
+    It 'reports a stable failure after streaming a nonzero native exit' {
+        {
+            Invoke-CreatorXAdbStream `
+                -AdbPath (Get-Command node).Source `
+                -Arguments @('-e', "process.stderr.write('failed\\n'); process.exit(9)") |
+                Out-Null
+        } | Should -Throw -ExpectedMessage '*ADB_COMMAND_FAILED*9*'
+    }
+}
+
+Describe 'Doctor adb failure classification' {
+    It 'keeps ADB_MISSING stable when device-list revalidation fails' {
+        $result = Invoke-CreatorXDoctorFailureFixture `
+            -TestRoot $TestDrive `
+            -FailureStage Device
+
+        $result.ExitCode | Should -Be 1
+        ($result.Output -join "`n") | Should -Match '\[FAIL\] ADB_MISSING'
+        ($result.Output -join "`n") | Should -Not -Match 'DOCTOR_INTERNAL_ERROR'
+    }
+
+    It 'maps a reverse-call path-boundary failure to ADB_INTEGRITY_MISMATCH' {
+        $result = Invoke-CreatorXDoctorFailureFixture `
+            -TestRoot $TestDrive `
+            -FailureStage Reverse
+
+        $result.ExitCode | Should -Be 1
+        ($result.Output -join "`n") | Should -Match '\[FAIL\] ADB_INTEGRITY_MISMATCH'
+        ($result.Output -join "`n") | Should -Not -Match 'DOCTOR_INTERNAL_ERROR'
+    }
 }
 
 Describe 'Project-local adb integrity' {
@@ -346,7 +486,7 @@ Describe 'Android command scripts' {
         $logcat | Should -Match '\.artifacts'
         $logcat | Should -Match 'android'
         $logcat | Should -Match 'Invoke-CreatorXAdb -ProjectRoot'
-        $logcat | Should -Match 'Get-CreatorXAdbPath'
+        $logcat | Should -Match 'Invoke-CreatorXAdbStream'
         $screenshot | Should -Match '\.artifacts'
         $screenshot | Should -Match 'Invoke-CreatorXAdb -ProjectRoot'
         $screenshot | Should -Match 'screencap'

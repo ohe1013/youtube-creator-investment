@@ -41,6 +41,36 @@ function Write-CreatorXDoctorResult {
     Write-Output "[$Level] $Code $Message"
 }
 
+function Get-CreatorXAdbFailureCode {
+    param([string] $Message)
+
+    if ($Message.StartsWith('ADB_MISSING')) {
+        return 'ADB_MISSING'
+    }
+    if (
+        $Message.StartsWith('ADB_INTEGRITY_MISMATCH') -or
+        $Message.StartsWith('UNSAFE_REPARSE_POINT') -or
+        $Message.StartsWith('UNSAFE_PATH')
+    ) {
+        return 'ADB_INTEGRITY_MISMATCH'
+    }
+    return $null
+}
+
+function Write-CreatorXAdbFailureResult {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.ErrorRecord] $ErrorRecord
+    )
+
+    $message = $ErrorRecord.Exception.Message
+    $code = Get-CreatorXAdbFailureCode -Message $message
+    if ($null -eq $code) {
+        throw $ErrorRecord
+    }
+    Write-CreatorXDoctorResult FAIL $code $message
+}
+
 function Get-CreatorXCommandVersion {
     param(
         [string] $Command,
@@ -121,41 +151,37 @@ try {
         $adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
         Write-CreatorXDoctorResult PASS ADB_READY "Project-local adb integrity validated at '$adbPath'."
     } catch {
-        $adbFailure = $_.Exception.Message
-        if ($adbFailure.StartsWith('ADB_MISSING')) {
-            Write-CreatorXDoctorResult FAIL ADB_MISSING $adbFailure
-        } elseif (
-            $adbFailure.StartsWith('ADB_INTEGRITY_MISMATCH') -or
-            $adbFailure.StartsWith('UNSAFE_REPARSE_POINT') -or
-            $adbFailure.StartsWith('UNSAFE_PATH')
-        ) {
-            Write-CreatorXDoctorResult FAIL ADB_INTEGRITY_MISMATCH $adbFailure
-        } else {
-            throw
-        }
+        Write-CreatorXAdbFailureResult -ErrorRecord $_
     }
 
     if ($null -ne $adbPath) {
-        $deviceResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Arguments @('devices', '-l')
-        if ($deviceResult.ExitCode -ne 0) {
-            Write-CreatorXDoctorResult FAIL ADB_COMMAND_FAILED ($deviceResult.Output -join ' ')
-        } else {
-            $devices = @(ConvertFrom-CreatorXAdbDevicesOutput -Lines $deviceResult.Output)
-            try {
-                $selectedDevice = Resolve-CreatorXDevice -Devices $devices -RequestedSerial $Serial
-                Write-CreatorXDoctorResult PASS DEVICE_READY "Android device '$($selectedDevice.Serial)' is authorized."
-            } catch {
-                $deviceMessage = $_.Exception.Message
-                $deviceCode = @(
-                    'DEVICE_MISSING',
-                    'DEVICE_UNAUTHORIZED',
-                    'DEVICE_OFFLINE',
-                    'DEVICE_MULTIPLE'
-                ) | Where-Object { $deviceMessage.StartsWith($_) } | Select-Object -First 1
-                if ($null -eq $deviceCode) {
-                    $deviceCode = 'DEVICE_MISSING'
+        $deviceResult = $null
+        try {
+            $deviceResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Arguments @('devices', '-l')
+        } catch {
+            Write-CreatorXAdbFailureResult -ErrorRecord $_
+        }
+        if ($null -ne $deviceResult) {
+            if ($deviceResult.ExitCode -ne 0) {
+                Write-CreatorXDoctorResult FAIL ADB_COMMAND_FAILED ($deviceResult.Output -join ' ')
+            } else {
+                $devices = @(ConvertFrom-CreatorXAdbDevicesOutput -Lines $deviceResult.Output)
+                try {
+                    $selectedDevice = Resolve-CreatorXDevice -Devices $devices -RequestedSerial $Serial
+                    Write-CreatorXDoctorResult PASS DEVICE_READY "Android device '$($selectedDevice.Serial)' is authorized."
+                } catch {
+                    $deviceMessage = $_.Exception.Message
+                    $deviceCode = @(
+                        'DEVICE_MISSING',
+                        'DEVICE_UNAUTHORIZED',
+                        'DEVICE_OFFLINE',
+                        'DEVICE_MULTIPLE'
+                    ) | Where-Object { $deviceMessage.StartsWith($_) } | Select-Object -First 1
+                    if ($null -eq $deviceCode) {
+                        $deviceCode = 'DEVICE_MISSING'
+                    }
+                    Write-CreatorXDoctorResult BLOCKED $deviceCode $deviceMessage
                 }
-                Write-CreatorXDoctorResult BLOCKED $deviceCode $deviceMessage
             }
         }
     }
@@ -191,17 +217,24 @@ try {
     }
 
     if ($Mode -eq 'Running' -and $null -ne $selectedDevice) {
-        $reverseResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $selectedDevice.Serial -Arguments @('reverse', '--list')
-        if ($reverseResult.ExitCode -ne 0) {
-            Write-CreatorXDoctorResult BLOCKED REVERSE_MISSING ($reverseResult.Output -join ' ')
-        } else {
-            $reverseRules = Test-CreatorXReverseRules -Lines $reverseResult.Output -Ports $requiredPorts
-            if ($reverseRules.Success) {
-                Write-CreatorXDoctorResult PASS REVERSE_READY 'adb reverse rules exist for 8081, 5173, and 3000.'
+        $reverseResult = $null
+        try {
+            $reverseResult = Invoke-CreatorXAdb -ProjectRoot $projectRoot -Serial $selectedDevice.Serial -Arguments @('reverse', '--list')
+        } catch {
+            Write-CreatorXAdbFailureResult -ErrorRecord $_
+        }
+        if ($null -ne $reverseResult) {
+            if ($reverseResult.ExitCode -ne 0) {
+                Write-CreatorXDoctorResult BLOCKED REVERSE_MISSING ($reverseResult.Output -join ' ')
             } else {
-                Write-CreatorXDoctorResult BLOCKED REVERSE_MISSING (
-                    'Missing adb reverse ports: ' + ($reverseRules.MissingPorts -join ', ') + '.'
-                )
+                $reverseRules = Test-CreatorXReverseRules -Lines $reverseResult.Output -Ports $requiredPorts
+                if ($reverseRules.Success) {
+                    Write-CreatorXDoctorResult PASS REVERSE_READY 'adb reverse rules exist for 8081, 5173, and 3000.'
+                } else {
+                    Write-CreatorXDoctorResult BLOCKED REVERSE_MISSING (
+                        'Missing adb reverse ports: ' + ($reverseRules.MissingPorts -join ', ') + '.'
+                    )
+                }
             }
         }
     }

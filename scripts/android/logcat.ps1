@@ -20,13 +20,17 @@ $device = Resolve-CreatorXDevice -Devices $devices -RequestedSerial $Serial
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outputPath = Join-Path $evidenceRoot "logcat-$timestamp.txt"
-$adbArguments = @('-s', [string] $device.Serial, 'logcat', '-v', 'threadtime')
 
 Write-Output "[PASS] LOGCAT_CAPTURING $outputPath"
-$adbPath = Get-CreatorXAdbPath -ProjectRoot $projectRoot
-& $adbPath @adbArguments 2>&1 |
-    ForEach-Object { [string] $_ } |
-    Tee-Object -FilePath $outputPath
-if ($LASTEXITCODE -ne 0) {
-    throw "LOGCAT_FAILED adb exited with code $LASTEXITCODE."
+try {
+    Invoke-CreatorXAdbStream `
+        -ProjectRoot $projectRoot `
+        -Serial $device.Serial `
+        -Arguments @('logcat', '-v', 'threadtime') |
+        Tee-Object -FilePath $outputPath
+} catch {
+    if ($_.Exception.Message.StartsWith('ADB_COMMAND_FAILED')) {
+        throw "LOGCAT_FAILED $($_.Exception.Message)"
+    }
+    throw
 }
