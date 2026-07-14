@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,13 +55,56 @@ const genericSecretAssignmentPattern =
 
 const nextPublicAssignmentPattern =
   /(["']?(NEXT_PUBLIC_[A-Z0-9_]+)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;}]+)/gi;
+const jwtCandidatePattern =
+  /(?:^|[^A-Za-z0-9_-])([A-Za-z0-9_-]{1,4096})\.([A-Za-z0-9_-]{1,4096})\.([A-Za-z0-9_-]{1,4096})(?=$|[^A-Za-z0-9_-])/g;
+
+function decodeJwtObject(segment) {
+  try {
+    const parsed = JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function containsSupabaseServiceRoleJwt(text) {
+  jwtCandidatePattern.lastIndex = 0;
+  for (const match of text.matchAll(jwtCandidatePattern)) {
+    const header = decodeJwtObject(match[1]);
+    const claims = decodeJwtObject(match[2]);
+    if (
+      header &&
+      typeof header.alg === "string" &&
+      claims &&
+      claims.role === "service_role"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function containsSpecificSecretText(text) {
-  return specificSecretPatterns.some((pattern) => pattern.test(text));
+  return (
+    specificSecretPatterns.some((pattern) => pattern.test(text)) ||
+    containsSupabaseServiceRoleJwt(text)
+  );
+}
+
+function normalizeOpaqueConfigurationText(text) {
+  return text.replace(/[\0-\x08\x0e-\x1f\x7f-\uffff]/g, " ");
 }
 
 export function containsSpecificSecretBytes(bytes) {
-  return containsSpecificSecretText(latin1Decoder.decode(bytes));
+  const text = latin1Decoder.decode(bytes);
+  return (
+    containsSpecificSecretText(text) ||
+    containsSensitiveConfigurationAssignment(
+      normalizeOpaqueConfigurationText(text),
+    )
+  );
 }
 
 export class AitArtifactVerificationError extends Error {
@@ -534,6 +578,10 @@ function containsLikelySecret(text) {
     return true;
   }
 
+  return containsSensitiveConfigurationAssignment(text);
+}
+
+function containsSensitiveConfigurationAssignment(text) {
   const scrubbed = scrubPublicConfiguration(text);
 
   genericSecretAssignmentPattern.lastIndex = 0;

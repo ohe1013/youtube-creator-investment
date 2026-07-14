@@ -163,12 +163,15 @@ async function createTemporaryArtifact(
   return artifactPath;
 }
 
-async function createTemporaryClientOutput(content: string): Promise<string> {
+async function createTemporaryClientOutput(
+  content: string | Uint8Array,
+  fileName = "public-config.js",
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "creatorx-client-output-test-"));
   temporaryDirectories.push(directory);
   const outDir = join(directory, "out");
   await mkdir(outDir);
-  await writeFile(join(outDir, "public-config.js"), content);
+  await writeFile(join(outDir, fileName), content);
   return outDir;
 }
 
@@ -721,6 +724,118 @@ describe("verifyAitArtifact", () => {
     expect(failure).toMatchObject({ code: "AIT_SECRET_DETECTED" });
     expect(String(failure.message)).toContain("web/opaque.bin");
     expect(String(failure.message)).not.toContain(secret);
+  });
+
+  it("rejects a NUL-delimited Supabase service-role JWT in opaque payloads without echoing it", async () => {
+    const secret =
+      "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyb2xlIjoic2VydmljZV9yb2xlIiwidGVzdCI6dHJ1ZX0.test_signature_not_real";
+    const opaquePayload = encoder.encode(
+      `\0NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY: "${secret}"\0`,
+    );
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/opaque.bin", content: opaquePayload },
+      ],
+    });
+    const outDir = await createTemporaryClientOutput(
+      opaquePayload,
+      "opaque.bin",
+    );
+
+    const [artifactFailure, clientFailure] = await Promise.all([
+      verifyAitArtifact(artifact).catch((error) => error),
+      scanClientSecrets({ outDir }).catch((error) => error),
+    ]);
+
+    expect([artifactFailure?.code, clientFailure?.code]).toEqual([
+      "AIT_SECRET_DETECTED",
+      "CLIENT_SECRET_DETECTED",
+    ]);
+    expect(String(artifactFailure.message)).toContain("web/opaque.bin");
+    expect(String(artifactFailure.message)).not.toContain(secret);
+    expect(String(clientFailure.message)).toContain("opaque.bin");
+    expect(String(clientFailure.message)).not.toContain(secret);
+  });
+
+  it("rejects an unkeyed NUL-delimited Supabase service-role JWT in opaque payloads", async () => {
+    const secret =
+      "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyb2xlIjoic2VydmljZV9yb2xlIiwidGVzdCI6dHJ1ZX0.test_signature_not_real";
+    const opaquePayload = encoder.encode(`\0${secret}\0`);
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/opaque.bin", content: opaquePayload },
+      ],
+    });
+    const outDir = await createTemporaryClientOutput(
+      opaquePayload,
+      "opaque.bin",
+    );
+
+    await expect(verifyAitArtifact(artifact)).rejects.toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/opaque.bin",
+    });
+    await expect(scanClientSecrets({ outDir })).rejects.toMatchObject({
+      code: "CLIENT_SECRET_DETECTED",
+      message: "Suspected secret in client output: opaque.bin",
+    });
+  });
+
+  it("rejects an arbitrary NUL-delimited public secret-key assignment in opaque payloads without echoing it", async () => {
+    const secret = "fixture-value-not-an-actual-secret";
+    const opaquePayload = encoder.encode(
+      `\0NEXT_PUBLIC_EDGE_SECRET_KEY: "${secret}"\0`,
+    );
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/opaque.bin", content: opaquePayload },
+      ],
+    });
+    const outDir = await createTemporaryClientOutput(
+      opaquePayload,
+      "opaque.bin",
+    );
+
+    const [artifactFailure, clientFailure] = await Promise.all([
+      verifyAitArtifact(artifact).catch((error) => error),
+      scanClientSecrets({ outDir }).catch((error) => error),
+    ]);
+
+    expect([artifactFailure?.code, clientFailure?.code]).toEqual([
+      "AIT_SECRET_DETECTED",
+      "CLIENT_SECRET_DETECTED",
+    ]);
+    expect(String(artifactFailure.message)).not.toContain(secret);
+    expect(String(clientFailure.message)).not.toContain(secret);
+  });
+
+  it("does not flag a NUL-delimited Supabase anon JWT in opaque payloads", async () => {
+    const anonKey =
+      "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyb2xlIjoiYW5vbiIsInRlc3QiOnRydWV9.test_signature_not_real";
+    const opaquePayload = encoder.encode(
+      `\0NEXT_PUBLIC_SUPABASE_ANON_KEY: "${anonKey}"\0`,
+    );
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/opaque.bin", content: opaquePayload },
+      ],
+    });
+    const outDir = await createTemporaryClientOutput(
+      opaquePayload,
+      "opaque.bin",
+    );
+
+    await expect(verifyAitArtifact(artifact)).resolves.toMatchObject({
+      appName: "creatorx",
+      hasWebIndex: true,
+    });
+    await expect(scanClientSecrets({ outDir })).resolves.toEqual({
+      filesScanned: 1,
+    });
   });
 
   it("rejects a Stripe secret assigned to a public configuration key without echoing it", async () => {
