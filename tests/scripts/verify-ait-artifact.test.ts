@@ -475,6 +475,17 @@ describe("scanClientPayload Supabase anon lexical policy", () => {
     }
   });
 
+  it("rejects ternary alternatives and labels as Supabase anon assignments", () => {
+    const sources = [
+      `const value = false ? NEXT_PUBLIC_SUPABASE_ANON_KEY : "${anonJwt}";`,
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY: "${anonJwt}";`,
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual(rejectedJwt);
+    }
+  });
+
   it("does not classify line-comment, ordinary strings, template text, or regex literals as assignments", () => {
     const sources = [
       '// NEXT_PUBLIC_EDGE_SECRET_KEY = "z9"\nconst value = "public";',
@@ -521,6 +532,20 @@ describe("scanClientPayload Supabase anon lexical policy", () => {
       'Object.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "z9" });',
       'Reflect.set(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "z9");',
       'Reflect.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "z9" });',
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual(
+        publicSecretAssignment,
+      );
+    }
+  });
+
+  it("detects public-secret assignments nested in Object.defineProperty setter arguments", () => {
+    const sources = [
+      'Object.defineProperty((globalThis.NEXT_PUBLIC_EDGE_SECRET_KEY = process.env.KEY, globalThis), "other", {});',
+      'Object.defineProperty((globalThis["NEXT_PUBLIC_EDGE_SECRET_KEY"] = process.env.KEY, globalThis), "other", {});',
+      'Object.defineProperty(({ NEXT_PUBLIC_EDGE_SECRET_KEY: process.env.KEY }, globalThis), "other", {});',
     ];
 
     for (const source of sources) {

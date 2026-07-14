@@ -12,6 +12,7 @@ const UTF16_PROBE_BYTES = 4 * 1024;
 const MAX_ALLOWED_ANON_JWT_LITERAL_RANGES = 128;
 const MAX_STATIC_STRING_EXPRESSION_PARTS = 8;
 const MAX_STATIC_STRING_EXPRESSION_CHARACTERS = 256;
+const MAX_STRUCTURAL_CONTEXT_DEPTH = 32;
 
 const SUPABASE_ANON_KEY = "NEXT_PUBLIC_SUPABASE_ANON_KEY";
 
@@ -161,8 +162,8 @@ function detectJavaScriptPolicy(text) {
   const allowedJwtLiteralRanges = new Set();
 
   try {
-    const cursor = createTokenCursor(text);
-    let caseLabelActive = false;
+    const context = createJavaScriptContext();
+    const cursor = createTokenCursor(text, (token) => context.observe(token));
 
     for (let token = cursor.next(); token; token = cursor.next()) {
       const setterCode = tryReadBuiltinSetterCall(
@@ -170,6 +171,7 @@ function detectJavaScriptPolicy(text) {
         token,
         text,
         allowedJwtLiteralRanges,
+        context,
       );
       if (setterCode) return setterCode;
 
@@ -178,7 +180,7 @@ function detectJavaScriptPolicy(text) {
         token,
         text,
         allowedJwtLiteralRanges,
-        caseLabelActive,
+        context.isObjectPropertyStart(),
       );
       if (directCode) return directCode;
 
@@ -187,15 +189,9 @@ function detectJavaScriptPolicy(text) {
         token,
         text,
         allowedJwtLiteralRanges,
-        caseLabelActive,
+        context.isObjectPropertyStart(),
       );
       if (computedCode) return computedCode;
-
-      if (token.type.label === "case") {
-        caseLabelActive = true;
-      } else if (token.type.label === ":") {
-        caseLabelActive = false;
-      }
     }
   } catch {
     return containsUnapprovedJwtCandidate(text)
@@ -223,7 +219,7 @@ function* iterateTokens(text) {
   }
 }
 
-function createTokenCursor(text) {
+function createTokenCursor(text, onToken) {
   const tokens = iterateTokens(text);
   let first = null;
   let second = null;
@@ -257,6 +253,7 @@ function createTokenCursor(text) {
       first = second;
       second = third;
       third = null;
+      if (current !== null) onToken(current);
       return current;
     },
     peek(position = 1) {
@@ -268,7 +265,76 @@ function createTokenCursor(text) {
   };
 }
 
-function tryReadBuiltinSetterCall(cursor, token, text, allowedRanges) {
+function createJavaScriptContext() {
+  let structures = "";
+  let overflowDepth = 0;
+  let previous = null;
+  let beforePrevious = null;
+
+  function pushStructure(value) {
+    if (overflowDepth > 0) {
+      overflowDepth += 1;
+      return;
+    }
+    if (structures.length >= MAX_STRUCTURAL_CONTEXT_DEPTH) {
+      overflowDepth = 1;
+      return;
+    }
+    structures += value;
+  }
+
+  function popStructure() {
+    if (overflowDepth > 0) {
+      overflowDepth -= 1;
+      return;
+    }
+    if (structures.length > 0) structures = structures.slice(0, -1);
+  }
+
+  return {
+    observe(token) {
+      if (token.type.label === "{") {
+        pushStructure(isObjectLiteralOpening(previous) ? "o" : "b");
+      } else if (token.type.label === "${") {
+        pushStructure("t");
+      } else if (token.type.label === "}") {
+        popStructure();
+      }
+      beforePrevious = previous;
+      previous = token;
+    },
+    isObjectPropertyStart() {
+      const priorLabel = beforePrevious?.type.label;
+      return (
+        overflowDepth === 0 &&
+        structures.endsWith("o") &&
+        (priorLabel === "{" || priorLabel === ",")
+      );
+    },
+  };
+}
+
+function isObjectLiteralOpening(previous) {
+  switch (previous?.type.label) {
+    case "=":
+    case "(":
+    case "[":
+    case ",":
+    case "return":
+    case "?":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function tryReadBuiltinSetterCall(
+  cursor,
+  token,
+  text,
+  allowedRanges,
+  context,
+) {
   if (token.type.label !== "name") return null;
 
   const objectName = token.value;
@@ -293,7 +359,9 @@ function tryReadBuiltinSetterCall(cursor, token, text, allowedRanges) {
   cursor.next();
   cursor.next();
   cursor.next();
-  if (skipCallArgument(cursor) !== ",") return null;
+  const firstArgument = skipCallArgument(cursor, context);
+  if (firstArgument.code) return firstArgument.code;
+  if (firstArgument.delimiter !== ",") return null;
 
   const key = readStaticStringExpression(cursor);
   if (key === null || cursor.peek()?.type.label !== ",") return null;
@@ -311,21 +379,63 @@ function tryReadBuiltinSetterCall(cursor, token, text, allowedRanges) {
   return null;
 }
 
-function skipCallArgument(cursor) {
+function skipCallArgument(cursor, context) {
   let nested = 0;
 
   for (let token = cursor.next(); token; token = cursor.next()) {
+    const assignmentCode = tryReadSensitiveSkippedAssignment(
+      cursor,
+      token,
+      context.isObjectPropertyStart(),
+    );
+    if (assignmentCode) return { code: assignmentCode };
+
     const label = token.type.label;
     if (label === "(" || label === "[" || label === "{") {
       nested += 1;
       continue;
     }
     if (label === ")" || label === "]" || label === "}") {
-      if (nested === 0) return label;
+      if (nested === 0) return { code: null, delimiter: label };
       nested -= 1;
       continue;
     }
-    if (label === "," && nested === 0) return label;
+    if (label === "," && nested === 0) {
+      return { code: null, delimiter: label };
+    }
+  }
+
+  return { code: null, delimiter: null };
+}
+
+function tryReadSensitiveSkippedAssignment(
+  cursor,
+  token,
+  isObjectPropertyStart,
+) {
+  if (isStaticKeyToken(token)) {
+    const operator = cursor.peek();
+    if (
+      (operator?.type.label === "=" ||
+        (operator?.type.label === ":" && isObjectPropertyStart)) &&
+      isSensitivePublicConfigurationKey(token.value)
+    ) {
+      return ClientPayloadDetectionCode.PUBLIC_SECRET_ASSIGNMENT;
+    }
+  }
+
+  if (token.type.label !== "[") return null;
+
+  const key = readStaticStringExpression(cursor);
+  const operator = cursor.peek(2);
+  if (
+    key !== null &&
+    cursor.peek()?.type.label === "]" &&
+    (operator?.type.label === "=" ||
+      (operator?.type.label === ":" && isObjectPropertyStart)) &&
+    isSensitivePublicConfigurationKey(key)
+  ) {
+    return ClientPayloadDetectionCode.PUBLIC_SECRET_ASSIGNMENT;
   }
 
   return null;
@@ -366,13 +476,17 @@ function tryReadDirectAssignment(
   token,
   text,
   allowedRanges,
-  caseLabelActive,
+  isObjectPropertyStart,
 ) {
   if (!isStaticKeyToken(token)) return null;
 
   const operator = cursor.peek();
-  if (!isAssignmentOperator(operator)) return null;
-  if (caseLabelActive && operator.type.label === ":") return null;
+  if (
+    operator?.type.label !== "=" &&
+    !(operator?.type.label === ":" && isObjectPropertyStart)
+  ) {
+    return null;
+  }
 
   cursor.next();
   return classifyStaticPublicAssignment(
@@ -388,7 +502,7 @@ function tryReadComputedAssignment(
   token,
   text,
   allowedRanges,
-  caseLabelActive,
+  isObjectPropertyStart,
 ) {
   if (token.type.label !== "[") return null;
 
@@ -396,11 +510,11 @@ function tryReadComputedAssignment(
   if (
     key === null ||
     cursor.peek()?.type.label !== "]" ||
-    !isAssignmentOperator(cursor.peek(2))
+    (cursor.peek(2)?.type.label !== "=" &&
+      !(cursor.peek(2)?.type.label === ":" && isObjectPropertyStart))
   ) {
     return null;
   }
-  if (caseLabelActive && cursor.peek(2).type.label === ":") return null;
 
   cursor.next();
   cursor.next();
@@ -420,10 +534,6 @@ function classifyStaticPublicAssignment(cursor, key, text, allowedRanges) {
 
 function isStaticKeyToken(token) {
   return token.type.label === "name" || token.type.label === "string";
-}
-
-function isAssignmentOperator(token) {
-  return token?.type.label === "=" || token?.type.label === ":";
 }
 
 function readStaticStringExpression(cursor) {
