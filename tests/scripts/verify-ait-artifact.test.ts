@@ -1076,6 +1076,44 @@ describe("verifyAitArtifact", () => {
     ).toBe(true);
   });
 
+  it("finds a direct sensitive public assignment after a semicolon-delimited benign prefix", () => {
+    const benignApiUrl = 'NEXT_PUBLIC_API_URL="https://example.com";';
+    const payload = Buffer.from(
+      `${benignApiUrl.repeat(
+        Math.ceil((5 * 1024 * 1024) / benignApiUrl.length),
+      )}NEXT_PUBLIC_EDGE_SECRET_KEY="x";`,
+    );
+    const startedAt = Date.now();
+
+    expect(containsSpecificSecretBytes(payload)).toBe(true);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+  });
+
+  it("does not treat semicolon-delimited text inside a string as a public assignment", () => {
+    expect(
+      containsSpecificSecretBytes(
+        Buffer.from(
+          'const note = "not a setting;NEXT_PUBLIC_EDGE_SECRET_KEY=x";',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("allows repeated sensitive public-key mentions in comments and literals", () => {
+    const payloads = [
+      '/* NEXT_PUBLIC_EDGE_SECRET_KEY */\n'.repeat(129),
+      '// NEXT_PUBLIC_EDGE_SECRET_KEY = "z9"\n'.repeat(129),
+      'const label = "NEXT_PUBLIC_EDGE_SECRET_KEY = z9";\n'.repeat(129),
+      'const label = "NEXT_PUBLIC_EDGE_SECRET_KEY = \\\\z9";\n'.repeat(129),
+      'const label = "N\\u0045XT_PUBLIC_EDGE_SECRET_KEY = z9";\n'.repeat(129),
+    ];
+
+    for (const payload of payloads) {
+      expect(containsSpecificSecretBytes(Buffer.from(payload))).toBe(false);
+    }
+  });
+
   it("finds a sparse escaped public marker without decoding the opaque prefix", () => {
     const prefix = Buffer.alloc(5 * 1024 * 1024, ";");
     const suffix = Buffer.from(

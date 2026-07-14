@@ -211,7 +211,7 @@ function compactOpaqueText(text) {
 }
 
 function hasOpaqueTransformationCharacter(text) {
-  return /[\\\0-\x1f\x7f-\uffff]/.test(text);
+  return /[\\\0-\x08\x0b-\x0c\x0e-\x1f\x7f-\uffff]/.test(text);
 }
 
 function decodeJavaScriptEscape(
@@ -578,6 +578,32 @@ function shouldVisitOpaqueMarker(text, index, match) {
   return hasSensitivePublicConfigurationMarker(text, index, match);
 }
 
+function isEmbeddedInPublicConfigurationKey(text, markerIndex) {
+  const startIndex = Math.max(
+    0,
+    markerIndex - MAX_OPAQUE_PUBLIC_KEY_CHARACTERS,
+  );
+  const source = text.slice(startIndex, markerIndex);
+  const decoded = source.includes("\\")
+    ? decodeJavaScriptEscapes(source)
+    : source;
+  const compact = /[\0-\x1f\x7f-\uffff]/.test(decoded)
+    ? compactOpaqueText(decoded)
+    : decoded;
+  return /NEXT_PUBLIC_[A-Z0-9_]*$/i.test(compact);
+}
+
+function shouldVisitTransformedOpaqueMarker(text, index, match) {
+  if (match.prefix === "NEXT_PUBLIC_") return false;
+  if (
+    match.prefix !== "NEXT_PUBLIC_" &&
+    isEmbeddedInPublicConfigurationKey(text, index)
+  ) {
+    return false;
+  }
+  return shouldVisitOpaqueMarker(text, index, match);
+}
+
 function hasStaticBuiltinBeforeOpaqueMarker(text, startIndex) {
   const lowerBound = Math.max(0, startIndex - 1_024);
   for (let index = lowerBound; index < startIndex; index += 1) {
@@ -591,24 +617,8 @@ function hasStaticBuiltinBeforeOpaqueMarker(text, startIndex) {
   return false;
 }
 
-function hasLikelyPublicAssignmentContext(text, startIndex, match) {
-  const windowEnd = Math.min(
-    text.length,
-    match.nextIndex + OPAQUE_MARKER_CONTEXT_BEFORE_BYTES,
-  );
-  let hasComma = false;
-  for (let index = match.nextIndex; index < windowEnd; index += 1) {
-    if (text[index] === "=" || text[index] === ":") return true;
-    if (text[index] === ",") hasComma = true;
-  }
-  return hasComma && hasStaticBuiltinBeforeOpaqueMarker(text, startIndex);
-}
-
 function shouldRejectOpaqueMarkerAfterBudget(text, index, match) {
-  return (
-    match.prefix !== "NEXT_PUBLIC_" ||
-    hasLikelyPublicAssignmentContext(text, index, match)
-  );
+  return match.prefix !== "NEXT_PUBLIC_";
 }
 
 function matchesAsciiLiteralIgnoreCaseAt(text, startIndex, literal) {
@@ -625,66 +635,226 @@ function matchesAsciiLiteralIgnoreCaseAt(text, startIndex, literal) {
   return true;
 }
 
+function readRawPublicConfigurationKeyEnd(text, match) {
+  let cursor = match.nextIndex;
+  while (
+    cursor < text.length &&
+    isAsciiLetterDigitUnderscore(text[cursor])
+  ) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipRawJavaScriptWhitespace(text, startIndex) {
+  let cursor = startIndex;
+  while (cursor < text.length && /\s/.test(text[cursor])) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function hasRawPublicConfigurationAssignmentAt(text, match) {
+  const keyEnd = readRawPublicConfigurationKeyEnd(text, match);
+  const nextIndex = skipRawJavaScriptWhitespace(text, keyEnd);
+  return text[nextIndex] === "=" || text[nextIndex] === ":";
+}
+
+function readOpaquePublicConfigurationKeyEnd(text, match) {
+  let cursor = match.nextIndex;
+  while (cursor < text.length) {
+    while (
+      cursor < text.length &&
+      isOpaqueSeparatorCharacter(text[cursor])
+    ) {
+      cursor += 1;
+    }
+    if (cursor >= text.length) break;
+
+    const character = readOpaqueMarkerCharacter(text, cursor);
+    if (!isAsciiLetterDigitUnderscore(character.value)) break;
+    cursor = character.nextIndex;
+  }
+  return cursor;
+}
+
+function hasOpaqueQuotedPublicConfigurationAssignmentAt(
+  text,
+  markerIndex,
+  match,
+  quote,
+  stringStart,
+) {
+  if (markerIndex !== stringStart + 1) return false;
+  const keyEnd = readOpaquePublicConfigurationKeyEnd(text, match);
+  if (text[keyEnd] !== quote) return false;
+
+  let nextIndex = skipRawJavaScriptWhitespace(text, keyEnd + 1);
+  if (text[nextIndex] === ":") return true;
+  if (text[nextIndex] !== "]") return false;
+  nextIndex = skipRawJavaScriptWhitespace(text, nextIndex + 1);
+  return text[nextIndex] === "=" || text[nextIndex] === ":";
+}
+
 function visitRawPublicConfigurationMarkerWindows(text, visitor) {
-  let matches = 0;
-  for (const startCharacter of ["N", "n"]) {
-    let searchStart = 0;
-    while (searchStart < text.length) {
-      const index = text.indexOf(startCharacter, searchStart);
-      if (index === -1) break;
-      searchStart = index + 1;
-      if (
-        !matchesAsciiLiteralIgnoreCaseAt(text, index, "NEXT_PUBLIC_")
-      ) {
+  let parserCandidates = 0;
+  let lexicalState = "code";
+  let quote = null;
+  let stringStart = -1;
+  let statementStart = 0;
+
+  for (let index = 0; index < text.length; ) {
+    const character = text[index];
+
+    if (lexicalState === "line-comment") {
+      if (character === "\n" || character === "\r") {
+        lexicalState = "code";
+        statementStart = index + 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (lexicalState === "block-comment") {
+      if (character === "*" && text[index + 1] === "/") {
+        lexicalState = "code";
+        index += 2;
         continue;
       }
+      index += 1;
+      continue;
+    }
 
-      const match = {
-        nextIndex: index + "NEXT_PUBLIC_".length,
-        prefix: "NEXT_PUBLIC_",
-      };
-      if (shouldVisitOpaqueMarker(text, index, match)) {
-        matches += 1;
+    const isString = lexicalState === "string";
+    if (isString && character === quote) {
+      lexicalState = "code";
+      quote = null;
+      stringStart = -1;
+      index += 1;
+      continue;
+    }
+
+    if (!isString && character === "/" && text[index + 1] === "/") {
+      lexicalState = "line-comment";
+      index += 2;
+      continue;
+    }
+    if (!isString && character === "/" && text[index + 1] === "*") {
+      lexicalState = "block-comment";
+      index += 2;
+      continue;
+    }
+    if (
+      !isString &&
+      (character === ";" ||
+        character === "\n" ||
+        character === "\r" ||
+        character === "{" ||
+        character === "}")
+    ) {
+      statementStart = index + 1;
+      index += 1;
+      continue;
+    }
+
+    const match = isPotentialOpaqueMarkerStart(
+      character,
+      publicConfigurationMarkerStartCodes,
+      true,
+    )
+      ? findOpaqueMarkerAt(
+          text,
+          index,
+          publicConfigurationMarkerPrefixes,
+          publicConfigurationMarkerStartCodes,
+          true,
+        )
+      : null;
+    if (
+      match &&
+      !isString &&
+      (character === '"' || character === "'" || character === "`") &&
+      !hasStaticConcatenationNearOpaqueMarker(text, index, match.nextIndex)
+    ) {
+      lexicalState = "string";
+      quote = character;
+      stringStart = index;
+      index += 1;
+      continue;
+    }
+    if (match && shouldVisitOpaqueMarker(text, index, match)) {
+      const isRawMarker = matchesAsciiLiteralIgnoreCaseAt(
+        text,
+        index,
+        "NEXT_PUBLIC_",
+      );
+      if (
+        (isRawMarker &&
+          !isString &&
+          hasRawPublicConfigurationAssignmentAt(text, match)) ||
+        (isString &&
+          hasOpaqueQuotedPublicConfigurationAssignmentAt(
+            text,
+            index,
+            match,
+            quote,
+            stringStart,
+          ))
+      ) {
+        return true;
+      }
+
+      const hasStaticContext =
+        isString && hasStaticBuiltinBeforeOpaqueMarker(text, index);
+      if (!isString || hasStaticContext) {
         if (
-          matches > MAX_OPAQUE_MARKER_WINDOWS &&
-          shouldRejectOpaqueMarkerAfterBudget(text, index, match)
+          parserCandidates < MAX_OPAQUE_MARKER_WINDOWS &&
+          index - statementStart <= OPAQUE_MARKER_CONTEXT_BEFORE_BYTES
         ) {
-          return true;
-        }
-        if (matches <= MAX_OPAQUE_MARKER_WINDOWS) {
-          const windowStart = Math.max(
-            0,
-            index - OPAQUE_MARKER_CONTEXT_BEFORE_BYTES,
-          );
+          parserCandidates += 1;
           const windowEnd = Math.min(
             text.length,
             match.nextIndex + OPAQUE_MARKER_CONTEXT_AFTER_BYTES,
           );
-          if (visitor(text.slice(windowStart, windowEnd))) return true;
+          if (visitor(text.slice(statementStart, windowEnd))) return true;
+        } else if (hasStaticContext) {
+          return true;
         }
       }
+
+      if (
+        !isString &&
+        (character === '"' || character === "'" || character === "`")
+      ) {
+        lexicalState = "string";
+        quote = character;
+        stringStart = index;
+        index += 1;
+        continue;
+      }
+      index = Math.max(index + 1, match.nextIndex);
+      continue;
     }
+
+    if (isString && character === "\\") {
+      index += 2;
+      continue;
+    }
+    if (!isString && (character === '"' || character === "'" || character === "`")) {
+      lexicalState = "string";
+      quote = character;
+      stringStart = index;
+      index += 1;
+      continue;
+    }
+
+    index += 1;
   }
   return false;
 }
 
-function containsComplexPublicMarkerSyntax(text) {
-  return /[\\\0-\x1f\x7f-\uffff+]/.test(text);
-}
-
 function visitPublicConfigurationMarkerWindows(text, visitor) {
-  if (!containsComplexPublicMarkerSyntax(text)) {
-    return visitRawPublicConfigurationMarkerWindows(text, visitor);
-  }
-  return visitOpaqueMarkerWindows(
-    text,
-    publicConfigurationMarkerPrefixes,
-    publicConfigurationMarkerStartCodes,
-    true,
-    visitor,
-    shouldVisitOpaqueMarker,
-    shouldRejectOpaqueMarkerAfterBudget,
-  );
+  return visitRawPublicConfigurationMarkerWindows(text, visitor);
 }
 
 function visitOpaqueMarkerWindows(
@@ -997,7 +1167,7 @@ function containsSpecificStaticStringConcatenation(text) {
     opaqueTransformationMarkerStartCodes,
     true,
     containsSpecificStaticStringConcatenationInWindow,
-    shouldVisitOpaqueMarker,
+    shouldVisitTransformedOpaqueMarker,
     shouldRejectOpaqueMarkerAfterBudget,
   );
 }
@@ -1053,13 +1223,21 @@ function containsCanonicalOpaqueSecretTextInOpaqueWindow(text) {
 
 function containsTransformedOpaqueSecretText(text) {
   if (!hasOpaqueTransformationCharacter(text)) return false;
+  if (
+    visitPublicConfigurationMarkerWindows(
+      text,
+      containsCanonicalOpaqueSecretTextInOpaqueWindow,
+    )
+  ) {
+    return true;
+  }
   return visitOpaqueMarkerWindows(
     text,
     opaqueTransformationMarkerPrefixes,
     opaqueTransformationMarkerStartCodes,
     true,
     containsCanonicalOpaqueSecretTextInOpaqueWindow,
-    shouldVisitOpaqueMarker,
+    shouldVisitTransformedOpaqueMarker,
     shouldRejectOpaqueMarkerAfterBudget,
   );
 }
