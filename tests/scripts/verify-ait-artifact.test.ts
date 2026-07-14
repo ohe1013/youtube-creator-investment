@@ -1162,6 +1162,59 @@ describe("verifyAitArtifact", () => {
     await expectOpaquePayloadToReject(encoder.encode(payload), secret);
   });
 
+  it("allows repeated benign static secret prefixes and finds a later concrete concatenated secret", () => {
+    const benignCandidates = [
+      'const x = "sk-" + "not-a-secret";\n',
+      'const x = "eyJ" + "not-a-jwt";\n',
+      'const x = "ghp_" + "not-a-token";\n',
+    ];
+
+    for (const candidate of benignCandidates) {
+      expect(
+        containsSpecificSecretBytes(Buffer.from(candidate.repeat(129))),
+      ).toBe(false);
+    }
+
+    const concreteSecret = `sk_test_${"a".repeat(24)}`;
+    const midpoint = Math.floor(concreteSecret.length / 2);
+    const benignPrefix = benignCandidates[0].repeat(
+      Math.ceil((5 * 1024 * 1024) / benignCandidates[0].length),
+    );
+    const benignPrefixBytes = Buffer.from(benignPrefix);
+    const payload = Buffer.concat([
+      benignPrefixBytes,
+      Buffer.from(
+        `const key = ("${concreteSecret.slice(0, midpoint)}" + "${concreteSecret.slice(midpoint)}");`,
+      ),
+    ]);
+
+    expect(containsSpecificSecretBytes(benignPrefixBytes)).toBe(false);
+    expect(containsSpecificSecretBytes(payload)).toBe(true);
+  });
+
+  it("does not treat raw marker candidates as transformed because a bundle has unrelated escapes", () => {
+    const escapedJavaScriptLiteral = 'const newline = "\\\\n";\n';
+    const rawCandidates = [
+      'const x = "sk-" + "not-a-secret";\n',
+      'const x = "eyJ" + "not-a-jwt";\n',
+      'const x = "ghp_" + "not-a-token";\n',
+    ];
+
+    for (const candidate of rawCandidates) {
+      expect(
+        containsSpecificSecretBytes(
+          Buffer.from(`${escapedJavaScriptLiteral}${candidate.repeat(129)}`),
+        ),
+      ).toBe(false);
+    }
+
+    expect(
+      containsSpecificSecretBytes(
+        Buffer.from(`const token = "sk\\u005ftest_${"a".repeat(24)}";`),
+      ),
+    ).toBe(true);
+  });
+
   it("rejects escaped concrete secret values in opaque payloads", async () => {
     const serviceRoleJwt = createTestJwt({ role: "service_role" });
     const escapedServiceRoleJwt = serviceRoleJwt

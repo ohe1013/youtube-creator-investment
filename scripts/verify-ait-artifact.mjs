@@ -593,12 +593,19 @@ function isEmbeddedInPublicConfigurationKey(text, markerIndex) {
   return /NEXT_PUBLIC_[A-Z0-9_]*$/i.test(compact);
 }
 
+function hasOpaqueTransformationInMatchedMarker(text, index, match) {
+  return hasOpaqueTransformationCharacter(text.slice(index, match.nextIndex));
+}
+
 function shouldVisitTransformedOpaqueMarker(text, index, match) {
   if (match.prefix === "NEXT_PUBLIC_") return false;
   if (
     match.prefix !== "NEXT_PUBLIC_" &&
     isEmbeddedInPublicConfigurationKey(text, index)
   ) {
+    return false;
+  }
+  if (!hasOpaqueTransformationInMatchedMarker(text, index, match)) {
     return false;
   }
   return shouldVisitOpaqueMarker(text, index, match);
@@ -1174,26 +1181,58 @@ function containsSensitivePublicConfigurationAssignment(text) {
   );
 }
 
-function containsSpecificStaticStringConcatenationInWindow(text) {
-  const tokens = tokenizeJavaScriptLike(text);
-  for (let index = 0; index < tokens.length; index += 1) {
-    const value = readStaticStringExpression(tokens, index);
-    if (value && containsSpecificSecretText(value.value)) return true;
+function readStaticStringConcatenation(text, startIndex) {
+  const first = readJavaScriptString(text, startIndex);
+  if (!first) return null;
+
+  let value = first.value;
+  let cursor = first.nextIndex;
+  let hasConcatenation = false;
+  while (true) {
+    const plusIndex = skipJavaScriptTrivia(text, cursor);
+    if (text[plusIndex] !== "+") break;
+
+    const nextStringIndex = skipJavaScriptTrivia(text, plusIndex + 1);
+    if (
+      text[nextStringIndex] !== '"' &&
+      text[nextStringIndex] !== "'" &&
+      text[nextStringIndex] !== "`"
+    ) {
+      break;
+    }
+    const next = readJavaScriptString(text, nextStringIndex);
+    if (!next) break;
+
+    value += next.value;
+    cursor = next.nextIndex;
+    hasConcatenation = true;
   }
-  return false;
+  return { value, nextIndex: cursor, hasConcatenation };
 }
 
 function containsSpecificStaticStringConcatenation(text) {
   if (!text.includes("+")) return false;
-  return visitOpaqueMarkerWindows(
-    text,
-    opaqueTransformationMarkerPrefixes,
-    opaqueTransformationMarkerStartCodes,
-    true,
-    containsSpecificStaticStringConcatenationInWindow,
-    shouldVisitTransformedOpaqueMarker,
-    shouldRejectOpaqueMarkerAfterBudget,
-  );
+  for (let index = 0; index < text.length; ) {
+    if (text[index] === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
+      index = skipJavaScriptTrivia(text, index);
+      continue;
+    }
+    if (text[index] !== '"' && text[index] !== "'" && text[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const concatenation = readStaticStringConcatenation(text, index);
+    if (!concatenation) return false;
+    if (
+      concatenation.hasConcatenation &&
+      containsSpecificSecretText(concatenation.value)
+    ) {
+      return true;
+    }
+    index = Math.max(index + 1, concatenation.nextIndex);
+  }
+  return false;
 }
 
 function containsCanonicalOpaqueSecretText(text) {
