@@ -16,6 +16,7 @@ const specificSecretPatterns = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
   /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/,
+  /\bsb_secret_[A-Za-z0-9_-]+(?=$|[^A-Za-z0-9_-])/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
   /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:/@]+:[^\s/@]+@/i,
 ];

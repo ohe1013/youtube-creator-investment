@@ -46,6 +46,7 @@ const specificSecretPatterns = [
   /\bgithub_pat_[A-Za-z0-9_]{20,255}\b/,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
   /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/,
+  /\bsb_secret_[A-Za-z0-9_-]+(?=$|[^A-Za-z0-9_-])/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
   /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:/@]+:[^\s/@]+@/i,
 ];
@@ -55,8 +56,32 @@ const genericSecretAssignmentPattern =
 
 const nextPublicAssignmentPattern =
   /(["']?(NEXT_PUBLIC_[A-Z0-9_]+)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;}]+)/gi;
-const jwtCandidatePattern =
-  /(?:^|[^A-Za-z0-9_-])([A-Za-z0-9_-]{1,4096})\.([A-Za-z0-9_-]{1,4096})\.([A-Za-z0-9_-]{1,4096})(?=$|[^A-Za-z0-9_-])/g;
+
+function isAsciiLetterDigitUnderscore(character) {
+  if (typeof character !== "string" || character.length !== 1) return false;
+  const code = character.charCodeAt(0);
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    character === "_"
+  );
+}
+
+function isBase64UrlCharacter(character) {
+  return (
+    isAsciiLetterDigitUnderscore(character) ||
+    character === "-"
+  );
+}
+
+function readBase64UrlSegmentEnd(text, startIndex) {
+  let cursor = startIndex;
+  while (cursor < text.length && isBase64UrlCharacter(text[cursor])) {
+    cursor += 1;
+  }
+  return cursor;
+}
 
 function decodeJwtObject(segment) {
   try {
@@ -70,10 +95,41 @@ function decodeJwtObject(segment) {
 }
 
 function containsSupabaseServiceRoleJwt(text) {
-  jwtCandidatePattern.lastIndex = 0;
-  for (const match of text.matchAll(jwtCandidatePattern)) {
-    const header = decodeJwtObject(match[1]);
-    const claims = decodeJwtObject(match[2]);
+  let cursor = 0;
+  while (cursor < text.length) {
+    if (
+      !isBase64UrlCharacter(text[cursor]) ||
+      (cursor > 0 && isBase64UrlCharacter(text[cursor - 1]))
+    ) {
+      cursor += 1;
+      continue;
+    }
+
+    const headerEnd = readBase64UrlSegmentEnd(text, cursor);
+    if (text[headerEnd] !== ".") {
+      cursor = headerEnd;
+      continue;
+    }
+
+    const claimsStart = headerEnd + 1;
+    if (!isBase64UrlCharacter(text[claimsStart])) {
+      cursor = claimsStart;
+      continue;
+    }
+    const claimsEnd = readBase64UrlSegmentEnd(text, claimsStart);
+    if (text[claimsEnd] !== ".") {
+      cursor = claimsEnd;
+      continue;
+    }
+
+    const signatureStart = claimsEnd + 1;
+    if (!isBase64UrlCharacter(text[signatureStart])) {
+      cursor = signatureStart;
+      continue;
+    }
+    const signatureEnd = readBase64UrlSegmentEnd(text, signatureStart);
+    const header = decodeJwtObject(text.slice(cursor, headerEnd));
+    const claims = decodeJwtObject(text.slice(claimsStart, claimsEnd));
     if (
       header &&
       typeof header.alg === "string" &&
@@ -82,6 +138,7 @@ function containsSupabaseServiceRoleJwt(text) {
     ) {
       return true;
     }
+    cursor = signatureEnd;
   }
   return false;
 }
@@ -97,13 +154,299 @@ function normalizeOpaqueConfigurationText(text) {
   return text.replace(/[\0-\x08\x0e-\x1f\x7f-\uffff]/g, " ");
 }
 
+function compactOpaqueText(text) {
+  return text.replace(/[\0-\x1f\x7f-\uffff]/g, "");
+}
+
+function decodeJavaScriptEscape(
+  text,
+  index,
+  { preserveEscapedBackslash = false } = {},
+) {
+  const escape = text[index + 1];
+  if (!escape) return null;
+  if (escape === "\\") {
+    return {
+      value: preserveEscapedBackslash ? "\\\\" : "\\",
+      nextIndex: index + 2,
+    };
+  }
+
+  if (escape === "u") {
+    if (text[index + 2] === "{") {
+      const closingIndex = text.indexOf("}", index + 3);
+      const hex = text.slice(index + 3, closingIndex);
+      if (
+        closingIndex !== -1 &&
+        /^[0-9a-fA-F]{1,6}$/.test(hex)
+      ) {
+        const codePoint = Number.parseInt(hex, 16);
+        if (codePoint <= 0x10ffff) {
+          return {
+            value: String.fromCodePoint(codePoint),
+            nextIndex: closingIndex + 1,
+          };
+        }
+      }
+      return null;
+    }
+
+    const hex = text.slice(index + 2, index + 6);
+    if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+      return {
+        value: String.fromCharCode(Number.parseInt(hex, 16)),
+        nextIndex: index + 6,
+      };
+    }
+    return null;
+  }
+
+  if (escape === "x") {
+    const hex = text.slice(index + 2, index + 4);
+    if (/^[0-9a-fA-F]{2}$/.test(hex)) {
+      return {
+        value: String.fromCharCode(Number.parseInt(hex, 16)),
+        nextIndex: index + 4,
+      };
+    }
+    return null;
+  }
+
+  return { value: escape, nextIndex: index + 2 };
+}
+
+function decodeJavaScriptEscapes(text) {
+  let decoded = "";
+  for (let index = 0; index < text.length; ) {
+    if (text[index] !== "\\") {
+      decoded += text[index];
+      index += 1;
+      continue;
+    }
+
+    const escape = decodeJavaScriptEscape(text, index, {
+      preserveEscapedBackslash: true,
+    });
+    if (!escape) {
+      decoded += text[index];
+      index += 1;
+      continue;
+    }
+    decoded += escape.value;
+    index = escape.nextIndex;
+  }
+  return decoded;
+}
+
+function isJavaScriptIdentifierCharacter(character) {
+  return isAsciiLetterDigitUnderscore(character) || character === "$";
+}
+
+function readJavaScriptIdentifier(text, startIndex) {
+  let value = "";
+  let cursor = startIndex;
+  while (cursor < text.length) {
+    if (isJavaScriptIdentifierCharacter(text[cursor])) {
+      value += text[cursor];
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === "\\") {
+      const escape = decodeJavaScriptEscape(text, cursor);
+      if (!escape) break;
+      value += escape.value;
+      cursor = escape.nextIndex;
+      continue;
+    }
+    break;
+  }
+  return { value, nextIndex: cursor };
+}
+
+function readJavaScriptString(text, startIndex) {
+  const quote = text[startIndex];
+  let value = "";
+  let cursor = startIndex + 1;
+  while (cursor < text.length) {
+    if (text[cursor] === quote) {
+      return { value, nextIndex: cursor + 1 };
+    }
+    if (text[cursor] === "\\") {
+      const escape = decodeJavaScriptEscape(text, cursor);
+      if (escape) {
+        value += escape.value;
+        cursor = escape.nextIndex;
+        continue;
+      }
+    }
+    value += text[cursor];
+    cursor += 1;
+  }
+  return null;
+}
+
+function tokenizeJavaScriptLike(text) {
+  const tokens = [];
+  for (let cursor = 0; cursor < text.length; ) {
+    const character = text[cursor];
+    if (/\s/.test(character)) {
+      cursor += 1;
+      continue;
+    }
+    if (character === "/" && text[cursor + 1] === "/") {
+      const lineEnd = text.indexOf("\n", cursor + 2);
+      cursor = lineEnd === -1 ? text.length : lineEnd + 1;
+      continue;
+    }
+    if (character === "/" && text[cursor + 1] === "*") {
+      const commentEnd = text.indexOf("*/", cursor + 2);
+      cursor = commentEnd === -1 ? text.length : commentEnd + 2;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      const string = readJavaScriptString(text, cursor);
+      if (!string) break;
+      tokens.push({ type: "string", value: string.value });
+      cursor = string.nextIndex;
+      continue;
+    }
+    if (isJavaScriptIdentifierCharacter(character) || character === "\\") {
+      const identifier = readJavaScriptIdentifier(text, cursor);
+      if (identifier.value.length > 0) {
+        tokens.push({ type: "identifier", value: identifier.value });
+        cursor = identifier.nextIndex;
+        continue;
+      }
+    }
+    tokens.push({ type: "punctuation", value: character });
+    cursor += 1;
+  }
+  return tokens;
+}
+
+function readStaticStringExpression(tokens, startIndex) {
+  if (tokens[startIndex]?.type !== "string") return null;
+  let value = tokens[startIndex].value;
+  let cursor = startIndex + 1;
+  while (
+    tokens[cursor]?.value === "+" &&
+    tokens[cursor + 1]?.type === "string"
+  ) {
+    value += tokens[cursor + 1].value;
+    cursor += 2;
+  }
+  return { value, nextIndex: cursor };
+}
+
+function findCallArgumentDelimiter(tokens, startIndex) {
+  let nested = 0;
+  for (let index = startIndex; index < tokens.length; index += 1) {
+    const value = tokens[index].value;
+    if (value === "(" || value === "[" || value === "{") {
+      nested += 1;
+      continue;
+    }
+    if (value === ")" || value === "]" || value === "}") {
+      if (nested === 0) return index;
+      nested -= 1;
+      continue;
+    }
+    if (value === "," && nested === 0) return index;
+  }
+  return -1;
+}
+
+function isSensitivePublicConfigurationKeyToken(value) {
+  return (
+    value.toUpperCase().startsWith("NEXT_PUBLIC_") &&
+    isSensitiveConfigurationKey(value)
+  );
+}
+
+function hasSensitiveStaticSecondArgument(tokens, openIndex) {
+  const firstDelimiter = findCallArgumentDelimiter(tokens, openIndex + 1);
+  if (tokens[firstDelimiter]?.value !== ",") return false;
+  const key = readStaticStringExpression(tokens, firstDelimiter + 1);
+  return Boolean(
+    key &&
+      isSensitivePublicConfigurationKeyToken(key.value) &&
+      tokens[key.nextIndex]?.value === ",",
+  );
+}
+
+function containsSensitivePublicConfigurationAssignment(text) {
+  const tokens = tokenizeJavaScriptLike(text);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const next = tokens[index + 1]?.value;
+
+    if (
+      (token.type === "identifier" || token.type === "string") &&
+      isSensitivePublicConfigurationKeyToken(token.value)
+    ) {
+      if (next === "=" || next === ":") {
+        return true;
+      }
+    }
+
+    if (token.value === "[") {
+      const key = readStaticStringExpression(tokens, index + 1);
+      if (
+        key &&
+        isSensitivePublicConfigurationKeyToken(key.value) &&
+        tokens[key.nextIndex]?.value === "]" &&
+        (tokens[key.nextIndex + 1]?.value === "=" ||
+          tokens[key.nextIndex + 1]?.value === ":")
+      ) {
+        return true;
+      }
+    }
+
+    if (
+      token.value === "Object" &&
+      tokens[index + 1]?.value === "." &&
+      tokens[index + 2]?.value === "defineProperty" &&
+      tokens[index + 3]?.value === "(" &&
+      hasSensitiveStaticSecondArgument(tokens, index + 3)
+    ) {
+      return true;
+    }
+
+    if (
+      token.value === "Reflect" &&
+      tokens[index + 1]?.value === "." &&
+      tokens[index + 2]?.value === "set" &&
+      tokens[index + 3]?.value === "(" &&
+      hasSensitiveStaticSecondArgument(tokens, index + 3)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function containsCanonicalOpaqueSecretText(text) {
+  return (
+    containsSpecificSecretText(text) ||
+    containsSensitivePublicConfigurationAssignment(text) ||
+    containsSensitiveConfigurationAssignment(text)
+  );
+}
+
+function containsCanonicalOpaqueSecretTextWithEscapes(text) {
+  if (containsCanonicalOpaqueSecretText(text)) return true;
+  const decoded = decodeJavaScriptEscapes(text);
+  return decoded !== text && containsCanonicalOpaqueSecretText(decoded);
+}
+
 export function containsSpecificSecretBytes(bytes) {
   const text = latin1Decoder.decode(bytes);
   return (
-    containsSpecificSecretText(text) ||
-    containsSensitiveConfigurationAssignment(
+    containsCanonicalOpaqueSecretTextWithEscapes(text) ||
+    containsCanonicalOpaqueSecretTextWithEscapes(
       normalizeOpaqueConfigurationText(text),
-    )
+    ) ||
+    containsCanonicalOpaqueSecretTextWithEscapes(compactOpaqueText(text))
   );
 }
 
@@ -574,11 +917,7 @@ function scrubPublicConfiguration(text) {
 }
 
 function containsLikelySecret(text) {
-  if (containsSpecificSecretText(text)) {
-    return true;
-  }
-
-  return containsSensitiveConfigurationAssignment(text);
+  return containsCanonicalOpaqueSecretTextWithEscapes(text);
 }
 
 function containsSensitiveConfigurationAssignment(text) {

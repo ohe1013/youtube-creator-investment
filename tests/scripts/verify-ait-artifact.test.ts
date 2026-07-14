@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { Buffer } from "node:buffer";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +174,89 @@ async function createTemporaryClientOutput(
   await mkdir(outDir);
   await writeFile(join(outDir, fileName), content);
   return outDir;
+}
+
+function createTestJwt(
+  claims: Record<string, unknown>,
+  header: Record<string, unknown> = { alg: "none", typ: "JWT" },
+): string {
+  return [
+    Buffer.from(JSON.stringify(header)).toString("base64url"),
+    Buffer.from(JSON.stringify(claims)).toString("base64url"),
+    "test_signature_not_real",
+  ].join(".");
+}
+
+function encodeUtf16LittleEndianWithBom(text: string): Uint8Array {
+  return new Uint8Array(
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]),
+  );
+}
+
+function encodeUtf16BigEndianWithBom(text: string): Uint8Array {
+  const bytes = Buffer.from(text, "utf16le");
+  for (let index = 0; index < bytes.length; index += 2) {
+    const low = bytes[index];
+    bytes[index] = bytes[index + 1];
+    bytes[index + 1] = low;
+  }
+  return new Uint8Array(Buffer.concat([Buffer.from([0xfe, 0xff]), bytes]));
+}
+
+function interleaveControlBytes(text: string, control: number): Uint8Array {
+  const bytes = encoder.encode(text);
+  const output = new Uint8Array(bytes.byteLength * 2);
+  for (let index = 0; index < bytes.byteLength; index += 1) {
+    output[index * 2] = bytes[index];
+    output[index * 2 + 1] = control;
+  }
+  return output;
+}
+
+async function expectOpaquePayloadToReject(
+  opaquePayload: Uint8Array,
+  expectedValue: string,
+): Promise<void> {
+  const artifact = await buildFixture({
+    files: [
+      { name: ENTRYPOINT, content: "<!doctype html>" },
+      { name: "web/opaque.bin", content: opaquePayload },
+    ],
+  });
+  const outDir = await createTemporaryClientOutput(opaquePayload, "opaque.bin");
+  const [artifactFailure, clientFailure] = await Promise.all([
+    verifyAitArtifact(artifact).catch((error) => error),
+    scanClientSecrets({ outDir }).catch((error) => error),
+  ]);
+
+  expect([artifactFailure?.code, clientFailure?.code]).toEqual([
+    "AIT_SECRET_DETECTED",
+    "CLIENT_SECRET_DETECTED",
+  ]);
+  expect(String(artifactFailure.message)).toContain("web/opaque.bin");
+  expect(String(artifactFailure.message)).not.toContain(expectedValue);
+  expect(String(clientFailure.message)).toContain("opaque.bin");
+  expect(String(clientFailure.message)).not.toContain(expectedValue);
+}
+
+async function expectOpaquePayloadToPass(
+  opaquePayload: Uint8Array,
+): Promise<void> {
+  const artifact = await buildFixture({
+    files: [
+      { name: ENTRYPOINT, content: "<!doctype html>" },
+      { name: "web/opaque.bin", content: opaquePayload },
+    ],
+  });
+  const outDir = await createTemporaryClientOutput(opaquePayload, "opaque.bin");
+
+  await expect(verifyAitArtifact(artifact)).resolves.toMatchObject({
+    appName: "creatorx",
+    hasWebIndex: true,
+  });
+  await expect(scanClientSecrets({ outDir })).resolves.toEqual({
+    filesScanned: 1,
+  });
 }
 
 afterEach(async () => {
@@ -810,6 +894,143 @@ describe("verifyAitArtifact", () => {
     ]);
     expect(String(artifactFailure.message)).not.toContain(secret);
     expect(String(clientFailure.message)).not.toContain(secret);
+  });
+
+  it("rejects a NUL-delimited service-role JWT with an oversized claims segment", async () => {
+    const secret = createTestJwt({
+      role: "service_role",
+      padding: "x".repeat(5000),
+    });
+
+    await expectOpaquePayloadToReject(encoder.encode(`\0${secret}\0`), secret);
+  });
+
+  it("rejects a long NUL-delimited public secret-key assignment with a short literal", async () => {
+    const key = `NEXT_PUBLIC_${"EDGE_".repeat(20)}SECRET_KEY`;
+    const secret = "z9";
+
+    await expectOpaquePayloadToReject(
+      encoder.encode(`\0${key}: "${secret}"\0`),
+      secret,
+    );
+  });
+
+  it("rejects NUL-delimited property assignment syntax for public secret keys", async () => {
+    const secret = "z9";
+    const payloads = [
+      `\0c.NEXT_PUBLIC_EDGE_SECRET_KEY = "${secret}"\0`,
+      `\0c["NEXT_PUBLIC_EDGE_SECRET_KEY"] = "${secret}"\0`,
+      `\0const config = { ["NEXT_PUBLIC_EDGE_SECRET_KEY"]: "${secret}" };\0`,
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToReject(encoder.encode(payload), secret);
+    }
+  });
+
+  it("rejects NUL-delimited public secret keys separated from assignment punctuation by comments", async () => {
+    const secret = "z9";
+    const payloads = [
+      `\0const config = { NEXT_PUBLIC_EDGE_SECRET_KEY /* note */ : "${secret}" };\0`,
+      `\0const config = { NEXT_PUBLIC_EDGE_SECRET_KEY: /* note */ "${secret}" };\0`,
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToReject(encoder.encode(payload), secret);
+    }
+  });
+
+  it("rejects Unicode-escaped NUL-delimited public secret property keys", async () => {
+    const secret = "z9";
+    const payloads = [
+      `\0const config = { NEXT_PUBLIC_EDGE_SECRET\\u005fKEY: "${secret}" };\0`,
+      `\0const config = { "NEXT_PUBLIC_EDGE_SECRET\\x5fKEY": "${secret}" };\0`,
+      `\0const config = { NEXT_PUBLIC_EDGE_SECRET\\u{5f}KEY: "${secret}" };\0`,
+      `\0{"NEXT_PUBLIC_EDGE_SECRET\\u005fKEY":"${secret}"}\0`,
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToReject(encoder.encode(payload), secret);
+    }
+  });
+
+  it("rejects a NUL-delimited Supabase secret key without echoing it", async () => {
+    const secret = "sb_secret_testonly-abc_123";
+
+    await expectOpaquePayloadToReject(encoder.encode(`\0${secret}\0`), secret);
+  });
+
+  it("rejects static computed and reflective public secret-key assignments in opaque payloads", async () => {
+    const secret = "z9";
+    const payloads = [
+      `\0const config = { ["NEXT_PUBLIC_EDGE_" + "SECRET_KEY"]: "${secret}" };\0`,
+      `\0Object.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Reflect.set(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "${secret}");\0`,
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToReject(encoder.encode(payload), secret);
+    }
+  });
+
+  it("rejects escaped concrete secret values in opaque payloads", async () => {
+    const serviceRoleJwt = createTestJwt({ role: "service_role" });
+    const escapedServiceRoleJwt = serviceRoleJwt
+      .replace(/^e/, "\\u0065")
+      .replaceAll(".", "\\u002e");
+    const escapedGithubToken = `ghp\\u005f${"a".repeat(36)}`;
+    const payloads = [
+      escapedServiceRoleJwt,
+      "sk\\u005ftest_testonly0123456789abcdef",
+      escapedGithubToken,
+      "postgresql\\u003a//creator:fixture-password@db.creatorx.example/creatorx",
+      "sb\\u005fsecret_testonly-abc_123",
+    ];
+
+    for (const secret of payloads) {
+      await expectOpaquePayloadToReject(encoder.encode(`\0${secret}\0`), secret);
+    }
+  });
+
+  it("rejects UTF-16 public secret-key assignments in opaque payloads", async () => {
+    const secret = "z9";
+    const source = `c.NEXT_PUBLIC_EDGE_SECRET_KEY = "${secret}"`;
+    const payloads = [
+      encodeUtf16LittleEndianWithBom(source),
+      encodeUtf16BigEndianWithBom(source),
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToReject(payload, secret);
+    }
+  });
+
+  it("rejects public secret-key assignments with ASCII characters interleaved by C0 controls", async () => {
+    const secret = "z9";
+    const source = `c.NEXT_PUBLIC_EDGE_SECRET_KEY = "${secret}"`;
+
+    for (const control of [0, 1, 8, 14, 31, 127]) {
+      await expectOpaquePayloadToReject(
+        interleaveControlBytes(source, control),
+        secret,
+      );
+    }
+  });
+
+  it("does not flag comments or literal backslash text that merely mention a public secret-key name", async () => {
+    const payloads = [
+      "\0/* NEXT_PUBLIC_EDGE_SECRET_KEY */\0",
+      '\0const label = "NEXT_PUBLIC_EDGE_SECRET\\u005fKEY";\0',
+      '\0const config = { "NEXT_PUBLIC_EDGE_SECRET\\\\u005fKEY": "public-value" };\0',
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToPass(encoder.encode(payload));
+    }
+  });
+
+  it("does not crash on an incomplete opaque JWT fragment", async () => {
+    await expectOpaquePayloadToPass(encoder.encode("\0eyJhbGciOiJub25lIn0.\0"));
   });
 
   it("does not flag a NUL-delimited Supabase anon JWT in opaque payloads", async () => {
