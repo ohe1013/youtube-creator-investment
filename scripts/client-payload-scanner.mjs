@@ -26,8 +26,8 @@ const postgresUrlPattern = /\bpostgres(?:ql)?:\/\//i;
 const knownSecretPatterns = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
   /\bAIza[0-9A-Za-z_-]{35}\b/,
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255}\b/,
-  /\bgithub_pat_[A-Za-z0-9_]{20,255}\b/,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9-]{10,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
   /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/,
   /\bsb_secret_[A-Za-z0-9_-]+(?=$|[^A-Za-z0-9_-])/,
@@ -389,11 +389,7 @@ function containsJwtCandidate(text) {
     if (isJwtHeader(header) && payloadLength > 0) {
       return true;
     }
-    if (
-      headerLength > MAX_JWT_SEGMENT_CHARACTERS &&
-      looksLikeJsonObjectBase64Url(text, index, headerEnd) &&
-      payloadLength > 0
-    ) {
+    if (headerLength > MAX_JWT_SEGMENT_CHARACTERS && payloadLength > 0) {
       return true;
     }
 
@@ -452,8 +448,4 @@ function isJwtHeader(value) {
     typeof value.alg === "string" &&
     value.alg.length > 0
   );
-}
-
-function looksLikeJsonObjectBase64Url(text, start, end) {
-  return end - start >= 3 && text.slice(start, start + 3) === "eyJ";
 }

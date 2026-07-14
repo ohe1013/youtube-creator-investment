@@ -340,6 +340,41 @@ describe("scanClientPayload direct detector baseline", () => {
     });
   });
 
+  it("retains legacy GitHub token detection scope with a safe category", () => {
+    const payloads = [
+      "ghp_synthetic-x1",
+      `github_pat_${"f".repeat(256)}`,
+    ];
+
+    for (const payload of payloads) {
+      expect(scanClientPayload(encoder.encode(payload))).toEqual({
+        detected: true,
+        code: ClientPayloadDetectionCode.KNOWN_SECRET,
+      });
+    }
+  });
+
+  it("fails closed for an oversized JWT header without eyJ", () => {
+    const header = `\n${JSON.stringify({
+      alg: "HS256",
+      filler: String.fromCodePoint(0x1003e).repeat(5_000),
+    })}`;
+    const headerSegment = Buffer.from(header).toString("base64url");
+    const candidate = [
+      headerSegment,
+      Buffer.from(JSON.stringify({ role: "member" })).toString("base64url"),
+      "fixture_signature",
+    ].join(".");
+
+    expect(headerSegment.length).toBeGreaterThan(16 * 1024);
+    expect(headerSegment.startsWith("eyJ")).toBe(false);
+    expect(headerSegment.includes("-")).toBe(true);
+    expect(scanClientPayload(encoder.encode(candidate))).toEqual({
+      detected: true,
+      code: ClientPayloadDetectionCode.UNAPPROVED_JWT,
+    });
+  });
+
   it("rejects UTF-16LE and UTF-16BE PEM markers with a safe category", () => {
     const ordinaryPem = "-----BEGIN PRIVATE KEY-----";
     const encryptedPem = "-----BEGIN ENCRYPTED PRIVATE KEY-----";
