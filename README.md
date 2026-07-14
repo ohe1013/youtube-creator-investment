@@ -1,5 +1,9 @@
 # YouTube Creator Investment Platform
 
+## 비공개 Toss 출시 핸드오프
+
+실제 Console 업로드, Production 자격증명 입력, Toss Business 검증, mTLS 발급, 소비자 Toss 앱 테스트는 소유자만 수행하는 외부 게이트입니다. 로컬 빌드 성공만으로 검토 요청이나 공개 출시를 완료로 표시하지 마세요. 정확한 로컬 게이트, HTTPS/CORS 확인, 비공개 테스트, 비밀 없는 증적 인덱스는 [비공개 Toss 출시 runbook](docs/runbooks/toss-private-release.md)을 따릅니다.
+
 ## Apps-in-Toss Android Sandbox
 
 Follow the [Android Sandbox operator runbook](docs/apps-in-toss-sandbox.md). First complete the actual Toss Business console registration for `creatorx`. Then, from the repository root, install the pinned project-local Android tools and run the doctor with that registration explicitly confirmed:
