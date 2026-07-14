@@ -646,17 +646,41 @@ function readRawPublicConfigurationKeyEnd(text, match) {
   return cursor;
 }
 
-function skipRawJavaScriptWhitespace(text, startIndex) {
+function skipJavaScriptTrivia(text, startIndex) {
   let cursor = startIndex;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
-    cursor += 1;
+  while (cursor < text.length) {
+    while (cursor < text.length && /\s/.test(text[cursor])) {
+      cursor += 1;
+    }
+    if (text[cursor] !== "/") break;
+
+    if (text[cursor + 1] === "*") {
+      const commentEnd = text.indexOf("*/", cursor + 2);
+      if (commentEnd === -1) return text.length;
+      cursor = commentEnd + 2;
+      continue;
+    }
+    if (text[cursor + 1] === "/") {
+      const lineFeed = text.indexOf("\n", cursor + 2);
+      const carriageReturn = text.indexOf("\r", cursor + 2);
+      const lineEnd =
+        lineFeed === -1
+          ? carriageReturn
+          : carriageReturn === -1
+            ? lineFeed
+            : Math.min(lineFeed, carriageReturn);
+      if (lineEnd === -1) return text.length;
+      cursor = lineEnd + 1;
+      continue;
+    }
+    break;
   }
   return cursor;
 }
 
 function hasRawPublicConfigurationAssignmentAt(text, match) {
   const keyEnd = readRawPublicConfigurationKeyEnd(text, match);
-  const nextIndex = skipRawJavaScriptWhitespace(text, keyEnd);
+  const nextIndex = skipJavaScriptTrivia(text, keyEnd);
   return text[nextIndex] === "=" || text[nextIndex] === ":";
 }
 
@@ -689,10 +713,10 @@ function hasOpaqueQuotedPublicConfigurationAssignmentAt(
   const keyEnd = readOpaquePublicConfigurationKeyEnd(text, match);
   if (text[keyEnd] !== quote) return false;
 
-  let nextIndex = skipRawJavaScriptWhitespace(text, keyEnd + 1);
+  let nextIndex = skipJavaScriptTrivia(text, keyEnd + 1);
   if (text[nextIndex] === ":") return true;
   if (text[nextIndex] !== "]") return false;
-  nextIndex = skipRawJavaScriptWhitespace(text, nextIndex + 1);
+  nextIndex = skipJavaScriptTrivia(text, nextIndex + 1);
   return text[nextIndex] === "=" || text[nextIndex] === ":";
 }
 

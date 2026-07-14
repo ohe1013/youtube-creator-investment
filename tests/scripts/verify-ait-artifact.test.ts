@@ -23,6 +23,10 @@ const VERIFIER_PATH = fileURLToPath(
 const PROJECT_ROOT = dirname(dirname(VERIFIER_PATH));
 const encoder = new TextEncoder();
 const temporaryDirectories: string[] = [];
+// This allows scheduler contention in the full Vitest worker pool while still
+// rejecting the legacy 5 MiB tokenizer path (about 1.6 s for punctuation and
+// more than 2 s for malformed backslash payloads in direct measurement).
+const OPAQUE_SCAN_REGRESSION_BUDGET_MS = 1_500;
 
 type FixtureFile = {
   name: string;
@@ -929,6 +933,24 @@ describe("verifyAitArtifact", () => {
     }
   });
 
+  it("rejects raw and NUL-delimited quoted public keys with comments before assignment syntax", async () => {
+    const secret = "z9";
+    const sources = [
+      `c["NEXT_PUBLIC_EDGE_SECRET_KEY"] /* note */ = "${secret}";`,
+      `const config = { ["NEXT_PUBLIC_EDGE_SECRET_KEY"] /* note */ : "${secret}" };`,
+      `const config = { "NEXT_PUBLIC_EDGE_SECRET_KEY" /* note */ : "${secret}" };`,
+      `c["NEXT_PUBLIC_EDGE_SECRET_KEY" /* note */] = "${secret}";`,
+      `c["NEXT_PUBLIC_EDGE_SECRET_KEY"] // note\n= "${secret}";`,
+      `c["NEXT_PUBLIC_EDGE_SECRET_KEY" // note\n] = "${secret}";`,
+    ];
+
+    for (const source of sources) {
+      for (const payload of [source, `\0${source}\0`]) {
+        await expectOpaquePayloadToReject(encoder.encode(payload), secret);
+      }
+    }
+  });
+
   it("rejects NUL-delimited public secret keys separated from assignment punctuation by comments", async () => {
     const secret = "z9";
     const payloads = [
@@ -1003,16 +1025,18 @@ describe("verifyAitArtifact", () => {
     }
   });
 
-  it("bounds punctuation-only opaque byte scans without tokenizing the whole payload", () => {
+  it("keeps punctuation-only opaque byte scans bounded under worker contention", () => {
     const payload = Buffer.alloc(5 * 1024 * 1024, ";");
     const startedAt = Date.now();
 
     expect(containsSpecificSecretBytes(payload)).toBe(false);
 
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(Date.now() - startedAt).toBeLessThan(
+      OPAQUE_SCAN_REGRESSION_BUDGET_MS,
+    );
   });
 
-  it("bounds malformed escape opaque byte scans without treating them as secrets", () => {
+  it("keeps malformed escape opaque byte scans bounded under worker contention", () => {
     const payloads = [
       Buffer.alloc(5 * 1024 * 1024, "\\"),
       Buffer.alloc(5 * 1024 * 1024, "\\u"),
@@ -1024,7 +1048,9 @@ describe("verifyAitArtifact", () => {
 
       expect(containsSpecificSecretBytes(payload)).toBe(false);
 
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(Date.now() - startedAt).toBeLessThan(
+        OPAQUE_SCAN_REGRESSION_BUDGET_MS,
+      );
     }
   });
 
