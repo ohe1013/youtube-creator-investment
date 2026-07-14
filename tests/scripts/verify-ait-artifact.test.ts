@@ -415,6 +415,149 @@ describe("scanClientPayload direct detector baseline", () => {
   });
 });
 
+describe("scanClientPayload Supabase anon lexical policy", () => {
+  const anonJwt = createTestJwt({ role: "anon", fixture: "bounded-policy" });
+  const userJwt = createTestJwt({ role: "user", fixture: "bounded-policy" });
+  const serviceRoleJwt = createTestJwt({
+    role: "service_role",
+    fixture: "bounded-policy",
+  });
+  const rejectedJwt = {
+    detected: true,
+    code: ClientPayloadDetectionCode.UNAPPROVED_JWT,
+  };
+  const publicSecretAssignment = {
+    detected: true,
+    code: ClientPayloadDetectionCode.PUBLIC_SECRET_ASSIGNMENT,
+  };
+
+  it("allows only exact static Supabase anon JWT literals and retains AIT/output parity", async () => {
+    const sources = [
+      `const config = { NEXT_PUBLIC_SUPABASE_ANON_KEY: "${anonJwt}" };`,
+      `config.NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+      `config["NEXT_PUBLIC_SUPABASE_ANON_KEY"] = "${anonJwt}";`,
+      `Object.defineProperty(globalThis, "NEXT_PUBLIC_SUPABASE_ANON_KEY", { value: "${anonJwt}" });`,
+      `Reflect.set(globalThis, "NEXT_PUBLIC_SUPABASE_ANON_KEY", "${anonJwt}");`,
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual({
+        detected: false,
+      });
+    }
+
+    await expectOpaquePayloadToPass(encoder.encode(sources[0]));
+  });
+
+  it("rejects non-anon roles and anonymous JWTs under non-exact public keys", () => {
+    const sources = [
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY = "${userJwt}";`,
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY = "${serviceRoleJwt}";`,
+      `NEXT_PUBLIC_API_URL = "${anonJwt}";`,
+      `NEXT_PUBLIC_OTHER_KEY = "${anonJwt}";`,
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual(rejectedJwt);
+    }
+  });
+
+  it("rejects dynamic Supabase anon JWT values", () => {
+    const sources = [
+      `const value = "${anonJwt}"; NEXT_PUBLIC_SUPABASE_ANON_KEY = value;`,
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY = makeValue("${anonJwt}");`,
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}" + "";`,
+      `NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}" || fallback;`,
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual(rejectedJwt);
+    }
+  });
+
+  it("does not classify line-comment, ordinary strings, template text, or regex literals as assignments", () => {
+    const sources = [
+      '// NEXT_PUBLIC_EDGE_SECRET_KEY = "z9"\nconst value = "public";',
+      'const note = "NEXT_PUBLIC_EDGE_SECRET_KEY = z9";',
+      "const note = `NEXT_PUBLIC_EDGE_SECRET_KEY = z9`;",
+      "const matcher = /NEXT_PUBLIC_EDGE_SECRET_KEY\\s*=\\s*z9/;",
+      "const characterClass = /[NEXT_PUBLIC_EDGE_SECRET_KEY=]/;",
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual({
+        detected: false,
+      });
+    }
+  });
+
+  it("rejects template interpolation public-secret assignments", () => {
+    const source =
+      'const rendered = `value ${NEXT_PUBLIC_EDGE_SECRET_KEY = "z9"}`;';
+
+    expect(scanClientPayload(encoder.encode(source))).toEqual(
+      publicSecretAssignment,
+    );
+  });
+
+  it("rejects direct, member, and computed static public-secret assignments", () => {
+    const sources = [
+      'NEXT_PUBLIC_EDGE_SECRET_KEY = "z9";',
+      'config.NEXT_PUBLIC_EDGE_SECRET_KEY = "z9";',
+      'config["NEXT_PUBLIC_EDGE_SECRET_KEY"] = "z9";',
+      'const config = { ["NEXT_PUBLIC_EDGE_SECRET_KEY"]: "z9" };',
+      'config["NEXT_PUBLIC_EDGE_" + "SECRET_KEY"] = "z9";',
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual(
+        publicSecretAssignment,
+      );
+    }
+  });
+
+  it("rejects Object.defineProperty and Reflect setters for public-secret keys", () => {
+    const sources = [
+      'Object.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "z9" });',
+      'Reflect.set(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "z9");',
+      'Reflect.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "z9" });',
+    ];
+
+    for (const source of sources) {
+      expect(scanClientPayload(encoder.encode(source))).toEqual(
+        publicSecretAssignment,
+      );
+    }
+  });
+
+  it("preserves Supabase anon policy across return, throw, case, regex character class, escaped names, U+2028/U+2029, and UTF-16", () => {
+    const passingSources = [
+      `function read() { return NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}"; }`,
+      `function stop() { throw (NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}"); }`,
+      `const marker = /[NEXT_PUBLIC_SUPABASE_ANON_KEY=]/; NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+      `N\\u0045XT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+      `// comment${String.fromCodePoint(0x2028)}NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+      `// comment${String.fromCodePoint(0x2029)}NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+    ];
+    const passingPayloads = [
+      ...passingSources.map((source) => encoder.encode(source)),
+      encodeUtf16LittleEndianWithBom(
+        `NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+      ),
+      encodeUtf16BigEndianWithBom(
+        `NEXT_PUBLIC_SUPABASE_ANON_KEY = "${anonJwt}";`,
+      ),
+    ];
+
+    for (const payload of passingPayloads) {
+      expect(scanClientPayload(payload)).toEqual({ detected: false });
+    }
+
+    const caseLabel = `switch (0) { case NEXT_PUBLIC_SUPABASE_ANON_KEY: "${anonJwt}"; }`;
+    expect(scanClientPayload(encoder.encode(caseLabel))).toEqual(rejectedJwt);
+  });
+});
+
 describe("verifyAitArtifact", () => {
   it("returns deterministic metadata for a valid CreatorX artifact", async () => {
     const html = "<!doctype html>";

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { tokenizer } from "acorn";
 
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 const utf16LittleEndianDecoder = new TextDecoder("utf-16le", { fatal: true });
@@ -8,6 +9,11 @@ const MAX_BASE64_CANDIDATE_CHARACTERS = 16 * 1024;
 const MIN_BASE64_CANDIDATE_CHARACTERS = 32;
 const MAX_JWT_SEGMENT_CHARACTERS = 16 * 1024;
 const UTF16_PROBE_BYTES = 4 * 1024;
+const MAX_ALLOWED_ANON_JWT_LITERAL_RANGES = 128;
+const MAX_STATIC_STRING_EXPRESSION_PARTS = 8;
+const MAX_STATIC_STRING_EXPRESSION_CHARACTERS = 256;
+
+const SUPABASE_ANON_KEY = "NEXT_PUBLIC_SUPABASE_ANON_KEY";
 
 const POSTGRES_URL_LITERALS = ["postgres://", "postgresql://"];
 const POSTGRES_URL_FIRST_CHARACTER = "p".charCodeAt(0);
@@ -47,10 +53,11 @@ export function scanClientPayload(bytes, options = {}) {
   for (const view of createBoundedTextViews(bytes, options)) {
     const code = detectDirectNonJwtSecret(view);
     if (code) return { detected: true, code };
-    if (containsJwtCandidate(view)) {
+    const policyCode = detectJavaScriptPolicy(view);
+    if (policyCode) {
       return {
         detected: true,
-        code: ClientPayloadDetectionCode.UNAPPROVED_JWT,
+        code: policyCode,
       };
     }
   }
@@ -148,6 +155,392 @@ function detectDirectNonJwtSecret(text) {
     return ClientPayloadDetectionCode.KNOWN_SECRET;
   }
   return null;
+}
+
+function detectJavaScriptPolicy(text) {
+  const allowedJwtLiteralRanges = new Set();
+
+  try {
+    const cursor = createTokenCursor(text);
+    let caseLabelActive = false;
+
+    for (let token = cursor.next(); token; token = cursor.next()) {
+      const setterCode = tryReadBuiltinSetterCall(
+        cursor,
+        token,
+        text,
+        allowedJwtLiteralRanges,
+      );
+      if (setterCode) return setterCode;
+
+      const directCode = tryReadDirectAssignment(
+        cursor,
+        token,
+        text,
+        allowedJwtLiteralRanges,
+        caseLabelActive,
+      );
+      if (directCode) return directCode;
+
+      const computedCode = tryReadComputedAssignment(
+        cursor,
+        token,
+        text,
+        allowedJwtLiteralRanges,
+        caseLabelActive,
+      );
+      if (computedCode) return computedCode;
+
+      if (token.type.label === "case") {
+        caseLabelActive = true;
+      } else if (token.type.label === ":") {
+        caseLabelActive = false;
+      }
+    }
+  } catch {
+    return containsUnapprovedJwtCandidate(text)
+      ? ClientPayloadDetectionCode.UNAPPROVED_JWT
+      : null;
+  }
+
+  return containsUnapprovedJwtCandidate(text, allowedJwtLiteralRanges)
+    ? ClientPayloadDetectionCode.UNAPPROVED_JWT
+    : null;
+}
+
+function* iterateTokens(text) {
+  const stream = tokenizer(text, {
+    ecmaVersion: "latest",
+    sourceType: "script",
+    allowHashBang: true,
+  });
+  for (
+    let token = stream.getToken();
+    token.type.label !== "eof";
+    token = stream.getToken()
+  ) {
+    yield token;
+  }
+}
+
+function createTokenCursor(text) {
+  const tokens = iterateTokens(text);
+  let first = null;
+  let second = null;
+  let third = null;
+
+  function fill(count) {
+    while (count > 0) {
+      if (first === null) {
+        const next = tokens.next();
+        if (next.done) return;
+        first = next.value;
+      } else if (second === null) {
+        const next = tokens.next();
+        if (next.done) return;
+        second = next.value;
+      } else if (third === null) {
+        const next = tokens.next();
+        if (next.done) return;
+        third = next.value;
+      } else {
+        return;
+      }
+      count -= 1;
+    }
+  }
+
+  return {
+    next() {
+      fill(1);
+      const current = first;
+      first = second;
+      second = third;
+      third = null;
+      return current;
+    },
+    peek(position = 1) {
+      fill(position);
+      if (position === 1) return first;
+      if (position === 2) return second;
+      return position === 3 ? third : null;
+    },
+  };
+}
+
+function tryReadBuiltinSetterCall(cursor, token, text, allowedRanges) {
+  if (token.type.label !== "name") return null;
+
+  const objectName = token.value;
+  if (objectName !== "Object" && objectName !== "Reflect") return null;
+
+  const dot = cursor.peek();
+  const method = cursor.peek(2);
+  const open = cursor.peek(3);
+  if (
+    dot?.type.label !== "." ||
+    method?.type.label !== "name" ||
+    open?.type.label !== "("
+  ) {
+    return null;
+  }
+
+  const methodName = method.value;
+  const isDefineProperty = methodName === "defineProperty";
+  const isReflectSet = objectName === "Reflect" && methodName === "set";
+  if (!isDefineProperty && !isReflectSet) return null;
+
+  cursor.next();
+  cursor.next();
+  cursor.next();
+  if (skipCallArgument(cursor) !== ",") return null;
+
+  const key = readStaticStringExpression(cursor);
+  if (key === null || cursor.peek()?.type.label !== ",") return null;
+  cursor.next();
+
+  if (isSensitivePublicConfigurationKey(key)) {
+    return ClientPayloadDetectionCode.PUBLIC_SECRET_ASSIGNMENT;
+  }
+  if (key !== SUPABASE_ANON_KEY) return null;
+
+  const literal = isReflectSet
+    ? readStaticAssignmentLiteral(cursor, text)
+    : readDescriptorValueLiteral(cursor, text);
+  markAllowedAnonymousJwtRange(allowedRanges, literal);
+  return null;
+}
+
+function skipCallArgument(cursor) {
+  let nested = 0;
+
+  for (let token = cursor.next(); token; token = cursor.next()) {
+    const label = token.type.label;
+    if (label === "(" || label === "[" || label === "{") {
+      nested += 1;
+      continue;
+    }
+    if (label === ")" || label === "]" || label === "}") {
+      if (nested === 0) return label;
+      nested -= 1;
+      continue;
+    }
+    if (label === "," && nested === 0) return label;
+  }
+
+  return null;
+}
+
+function readDescriptorValueLiteral(cursor, text) {
+  if (cursor.peek()?.type.label !== "{") return null;
+  cursor.next();
+  let depth = 1;
+
+  for (let token = cursor.next(); token; token = cursor.next()) {
+    const label = token.type.label;
+    if (label === "{") {
+      depth += 1;
+      continue;
+    }
+    if (label === "}") {
+      depth -= 1;
+      if (depth === 0) return null;
+      continue;
+    }
+    if (
+      depth === 1 &&
+      isStaticKeyToken(token) &&
+      token.value === "value" &&
+      cursor.peek()?.type.label === ":"
+    ) {
+      cursor.next();
+      return readStaticAssignmentLiteral(cursor, text);
+    }
+  }
+
+  return null;
+}
+
+function tryReadDirectAssignment(
+  cursor,
+  token,
+  text,
+  allowedRanges,
+  caseLabelActive,
+) {
+  if (!isStaticKeyToken(token)) return null;
+
+  const operator = cursor.peek();
+  if (!isAssignmentOperator(operator)) return null;
+  if (caseLabelActive && operator.type.label === ":") return null;
+
+  cursor.next();
+  return classifyStaticPublicAssignment(
+    cursor,
+    token.value,
+    text,
+    allowedRanges,
+  );
+}
+
+function tryReadComputedAssignment(
+  cursor,
+  token,
+  text,
+  allowedRanges,
+  caseLabelActive,
+) {
+  if (token.type.label !== "[") return null;
+
+  const key = readStaticStringExpression(cursor);
+  if (
+    key === null ||
+    cursor.peek()?.type.label !== "]" ||
+    !isAssignmentOperator(cursor.peek(2))
+  ) {
+    return null;
+  }
+  if (caseLabelActive && cursor.peek(2).type.label === ":") return null;
+
+  cursor.next();
+  cursor.next();
+  return classifyStaticPublicAssignment(cursor, key, text, allowedRanges);
+}
+
+function classifyStaticPublicAssignment(cursor, key, text, allowedRanges) {
+  if (isSensitivePublicConfigurationKey(key)) {
+    return ClientPayloadDetectionCode.PUBLIC_SECRET_ASSIGNMENT;
+  }
+  if (key !== SUPABASE_ANON_KEY) return null;
+
+  const literal = readStaticAssignmentLiteral(cursor, text);
+  markAllowedAnonymousJwtRange(allowedRanges, literal);
+  return null;
+}
+
+function isStaticKeyToken(token) {
+  return token.type.label === "name" || token.type.label === "string";
+}
+
+function isAssignmentOperator(token) {
+  return token?.type.label === "=" || token?.type.label === ":";
+}
+
+function readStaticStringExpression(cursor) {
+  let parentheses = 0;
+  while (cursor.peek()?.type.label === "(") {
+    if (parentheses >= MAX_STATIC_STRING_EXPRESSION_PARTS) return null;
+    cursor.next();
+    parentheses += 1;
+  }
+
+  const first = readStaticStringToken(cursor);
+  if (first === null) return null;
+
+  let value = first;
+  let parts = 1;
+  while (isPlusToken(cursor.peek())) {
+    if (parts >= MAX_STATIC_STRING_EXPRESSION_PARTS) return null;
+    cursor.next();
+    const next = readStaticStringToken(cursor);
+    if (next === null || value.length + next.length > MAX_STATIC_STRING_EXPRESSION_CHARACTERS) {
+      return null;
+    }
+    value += next;
+    parts += 1;
+  }
+
+  while (parentheses > 0) {
+    if (cursor.peek()?.type.label !== ")") return null;
+    cursor.next();
+    parentheses -= 1;
+  }
+
+  return value;
+}
+
+function readStaticStringToken(cursor) {
+  const token = cursor.peek();
+  if (token?.type.label !== "string" || typeof token.value !== "string") {
+    return null;
+  }
+  if (token.value.length > MAX_STATIC_STRING_EXPRESSION_CHARACTERS) {
+    return null;
+  }
+  cursor.next();
+  return token.value;
+}
+
+function readStaticAssignmentLiteral(cursor, text) {
+  const token = cursor.peek();
+  if (token?.type.label !== "string" || typeof token.value !== "string") {
+    return null;
+  }
+  cursor.next();
+
+  if (!isStaticAssignmentLiteralTerminator(cursor.peek())) return null;
+
+  const quote = text.charCodeAt(token.start);
+  const rawStart = token.start + 1;
+  const rawEnd = token.end - 1;
+  if (
+    (quote !== 0x22 && quote !== 0x27) ||
+    text.charCodeAt(rawEnd) !== quote ||
+    text.slice(rawStart, rawEnd) !== token.value
+  ) {
+    return null;
+  }
+
+  return { value: token.value, start: rawStart, end: rawEnd };
+}
+
+function isPlusToken(token) {
+  return token?.value === "+";
+}
+
+function isStaticAssignmentLiteralTerminator(token) {
+  if (token === null) return true;
+  switch (token.type.label) {
+    case ";":
+    case ",":
+    case ")":
+    case "}":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function markAllowedAnonymousJwtRange(allowedRanges, literal) {
+  if (
+    literal === null ||
+    allowedRanges.size >= MAX_ALLOWED_ANON_JWT_LITERAL_RANGES ||
+    !isAnonymousJwtLiteral(literal.value)
+  ) {
+    return;
+  }
+
+  allowedRanges.add(`${literal.start}:${literal.end}`);
+}
+
+function isAnonymousJwtLiteral(value) {
+  const candidate = readJwtCandidate(value, 0);
+  return Boolean(
+    candidate &&
+      candidate.end === value.length &&
+      isJwtHeader(candidate.header) &&
+      candidate.claims?.role === "anon",
+  );
+}
+
+function isSensitivePublicConfigurationKey(value) {
+  const normalized = value.replaceAll("-", "_").toUpperCase();
+  return (
+    normalized.startsWith("NEXT_PUBLIC_") &&
+    /(?:API_KEY|CLIENT_SECRET|SECRET_KEY|SERVICE_ROLE_KEY|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(
+      normalized,
+    )
+  );
 }
 
 function containsPostgresUrl(text) {
@@ -344,7 +737,7 @@ function isValidBase64Candidate(text, start, end) {
   return padding === 0 || (end - start) % 4 === 0;
 }
 
-function containsJwtCandidate(text) {
+function containsUnapprovedJwtCandidate(text, allowedRanges = null) {
   for (let index = 0; index < text.length; ) {
     if (
       !isBase64UrlCharacter(text.charCodeAt(index)) ||
@@ -354,48 +747,52 @@ function containsJwtCandidate(text) {
       continue;
     }
 
-    const headerEnd = readBase64UrlSegmentEnd(text, index);
-    if (text.charCodeAt(headerEnd) !== 0x2e) {
-      index = Math.max(index + 1, headerEnd);
+    const candidate = readJwtCandidate(text, index);
+    if (candidate === null) {
+      index += 1;
       continue;
     }
 
-    const payloadStart = headerEnd + 1;
-    const payloadEnd = readBase64UrlSegmentEnd(text, payloadStart);
     if (
-      payloadStart === payloadEnd ||
-      text.charCodeAt(payloadEnd) !== 0x2e
-    ) {
-      index = Math.max(index + 1, payloadEnd);
-      continue;
-    }
-
-    const signatureStart = payloadEnd + 1;
-    const signatureEnd = readBase64UrlSegmentEnd(text, signatureStart);
-    const headerLength = headerEnd - index;
-    const payloadLength = payloadEnd - payloadStart;
-    const signatureLength = signatureEnd - signatureStart;
-    const header = parseBoundedJwtObject(text, index, headerEnd);
-    const claims = parseBoundedJwtObject(text, payloadStart, payloadEnd);
-
-    if (
-      isJwtHeader(header) &&
-      (claims !== null ||
-        payloadLength > MAX_JWT_SEGMENT_CHARACTERS ||
-        signatureLength > MAX_JWT_SEGMENT_CHARACTERS)
+      !allowedRanges?.has(`${index}:${candidate.end}`) &&
+      isJwtCandidate(candidate)
     ) {
       return true;
     }
-    if (isJwtHeader(header) && payloadLength > 0) {
-      return true;
-    }
-    if (headerLength > MAX_JWT_SEGMENT_CHARACTERS && payloadLength > 0) {
-      return true;
-    }
 
-    index = Math.max(index + 1, signatureEnd);
+    index = Math.max(index + 1, candidate.end);
   }
   return false;
+}
+
+function readJwtCandidate(text, start) {
+  const headerEnd = readBase64UrlSegmentEnd(text, start);
+  if (text.charCodeAt(headerEnd) !== 0x2e) return null;
+
+  const payloadStart = headerEnd + 1;
+  const payloadEnd = readBase64UrlSegmentEnd(text, payloadStart);
+  if (payloadStart === payloadEnd || text.charCodeAt(payloadEnd) !== 0x2e) {
+    return null;
+  }
+
+  const signatureStart = payloadEnd + 1;
+  const end = readBase64UrlSegmentEnd(text, signatureStart);
+  return {
+    end,
+    headerLength: headerEnd - start,
+    payloadLength: payloadEnd - payloadStart,
+    signatureLength: end - signatureStart,
+    header: parseBoundedJwtObject(text, start, headerEnd),
+    claims: parseBoundedJwtObject(text, payloadStart, payloadEnd),
+  };
+}
+
+function isJwtCandidate(candidate) {
+  return (
+    (isJwtHeader(candidate.header) && candidate.payloadLength > 0) ||
+    (candidate.headerLength > MAX_JWT_SEGMENT_CHARACTERS &&
+      candidate.payloadLength > 0)
+  );
 }
 
 function isBase64UrlCharacter(code) {
