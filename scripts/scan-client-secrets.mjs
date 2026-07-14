@@ -15,6 +15,7 @@ const specificSecretPatterns = [
   /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9-]{10,}\b/,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
+  /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
   /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:/@]+:[^\s/@]+@/i,
 ];
@@ -38,7 +39,7 @@ function isSecretBearingKey(key) {
     .replaceAll("-", "_")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .toUpperCase();
-  return /(?:API_KEY|CLIENT_SECRET|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(
+  return /(?:API_KEY|CLIENT_SECRET|SECRET_KEY|SERVICE_ROLE_KEY|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(
     normalized,
   );
 }

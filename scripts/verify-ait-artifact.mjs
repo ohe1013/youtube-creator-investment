@@ -44,6 +44,7 @@ const specificSecretPatterns = [
   /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255}\b/,
   /\bgithub_pat_[A-Za-z0-9_]{20,255}\b/,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
+  /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
   /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:/@]+:[^\s/@]+@/i,
 ];
@@ -477,7 +478,7 @@ function isDynamicRuntimeExpression(value) {
 function isSensitiveConfigurationKey(key) {
   const normalized = key.replaceAll("-", "_");
   if (normalized.toUpperCase().startsWith("NEXT_PUBLIC_")) {
-    return /(?:API_KEY|CLIENT_SECRET|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(
+    return /(?:API_KEY|CLIENT_SECRET|SECRET_KEY|SERVICE_ROLE_KEY|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(
       normalized.toUpperCase(),
     );
   }
@@ -491,7 +492,7 @@ function isSensitiveConfigurationKey(key) {
       /^(?:JWT|AUTH|API|ACCESS|REFRESH|BOT|SLACK|GITHUB|GITLAB|OAUTH|SESSION)_TOKEN$/.test(
         normalized,
       ) ||
-      /^(?:[A-Z0-9]+_)*(?:SECRET|SECRET_KEY)$/.test(normalized) ||
+      /^(?:[A-Z0-9]+_)*(?:SECRET|SECRET_KEY|SERVICE_ROLE_KEY)$/.test(normalized) ||
       /^(?:TOKEN|PASSWORD|PRIVATE_KEY|DATABASE_URL)$/.test(normalized)
     );
   }
@@ -513,6 +514,8 @@ function isSensitiveConfigurationKey(key) {
     "nextAuthSecret",
     "cronSecret",
     "serviceAccountKey",
+    "serviceRoleKey",
+    "stripeSecretKey",
   ]).has(normalized);
 }
 

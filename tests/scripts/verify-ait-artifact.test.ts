@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import {
   MAX_AIT_UNCOMPRESSED_BYTES,
   verifyAitArtifact,
 } from "../../scripts/verify-ait-artifact.mjs";
+import { scanClientSecrets } from "../../scripts/scan-client-secrets.mjs";
 
 const DEPLOYMENT_ID = "019bfa90-ad4c-799f-b227-b4159e6867f7";
 const ENTRYPOINT = "web/index.html";
@@ -160,6 +161,15 @@ async function createTemporaryArtifact(
   const artifactPath = join(directory, "creatorx.ait");
   await writeFile(artifactPath, buffer);
   return artifactPath;
+}
+
+async function createTemporaryClientOutput(content: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "creatorx-client-output-test-"));
+  temporaryDirectories.push(directory);
+  const outDir = join(directory, "out");
+  await mkdir(outDir);
+  await writeFile(join(outDir, "public-config.js"), content);
+  return outDir;
 }
 
 afterEach(async () => {
@@ -711,6 +721,67 @@ describe("verifyAitArtifact", () => {
     expect(failure).toMatchObject({ code: "AIT_SECRET_DETECTED" });
     expect(String(failure.message)).toContain("web/opaque.bin");
     expect(String(failure.message)).not.toContain(secret);
+  });
+
+  it("rejects a Stripe secret assigned to a public configuration key without echoing it", async () => {
+    const secret = ["sk_", "live_", "testonly0123456789abcdef"].join("");
+    const publicConfig = `const config = { NEXT_PUBLIC_STRIPE_SECRET_KEY: "${secret}" };`;
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/public-config.js", content: publicConfig },
+      ],
+    });
+
+    const artifactFailure = await verifyAitArtifact(artifact).catch(
+      (error) => error,
+    );
+    expect(artifactFailure).toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/public-config.js",
+    });
+    expect(String(artifactFailure.message)).not.toContain(secret);
+
+    const outDir = await createTemporaryClientOutput(publicConfig);
+    const clientFailure = await scanClientSecrets({ outDir }).catch(
+      (error) => error,
+    );
+    expect(clientFailure).toMatchObject({
+      code: "CLIENT_SECRET_DETECTED",
+      message: "Suspected secret in client output: public-config.js",
+    });
+    expect(String(clientFailure.message)).not.toContain(secret);
+  });
+
+  it("rejects a Supabase service-role key assigned to a public configuration key without echoing it", async () => {
+    const secret =
+      "eyJhbGciOiJub25lIn0.eyJyb2xlIjoic2VydmljZV9yb2xlIiwidGVzdCI6dHJ1ZX0.not-a-real-signature";
+    const publicConfig = `const config = { NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY: "${secret}" };`;
+    const artifact = await buildFixture({
+      files: [
+        { name: ENTRYPOINT, content: "<!doctype html>" },
+        { name: "web/public-config.js", content: publicConfig },
+      ],
+    });
+
+    const artifactFailure = await verifyAitArtifact(artifact).catch(
+      (error) => error,
+    );
+    expect(artifactFailure).toMatchObject({
+      code: "AIT_SECRET_DETECTED",
+      message: "Suspected secret in entry web/public-config.js",
+    });
+    expect(String(artifactFailure.message)).not.toContain(secret);
+
+    const outDir = await createTemporaryClientOutput(publicConfig);
+    const clientFailure = await scanClientSecrets({ outDir }).catch(
+      (error) => error,
+    );
+    expect(clientFailure).toMatchObject({
+      code: "CLIENT_SECRET_DETECTED",
+      message: "Suspected secret in client output: public-config.js",
+    });
+    expect(String(clientFailure.message)).not.toContain(secret);
   });
 
   it("does not flag normal NEXT_PUBLIC configuration", async () => {
