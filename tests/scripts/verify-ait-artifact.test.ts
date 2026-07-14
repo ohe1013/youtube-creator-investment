@@ -13,6 +13,11 @@ import {
   MAX_AIT_UNCOMPRESSED_BYTES,
   verifyAitArtifact,
 } from "../../scripts/verify-ait-artifact.mjs";
+import {
+  ClientPayloadDetectionCode,
+  containsSpecificSecretBytes as containsBoundedSpecificSecretBytes,
+  scanClientPayload,
+} from "../../scripts/client-payload-scanner.mjs";
 import { scanClientSecrets } from "../../scripts/scan-client-secrets.mjs";
 
 const DEPLOYMENT_ID = "019bfa90-ad4c-799f-b227-b4159e6867f7";
@@ -270,6 +275,109 @@ afterEach(async () => {
       rm(directory, { force: true, recursive: true }),
     ),
   );
+});
+
+describe("scanClientPayload direct detector baseline", () => {
+  it("rejects credential-free PostgreSQL URLs with a safe category", () => {
+    const payloads = [
+      "postgres://db.fixture.test/creatorx",
+      "postgresql://db.fixture.test/creatorx",
+    ];
+
+    for (const payload of payloads) {
+      expect(scanClientPayload(encoder.encode(payload))).toEqual({
+        detected: true,
+        code: ClientPayloadDetectionCode.POSTGRES_URL,
+      });
+      expect(containsBoundedSpecificSecretBytes(encoder.encode(payload))).toBe(
+        true,
+      );
+    }
+
+    expect(scanClientPayload(encoder.encode("public fixture text"))).toEqual({
+      detected: false,
+    });
+    expect(
+      containsBoundedSpecificSecretBytes(encoder.encode("public fixture text")),
+    ).toBe(false);
+  });
+
+  it("rejects ordinary and encrypted PEM markers with a safe category", () => {
+    const payloads = [
+      "-----BEGIN PRIVATE KEY-----\nfixture-only\n-----END PRIVATE KEY-----",
+      "-----BEGIN ENCRYPTED PRIVATE KEY-----\nfixture-only\n-----END ENCRYPTED PRIVATE KEY-----",
+    ];
+
+    for (const payload of payloads) {
+      expect(scanClientPayload(encoder.encode(payload))).toEqual({
+        detected: true,
+        code: ClientPayloadDetectionCode.PRIVATE_KEY_PEM,
+      });
+    }
+  });
+
+  it("rejects base64 and escaped PEM markers with a safe category", () => {
+    const base64Pem = Buffer.from(
+      "-----BEGIN PRIVATE KEY-----\nfixture-only\n-----END PRIVATE KEY-----",
+    ).toString("base64");
+    const escapedPem =
+      "\\u002d\\u002d\\u002d\\u002d\\u002dBEGIN\\x20ENCRYPTED\\x20PRIVATE\\x20KEY\\u002d\\u002d\\u002d\\u002d\\u002d";
+
+    for (const payload of [base64Pem, escapedPem]) {
+      expect(scanClientPayload(encoder.encode(payload))).toEqual({
+        detected: true,
+        code: ClientPayloadDetectionCode.PRIVATE_KEY_PEM,
+      });
+    }
+  });
+
+  it("retains legacy known-secret categories without exposing a value", () => {
+    const payload = ["sk_", "test_", "fixture0123456789abcdefghijklmnop"].join("");
+
+    expect(scanClientPayload(encoder.encode(payload))).toEqual({
+      detected: true,
+      code: ClientPayloadDetectionCode.KNOWN_SECRET,
+    });
+  });
+
+  it("rejects UTF-16LE and UTF-16BE PEM markers with a safe category", () => {
+    const ordinaryPem = "-----BEGIN PRIVATE KEY-----";
+    const encryptedPem = "-----BEGIN ENCRYPTED PRIVATE KEY-----";
+    const utf16BigEndianWithoutBom = encodeUtf16BigEndianWithBom(
+      encryptedPem,
+    ).subarray(2);
+    const payloads = [
+      encodeUtf16LittleEndianWithBom(ordinaryPem),
+      encodeUtf16BigEndianWithBom(encryptedPem),
+      new Uint8Array(Buffer.from(ordinaryPem, "utf16le")),
+      utf16BigEndianWithoutBom,
+    ];
+
+    for (const payload of payloads) {
+      expect(scanClientPayload(payload)).toEqual({
+        detected: true,
+        code: ClientPayloadDetectionCode.PRIVATE_KEY_PEM,
+      });
+    }
+  });
+
+  it("rejects structurally valid general, alg:none, and raw anonymous JWTs with a safe category", () => {
+    const payloads = [
+      createTestJwt(
+        { role: "member", fixture: true },
+        { alg: "HS256", typ: "JWT" },
+      ),
+      createTestJwt({ role: "member", fixture: true }),
+      createTestJwt({ role: "anon", fixture: true }),
+    ];
+
+    for (const payload of payloads) {
+      expect(scanClientPayload(encoder.encode(payload))).toEqual({
+        detected: true,
+        code: ClientPayloadDetectionCode.UNAPPROVED_JWT,
+      });
+    }
+  });
 });
 
 describe("verifyAitArtifact", () => {
@@ -1175,7 +1283,7 @@ describe("verifyAitArtifact", () => {
       ).toBe(false);
     }
 
-    const concreteSecret = `sk_test_${"a".repeat(24)}`;
+    const concreteSecret = ["sk_", "test_", "a".repeat(24)].join("");
     const midpoint = Math.floor(concreteSecret.length / 2);
     const benignPrefix = benignCandidates[0].repeat(
       Math.ceil((5 * 1024 * 1024) / benignCandidates[0].length),
