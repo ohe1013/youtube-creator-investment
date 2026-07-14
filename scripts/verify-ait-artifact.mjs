@@ -53,9 +53,55 @@ const specificSecretPatterns = [
 
 const genericSecretAssignmentPattern =
   /(?:^|[\s,{;])(?:["']([A-Za-z][A-Za-z0-9_-]{1,63})["']|([A-Za-z][A-Za-z0-9_-]{1,63}))\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|`([^`\r\n]{8,})`|([^\s,;}]{8,}))/gim;
+const sensitiveConfigurationKeyHintPattern =
+  /(?:api[_-]?key|client[_-]?secret|password|private[_-]?key|database[_-]?url|db[_-]?password|service[_-]?(?:role|account)[_-]?key|secret|token)/i;
 
-const nextPublicAssignmentPattern =
-  /(["']?(NEXT_PUBLIC_[A-Z0-9_]+)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^\s,;}]+)/gi;
+const MAX_OPAQUE_MARKER_WINDOWS = 128;
+const MAX_OPAQUE_MARKER_GAP_BYTES = 64;
+const MAX_OPAQUE_PUBLIC_KEY_CHARACTERS = 512;
+const OPAQUE_MARKER_CONTEXT_BEFORE_BYTES = 1_024;
+const OPAQUE_MARKER_CONTEXT_AFTER_BYTES = 16 * 1024;
+const publicConfigurationMarkerPrefixes = ["NEXT_PUBLIC_"];
+const opaqueTransformationMarkerPrefixes = [
+  ...publicConfigurationMarkerPrefixes,
+  "AKIA",
+  "ASIA",
+  "AIza",
+  "ghp_",
+  "gho_",
+  "ghu_",
+  "ghs_",
+  "ghr_",
+  "github_pat_",
+  "sk-",
+  "sk_",
+  "sb_secret_",
+  "xox",
+  "postgres://",
+  "postgresql://",
+  "mysql://",
+  "mongodb://",
+  "mongodb+srv://",
+  "eyJ",
+  "API_KEY",
+  "CLIENT_SECRET",
+  "SECRET_KEY",
+  "SERVICE_ROLE_KEY",
+  "PASSWORD",
+  "PRIVATE_KEY",
+  "DATABASE_URL",
+  "TOKEN",
+];
+const publicConfigurationMarkerStartCodes = new Set(
+  publicConfigurationMarkerPrefixes.map((prefix) =>
+    prefix[0].toUpperCase().charCodeAt(0),
+  ),
+);
+const opaqueTransformationMarkerStartCodes = new Set(
+  opaqueTransformationMarkerPrefixes.map((prefix) =>
+    prefix[0].toUpperCase().charCodeAt(0),
+  ),
+);
 
 function isAsciiLetterDigitUnderscore(character) {
   if (typeof character !== "string" || character.length !== 1) return false;
@@ -106,7 +152,10 @@ function containsSupabaseServiceRoleJwt(text) {
     }
 
     const headerEnd = readBase64UrlSegmentEnd(text, cursor);
-    if (text[headerEnd] !== ".") {
+    if (
+      text[cursor] !== "e" ||
+      text[headerEnd] !== "."
+    ) {
       cursor = headerEnd;
       continue;
     }
@@ -117,7 +166,10 @@ function containsSupabaseServiceRoleJwt(text) {
       continue;
     }
     const claimsEnd = readBase64UrlSegmentEnd(text, claimsStart);
-    if (text[claimsEnd] !== ".") {
+    if (
+      text[claimsStart] !== "e" ||
+      text[claimsEnd] !== "."
+    ) {
       cursor = claimsEnd;
       continue;
     }
@@ -158,6 +210,10 @@ function compactOpaqueText(text) {
   return text.replace(/[\0-\x1f\x7f-\uffff]/g, "");
 }
 
+function hasOpaqueTransformationCharacter(text) {
+  return /[\\\0-\x1f\x7f-\uffff]/.test(text);
+}
+
 function decodeJavaScriptEscape(
   text,
   index,
@@ -174,10 +230,17 @@ function decodeJavaScriptEscape(
 
   if (escape === "u") {
     if (text[index + 2] === "{") {
-      const closingIndex = text.indexOf("}", index + 3);
+      let closingIndex = index + 3;
+      while (
+        closingIndex < text.length &&
+        closingIndex < index + 9 &&
+        /[0-9a-fA-F]/.test(text[closingIndex])
+      ) {
+        closingIndex += 1;
+      }
       const hex = text.slice(index + 3, closingIndex);
       if (
-        closingIndex !== -1 &&
+        text[closingIndex] === "}" &&
         /^[0-9a-fA-F]{1,6}$/.test(hex)
       ) {
         const codePoint = Number.parseInt(hex, 16);
@@ -236,6 +299,441 @@ function decodeJavaScriptEscapes(text) {
     index = escape.nextIndex;
   }
   return decoded;
+}
+
+function asciiCharactersEqualIgnoreCase(value, expected) {
+  if (value === expected) return true;
+  if (typeof value !== "string" || typeof expected !== "string") {
+    return false;
+  }
+  if (value.length !== 1 || expected.length !== 1) return false;
+  const valueCode = value.charCodeAt(0);
+  const expectedCode = expected.charCodeAt(0);
+  return (
+    valueCode >= 0x41 &&
+    valueCode <= 0x7a &&
+    expectedCode >= 0x41 &&
+    expectedCode <= 0x7a &&
+    (valueCode | 0x20) === (expectedCode | 0x20)
+  );
+}
+
+function isOpaqueSeparatorCharacter(character) {
+  const code = character.charCodeAt(0);
+  return code <= 0x1f || code >= 0x7f;
+}
+
+function readOpaqueMarkerCharacter(text, index) {
+  if (text[index] === "\\") {
+    const escape = decodeJavaScriptEscape(text, index);
+    if (escape && escape.value.length === 1) return escape;
+  }
+  return { value: text[index], nextIndex: index + 1 };
+}
+
+function peekOpaqueMarkerCharacter(text, index) {
+  if (text[index] !== "\\") return text[index];
+  const escape = text[index + 1];
+  if (!escape) return null;
+  if (escape === "\\") return "\\";
+  if (
+    (escape === "u" &&
+      text[index + 2] !== "{" &&
+      !/[0-9a-fA-F]/.test(text[index + 2] ?? "")) ||
+    (escape === "x" && !/[0-9a-fA-F]/.test(text[index + 2] ?? ""))
+  ) {
+    return null;
+  }
+  const decoded = decodeJavaScriptEscape(text, index);
+  return decoded?.value.length === 1 ? decoded.value : null;
+}
+
+function matchOpaqueMarkerPrefixAt(text, startIndex, prefix) {
+  let cursor = startIndex;
+  for (const expected of prefix) {
+    let separatorCount = 0;
+    while (
+      cursor < text.length &&
+      isOpaqueSeparatorCharacter(text[cursor])
+    ) {
+      separatorCount += 1;
+      if (separatorCount > MAX_OPAQUE_MARKER_GAP_BYTES) return null;
+      cursor += 1;
+    }
+
+    if (cursor >= text.length) return null;
+    const character = readOpaqueMarkerCharacter(text, cursor);
+    if (!asciiCharactersEqualIgnoreCase(character.value, expected)) {
+      return null;
+    }
+    cursor = character.nextIndex;
+  }
+  return { nextIndex: cursor };
+}
+
+function skipStaticMarkerWhitespace(text, startIndex, markerStartIndex) {
+  let cursor = startIndex;
+  while (
+    cursor < text.length &&
+    cursor - markerStartIndex <= OPAQUE_MARKER_CONTEXT_AFTER_BYTES &&
+    /\s/.test(text[cursor])
+  ) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function matchStaticStringConcatenationMarkerAt(text, startIndex, prefix) {
+  const firstQuote = text[startIndex];
+  if (firstQuote !== '"' && firstQuote !== "'" && firstQuote !== "`") {
+    return null;
+  }
+
+  const firstCharacter = readOpaqueMarkerCharacter(text, startIndex + 1);
+  if (!asciiCharactersEqualIgnoreCase(firstCharacter.value, prefix[0])) {
+    return null;
+  }
+
+  let cursor = startIndex;
+  let matchedLength = 0;
+  while (cursor < text.length) {
+    const quote = text[cursor];
+    if (quote !== '"' && quote !== "'" && quote !== "`") return null;
+    cursor += 1;
+
+    while (cursor < text.length) {
+      if (cursor - startIndex > OPAQUE_MARKER_CONTEXT_AFTER_BYTES) {
+        return null;
+      }
+      if (matchedLength === prefix.length) return { nextIndex: cursor };
+      if (text[cursor] === quote) {
+        cursor += 1;
+        break;
+      }
+
+      if (isOpaqueSeparatorCharacter(text[cursor])) {
+        cursor += 1;
+        continue;
+      }
+      const character = readOpaqueMarkerCharacter(text, cursor);
+      if (
+        matchedLength >= prefix.length ||
+        !asciiCharactersEqualIgnoreCase(
+          character.value,
+          prefix[matchedLength],
+        )
+      ) {
+        return null;
+      }
+      matchedLength += 1;
+      cursor = character.nextIndex;
+    }
+
+    if (cursor >= text.length || text[cursor - 1] !== quote) return null;
+
+    cursor = skipStaticMarkerWhitespace(text, cursor, startIndex);
+    if (text[cursor] !== "+") return null;
+    cursor = skipStaticMarkerWhitespace(text, cursor + 1, startIndex);
+  }
+  return null;
+}
+
+function isKnownOpaqueMarkerStart(character, startCodes) {
+  if (typeof character !== "string" || character.length !== 1) return false;
+  const code = character.charCodeAt(0);
+  const normalizedCode = code >= 0x61 && code <= 0x7a ? code - 0x20 : code;
+  return startCodes.has(normalizedCode);
+}
+
+function isPotentialOpaqueMarkerStart(
+  character,
+  startCodes,
+  supportsStaticStringConcatenation,
+) {
+  return (
+    character === "\\" ||
+    (supportsStaticStringConcatenation &&
+      (character === '"' || character === "'" || character === "`")) ||
+    isKnownOpaqueMarkerStart(character, startCodes)
+  );
+}
+
+function findOpaqueMarkerAt(
+  text,
+  index,
+  prefixes,
+  startCodes,
+  supportsStaticStringConcatenation,
+) {
+  const character = text[index];
+  if (
+    !isPotentialOpaqueMarkerStart(
+      character,
+      startCodes,
+      supportsStaticStringConcatenation,
+    )
+  ) {
+    return null;
+  }
+
+  if (
+    supportsStaticStringConcatenation &&
+    (character === '"' || character === "'" || character === "`")
+  ) {
+    const staticStartCharacter = peekOpaqueMarkerCharacter(text, index + 1);
+    for (const prefix of prefixes) {
+      if (!asciiCharactersEqualIgnoreCase(staticStartCharacter, prefix[0])) {
+        continue;
+      }
+      const match = matchStaticStringConcatenationMarkerAt(
+        text,
+        index,
+        prefix,
+      );
+      if (match) return { ...match, prefix };
+    }
+    return null;
+  }
+
+  const markerStartCharacter =
+    character === "\\"
+      ? peekOpaqueMarkerCharacter(text, index)
+      : character;
+  if (!isKnownOpaqueMarkerStart(markerStartCharacter, startCodes)) {
+    return null;
+  }
+  for (const prefix of prefixes) {
+    if (!asciiCharactersEqualIgnoreCase(markerStartCharacter, prefix[0])) {
+      continue;
+    }
+    const match = matchOpaqueMarkerPrefixAt(text, index, prefix);
+    if (match) return { ...match, prefix };
+  }
+  return null;
+}
+
+function hasStaticConcatenationNearOpaqueMarker(text, startIndex, nextIndex) {
+  const windowStart = Math.max(startIndex, nextIndex - 512);
+  const windowEnd = Math.min(text.length, nextIndex + 512);
+  for (let index = windowStart; index < windowEnd; index += 1) {
+    if (text[index] === "+") return true;
+  }
+  return false;
+}
+
+function readStaticPublicConfigurationKeyAtMarker(text, startIndex) {
+  const windowEnd = Math.min(
+    text.length,
+    startIndex + OPAQUE_MARKER_CONTEXT_BEFORE_BYTES,
+  );
+  const tokens = tokenizeJavaScriptLike(text.slice(startIndex, windowEnd));
+  return readStaticStringExpression(tokens, 0)?.value ?? null;
+}
+
+function hasSensitivePublicConfigurationMarker(text, startIndex, match) {
+  if (match.prefix !== "NEXT_PUBLIC_") return true;
+
+  if (
+    (text[startIndex] === '"' ||
+      text[startIndex] === "'" ||
+      text[startIndex] === "`") &&
+    hasStaticConcatenationNearOpaqueMarker(
+      text,
+      startIndex,
+      match.nextIndex,
+    )
+  ) {
+    const staticKey = readStaticPublicConfigurationKeyAtMarker(
+      text,
+      startIndex,
+    );
+    return Boolean(
+      staticKey && isSensitivePublicConfigurationKeyToken(staticKey),
+    );
+  }
+
+  let value = "NEXT_PUBLIC_";
+  let cursor = match.nextIndex;
+  while (
+    cursor < text.length &&
+    value.length < MAX_OPAQUE_PUBLIC_KEY_CHARACTERS
+  ) {
+    while (
+      cursor < text.length &&
+      isOpaqueSeparatorCharacter(text[cursor])
+    ) {
+      cursor += 1;
+    }
+    if (cursor >= text.length) break;
+
+    const character = readOpaqueMarkerCharacter(text, cursor);
+    if (!isAsciiLetterDigitUnderscore(character.value)) break;
+    value += character.value;
+    cursor = character.nextIndex;
+  }
+  return isSensitivePublicConfigurationKeyToken(value);
+}
+
+function shouldVisitOpaqueMarker(text, index, match) {
+  return hasSensitivePublicConfigurationMarker(text, index, match);
+}
+
+function hasStaticBuiltinBeforeOpaqueMarker(text, startIndex) {
+  const lowerBound = Math.max(0, startIndex - 1_024);
+  for (let index = lowerBound; index < startIndex; index += 1) {
+    if (
+      text.startsWith("Object", index) ||
+      text.startsWith("Reflect", index)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasLikelyPublicAssignmentContext(text, startIndex, match) {
+  const windowEnd = Math.min(
+    text.length,
+    match.nextIndex + OPAQUE_MARKER_CONTEXT_BEFORE_BYTES,
+  );
+  let hasComma = false;
+  for (let index = match.nextIndex; index < windowEnd; index += 1) {
+    if (text[index] === "=" || text[index] === ":") return true;
+    if (text[index] === ",") hasComma = true;
+  }
+  return hasComma && hasStaticBuiltinBeforeOpaqueMarker(text, startIndex);
+}
+
+function shouldRejectOpaqueMarkerAfterBudget(text, index, match) {
+  return (
+    match.prefix !== "NEXT_PUBLIC_" ||
+    hasLikelyPublicAssignmentContext(text, index, match)
+  );
+}
+
+function matchesAsciiLiteralIgnoreCaseAt(text, startIndex, literal) {
+  if (startIndex + literal.length > text.length) return false;
+  for (let offset = 0; offset < literal.length; offset += 1) {
+    const valueCode = text.charCodeAt(startIndex + offset);
+    const expectedCode = literal.charCodeAt(offset);
+    const normalizedValueCode =
+      valueCode >= 0x61 && valueCode <= 0x7a
+        ? valueCode - 0x20
+        : valueCode;
+    if (normalizedValueCode !== expectedCode) return false;
+  }
+  return true;
+}
+
+function visitRawPublicConfigurationMarkerWindows(text, visitor) {
+  let matches = 0;
+  for (const startCharacter of ["N", "n"]) {
+    let searchStart = 0;
+    while (searchStart < text.length) {
+      const index = text.indexOf(startCharacter, searchStart);
+      if (index === -1) break;
+      searchStart = index + 1;
+      if (
+        !matchesAsciiLiteralIgnoreCaseAt(text, index, "NEXT_PUBLIC_")
+      ) {
+        continue;
+      }
+
+      const match = {
+        nextIndex: index + "NEXT_PUBLIC_".length,
+        prefix: "NEXT_PUBLIC_",
+      };
+      if (shouldVisitOpaqueMarker(text, index, match)) {
+        matches += 1;
+        if (
+          matches > MAX_OPAQUE_MARKER_WINDOWS &&
+          shouldRejectOpaqueMarkerAfterBudget(text, index, match)
+        ) {
+          return true;
+        }
+        if (matches <= MAX_OPAQUE_MARKER_WINDOWS) {
+          const windowStart = Math.max(
+            0,
+            index - OPAQUE_MARKER_CONTEXT_BEFORE_BYTES,
+          );
+          const windowEnd = Math.min(
+            text.length,
+            match.nextIndex + OPAQUE_MARKER_CONTEXT_AFTER_BYTES,
+          );
+          if (visitor(text.slice(windowStart, windowEnd))) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function containsComplexPublicMarkerSyntax(text) {
+  return /[\\\0-\x1f\x7f-\uffff+]/.test(text);
+}
+
+function visitPublicConfigurationMarkerWindows(text, visitor) {
+  if (!containsComplexPublicMarkerSyntax(text)) {
+    return visitRawPublicConfigurationMarkerWindows(text, visitor);
+  }
+  return visitOpaqueMarkerWindows(
+    text,
+    publicConfigurationMarkerPrefixes,
+    publicConfigurationMarkerStartCodes,
+    true,
+    visitor,
+    shouldVisitOpaqueMarker,
+    shouldRejectOpaqueMarkerAfterBudget,
+  );
+}
+
+function visitOpaqueMarkerWindows(
+  text,
+  prefixes,
+  startCodes,
+  supportsStaticStringConcatenation,
+  visitor,
+  shouldVisit = null,
+  shouldRejectAfterBudget = null,
+) {
+  let matches = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const match = findOpaqueMarkerAt(
+      text,
+      index,
+      prefixes,
+      startCodes,
+      supportsStaticStringConcatenation,
+    );
+    if (!match) continue;
+
+    if (shouldVisit && !shouldVisit(text, index, match)) {
+      index = Math.max(index, match.nextIndex - 1);
+      continue;
+    }
+
+    matches += 1;
+    if (
+      matches > MAX_OPAQUE_MARKER_WINDOWS &&
+      shouldRejectAfterBudget &&
+      shouldRejectAfterBudget(text, index, match)
+    ) {
+      return true;
+    }
+    if (matches > MAX_OPAQUE_MARKER_WINDOWS) {
+      index = Math.max(index, match.nextIndex - 1);
+      continue;
+    }
+
+    const windowStart = Math.max(0, index - OPAQUE_MARKER_CONTEXT_BEFORE_BYTES);
+    const windowEnd = Math.min(
+      text.length,
+      match.nextIndex + OPAQUE_MARKER_CONTEXT_AFTER_BYTES,
+    );
+    if (visitor(text.slice(windowStart, windowEnd))) return true;
+    index = Math.max(index, match.nextIndex - 1);
+  }
+  return false;
 }
 
 function isJavaScriptIdentifierCharacter(character) {
@@ -325,15 +823,26 @@ function tokenizeJavaScriptLike(text) {
 }
 
 function readStaticStringExpression(tokens, startIndex) {
-  if (tokens[startIndex]?.type !== "string") return null;
-  let value = tokens[startIndex].value;
-  let cursor = startIndex + 1;
+  let cursor = startIndex;
+  let parenthesisDepth = 0;
+  while (tokens[cursor]?.value === "(") {
+    parenthesisDepth += 1;
+    cursor += 1;
+  }
+  if (tokens[cursor]?.type !== "string") return null;
+  let value = tokens[cursor].value;
+  cursor += 1;
   while (
     tokens[cursor]?.value === "+" &&
     tokens[cursor + 1]?.type === "string"
   ) {
     value += tokens[cursor + 1].value;
     cursor += 2;
+  }
+  while (parenthesisDepth > 0) {
+    if (tokens[cursor]?.value !== ")") return null;
+    parenthesisDepth -= 1;
+    cursor += 1;
   }
   return { value, nextIndex: cursor };
 }
@@ -374,7 +883,49 @@ function hasSensitiveStaticSecondArgument(tokens, openIndex) {
   );
 }
 
-function containsSensitivePublicConfigurationAssignment(text) {
+function readStaticMemberName(tokens, startIndex) {
+  let cursor = startIndex;
+  if (tokens[cursor]?.value === "?") cursor += 1;
+
+  if (tokens[cursor]?.value === ".") {
+    cursor += 1;
+  }
+
+  if (tokens[cursor]?.value === "[") {
+    const member = readStaticStringExpression(tokens, cursor + 1);
+    if (!member || tokens[member.nextIndex]?.value !== "]") return null;
+    return { value: member.value, nextIndex: member.nextIndex + 1 };
+  }
+
+  const member = tokens[cursor];
+  if (member?.type === "identifier" || member?.type === "string") {
+    return { value: member.value, nextIndex: cursor + 1 };
+  }
+  return null;
+}
+
+function findStaticCallOpenIndex(tokens, startIndex) {
+  let cursor = startIndex;
+  if (tokens[cursor]?.value === "?") cursor += 1;
+  if (tokens[cursor]?.value === ".") cursor += 1;
+  if (tokens[cursor]?.value === "(") return cursor;
+
+  if (tokens[cursor]?.value !== ")") return -1;
+  cursor += 1;
+  if (tokens[cursor]?.value === "?") cursor += 1;
+  if (tokens[cursor]?.value === ".") cursor += 1;
+  return tokens[cursor]?.value === "(" ? cursor : -1;
+}
+
+function hasSensitiveStaticBuiltinCall(tokens, index, objectName, methodNames) {
+  if (tokens[index]?.value !== objectName) return false;
+  const member = readStaticMemberName(tokens, index + 1);
+  if (!member || !methodNames.includes(member.value)) return false;
+  const openIndex = findStaticCallOpenIndex(tokens, member.nextIndex);
+  return openIndex !== -1 && hasSensitiveStaticSecondArgument(tokens, openIndex);
+}
+
+function containsSensitivePublicConfigurationAssignmentInWindow(text) {
   const tokens = tokenizeJavaScriptLike(text);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -403,21 +954,18 @@ function containsSensitivePublicConfigurationAssignment(text) {
     }
 
     if (
-      token.value === "Object" &&
-      tokens[index + 1]?.value === "." &&
-      tokens[index + 2]?.value === "defineProperty" &&
-      tokens[index + 3]?.value === "(" &&
-      hasSensitiveStaticSecondArgument(tokens, index + 3)
-    ) {
-      return true;
-    }
-
-    if (
-      token.value === "Reflect" &&
-      tokens[index + 1]?.value === "." &&
-      tokens[index + 2]?.value === "set" &&
-      tokens[index + 3]?.value === "(" &&
-      hasSensitiveStaticSecondArgument(tokens, index + 3)
+      hasSensitiveStaticBuiltinCall(
+        tokens,
+        index,
+        "Object",
+        ["defineProperty"],
+      ) ||
+      hasSensitiveStaticBuiltinCall(
+        tokens,
+        index,
+        "Reflect",
+        ["set", "defineProperty"],
+      )
     ) {
       return true;
     }
@@ -425,29 +973,107 @@ function containsSensitivePublicConfigurationAssignment(text) {
   return false;
 }
 
+function containsSensitivePublicConfigurationAssignment(text) {
+  return visitPublicConfigurationMarkerWindows(
+    text,
+    containsSensitivePublicConfigurationAssignmentInWindow,
+  );
+}
+
+function containsSpecificStaticStringConcatenationInWindow(text) {
+  const tokens = tokenizeJavaScriptLike(text);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const value = readStaticStringExpression(tokens, index);
+    if (value && containsSpecificSecretText(value.value)) return true;
+  }
+  return false;
+}
+
+function containsSpecificStaticStringConcatenation(text) {
+  if (!text.includes("+")) return false;
+  return visitOpaqueMarkerWindows(
+    text,
+    opaqueTransformationMarkerPrefixes,
+    opaqueTransformationMarkerStartCodes,
+    true,
+    containsSpecificStaticStringConcatenationInWindow,
+    shouldVisitOpaqueMarker,
+    shouldRejectOpaqueMarkerAfterBudget,
+  );
+}
+
 function containsCanonicalOpaqueSecretText(text) {
   return (
     containsSpecificSecretText(text) ||
+    containsSpecificStaticStringConcatenation(text) ||
     containsSensitivePublicConfigurationAssignment(text) ||
     containsSensitiveConfigurationAssignment(text)
   );
 }
 
-function containsCanonicalOpaqueSecretTextWithEscapes(text) {
+function containsCanonicalOpaqueSecretTextInOpaqueWindow(text) {
   if (containsCanonicalOpaqueSecretText(text)) return true;
-  const decoded = decodeJavaScriptEscapes(text);
-  return decoded !== text && containsCanonicalOpaqueSecretText(decoded);
+
+  const hasEscapes = text.includes("\\");
+  const hasOpaqueCharacters = hasOpaqueTransformationCharacter(text);
+  let decoded = null;
+  if (hasEscapes) {
+    decoded = decodeJavaScriptEscapes(text);
+    if (decoded !== text && containsCanonicalOpaqueSecretText(decoded)) {
+      return true;
+    }
+  }
+
+  if (!hasOpaqueCharacters) return false;
+
+  const normalized = normalizeOpaqueConfigurationText(text);
+  if (
+    normalized !== text &&
+    containsCanonicalOpaqueSecretText(normalized)
+  ) {
+    return true;
+  }
+
+  const compact = compactOpaqueText(text);
+  if (compact !== text && containsCanonicalOpaqueSecretText(compact)) {
+    return true;
+  }
+
+  if (decoded !== null) {
+    const compactDecoded = compactOpaqueText(decoded);
+    if (
+      compactDecoded !== decoded &&
+      containsCanonicalOpaqueSecretText(compactDecoded)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function containsTransformedOpaqueSecretText(text) {
+  if (!hasOpaqueTransformationCharacter(text)) return false;
+  return visitOpaqueMarkerWindows(
+    text,
+    opaqueTransformationMarkerPrefixes,
+    opaqueTransformationMarkerStartCodes,
+    true,
+    containsCanonicalOpaqueSecretTextInOpaqueWindow,
+    shouldVisitOpaqueMarker,
+    shouldRejectOpaqueMarkerAfterBudget,
+  );
+}
+
+function containsCanonicalOpaqueSecretTextWithEscapes(text) {
+  return (
+    containsCanonicalOpaqueSecretText(text) ||
+    containsTransformedOpaqueSecretText(text)
+  );
 }
 
 export function containsSpecificSecretBytes(bytes) {
   const text = latin1Decoder.decode(bytes);
-  return (
-    containsCanonicalOpaqueSecretTextWithEscapes(text) ||
-    containsCanonicalOpaqueSecretTextWithEscapes(
-      normalizeOpaqueConfigurationText(text),
-    ) ||
-    containsCanonicalOpaqueSecretTextWithEscapes(compactOpaqueText(text))
-  );
+  return containsCanonicalOpaqueSecretTextWithEscapes(text);
 }
 
 export class AitArtifactVerificationError extends Error {
@@ -906,25 +1532,14 @@ function isSensitiveConfigurationKey(key) {
   ]).has(normalized);
 }
 
-function scrubPublicConfiguration(text) {
-  return text.replace(
-    nextPublicAssignmentPattern,
-    (assignment, prefix, key) =>
-      isSensitiveConfigurationKey(key)
-        ? assignment
-        : `${prefix}"<public-config>"`,
-  );
-}
-
 function containsLikelySecret(text) {
   return containsCanonicalOpaqueSecretTextWithEscapes(text);
 }
 
 function containsSensitiveConfigurationAssignment(text) {
-  const scrubbed = scrubPublicConfiguration(text);
-
+  if (!sensitiveConfigurationKeyHintPattern.test(text)) return false;
   genericSecretAssignmentPattern.lastIndex = 0;
-  for (const match of scrubbed.matchAll(genericSecretAssignmentPattern)) {
+  for (const match of text.matchAll(genericSecretAssignmentPattern)) {
     const key = match[1] ?? match[2] ?? "";
     const quotedOrTemplateValue = match[3] ?? match[4] ?? match[5];
     const value = quotedOrTemplateValue ?? match[6] ?? "";

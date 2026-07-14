@@ -9,6 +9,7 @@ import { AITBundle, AITReader, AITWriter } from "@apps-in-toss/ait-format";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  containsSpecificSecretBytes,
   MAX_AIT_UNCOMPRESSED_BYTES,
   verifyAitArtifact,
 } from "../../scripts/verify-ait-artifact.mjs";
@@ -971,6 +972,130 @@ describe("verifyAitArtifact", () => {
     for (const payload of payloads) {
       await expectOpaquePayloadToReject(encoder.encode(payload), secret);
     }
+  });
+
+  it("rejects bracket, escaped, optional, and parenthesized static public secret-key calls", async () => {
+    const secret = "z9";
+    const payloads = [
+      `\0Object["defineProperty"](globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Object["defineProperty"](globalThis, "N" + "EXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Object["define\\u0050roperty"](globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Reflect["set"](globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "${secret}");\0`,
+      `\0Reflect.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Object?.defineProperty(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Object?.["defineProperty"](globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Object?.["defineProperty"]?.(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Object.defineProperty?.(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0(Object.defineProperty)(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0Reflect?.set(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "${secret}");\0`,
+      `\0Reflect?.["set"](globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "${secret}");\0`,
+      `\0Reflect.set?.(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "${secret}");\0`,
+      `\0(Reflect.set)(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", "${secret}");\0`,
+      `\0Reflect.defineProperty?.(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0(Reflect.defineProperty)(globalThis, "NEXT_PUBLIC_EDGE_SECRET_KEY", { value: "${secret}" });\0`,
+      `\0c[("NEXT_PUBLIC_EDGE_" + "SECRET_KEY")] = "${secret}";\0`,
+      `\0Object.defineProperty(globalThis, ("NEXT_PUBLIC_EDGE_" + "SECRET_KEY"), { value: "${secret}" });\0`,
+      `\0Reflect.set(globalThis, ("NEXT_PUBLIC_EDGE_" + "SECRET_KEY"), "${secret}");\0`,
+    ];
+
+    for (const payload of payloads) {
+      await expectOpaquePayloadToReject(encoder.encode(payload), secret);
+    }
+  });
+
+  it("bounds punctuation-only opaque byte scans without tokenizing the whole payload", () => {
+    const payload = Buffer.alloc(5 * 1024 * 1024, ";");
+    const startedAt = Date.now();
+
+    expect(containsSpecificSecretBytes(payload)).toBe(false);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it("bounds malformed escape opaque byte scans without treating them as secrets", () => {
+    const payloads = [
+      Buffer.alloc(5 * 1024 * 1024, "\\"),
+      Buffer.alloc(5 * 1024 * 1024, "\\u"),
+      Buffer.alloc(5 * 1024 * 1024, "\\\\"),
+    ];
+
+    for (const payload of payloads) {
+      const startedAt = Date.now();
+
+      expect(containsSpecificSecretBytes(payload)).toBe(false);
+
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    }
+  });
+
+  it("does not flag repeated benign public configuration markers after the parser budget", () => {
+    const benignApiUrl =
+      'const config = { NEXT_PUBLIC_API_URL: "https://api.example.test" };\n';
+    const benignAnonKey =
+      'const config = { NEXT_PUBLIC_SUPABASE_ANON_KEY: "public-value" };\n';
+    const payloads = [
+      benignApiUrl.repeat(129),
+      benignAnonKey.repeat(129),
+    ];
+
+    for (const payload of payloads) {
+      const startedAt = Date.now();
+      expect(containsSpecificSecretBytes(Buffer.from(payload))).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    }
+
+    expect(
+      containsSpecificSecretBytes(
+        Buffer.from(
+          `${benignApiUrl.repeat(129)}c.NEXT_PUBLIC_EDGE_SECRET_KEY = "z9";`,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("bounds large repeated benign public configuration data and still finds a following secret", () => {
+    const benignApiUrl =
+      'const config = { NEXT_PUBLIC_API_URL: "https://api.example.test" };\n';
+    const payload = Buffer.from(
+      benignApiUrl.repeat(
+        Math.ceil((5 * 1024 * 1024) / benignApiUrl.length),
+      ),
+    );
+    const startedAt = Date.now();
+
+    expect(containsSpecificSecretBytes(payload)).toBe(false);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(
+      containsSpecificSecretBytes(
+        Buffer.concat([
+          payload,
+          Buffer.from('c.NEXT_PUBLIC_EDGE_SECRET_KEY = "z9";'),
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it("finds a sparse escaped public marker without decoding the opaque prefix", () => {
+    const prefix = Buffer.alloc(5 * 1024 * 1024, ";");
+    const suffix = Buffer.from(
+      'Object["define\\u0050roperty"](globalThis, "N\\u0045XT_PUBLIC_EDGE_SECRET_KEY", { value: "z9" });',
+      "latin1",
+    );
+    const payload = Buffer.concat([prefix, suffix]);
+    const startedAt = Date.now();
+
+    expect(containsSpecificSecretBytes(payload)).toBe(true);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it("rejects a static string-concatenated unkeyed Supabase service-role JWT", async () => {
+    const secret = createTestJwt({ role: "service_role" });
+    const midpoint = Math.floor(secret.length / 2);
+    const payload = `\0const serviceRole = "${secret.slice(0, midpoint)}" + "${secret.slice(midpoint)}";\0`;
+
+    await expectOpaquePayloadToReject(encoder.encode(payload), secret);
   });
 
   it("rejects escaped concrete secret values in opaque payloads", async () => {
