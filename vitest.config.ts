@@ -10,7 +10,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    exclude: [...configDefaults.exclude, "tests/integration/**"],
+    exclude: [...configDefaults.exclude, "tests/integration/**", ".worktrees/**"],
     setupFiles: ["./tests/setup.ts"],
     coverage: { reporter: ["text", "html"] },
   },

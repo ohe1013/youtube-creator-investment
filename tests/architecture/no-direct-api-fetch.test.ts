@@ -1,5 +1,14 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   analyzeClientBoundaries,
@@ -11,6 +20,7 @@ const EXCLUDED_DIRECTORIES = new Set([
   ".git",
   ".next",
   ".superpowers",
+  ".worktrees",
   "__tests__",
   "build",
   "coverage",
@@ -43,6 +53,32 @@ function projectPath(path: string): string {
 }
 
 describe("typed client architecture", () => {
+  it("ignores sibling linked worktree source files", () => {
+    const worktreesDirectory = join(ROOT, ".worktrees");
+    const createdWorktreesDirectory =
+      mkdirSync(worktreesDirectory, { recursive: true }) !== undefined;
+    const fixtureDirectory = mkdtempSync(
+      join(worktreesDirectory, "architecture-scan-fixture-"),
+    );
+    const fixtureFile = join(fixtureDirectory, "components", "Fixture.tsx");
+
+    try {
+      mkdirSync(dirname(fixtureFile), { recursive: true });
+      writeFileSync(fixtureFile, '"use client";\nexport const Fixture = () => null;\n');
+
+      expect(sourceFiles().map(projectPath)).not.toContain(projectPath(fixtureFile));
+    } finally {
+      rmSync(fixtureDirectory, { recursive: true, force: true });
+      if (createdWorktreesDirectory) {
+        try {
+          rmdirSync(worktreesDirectory);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
+        }
+      }
+    }
+  });
+
   it("keeps the complete client import graph behind typed boundaries", () => {
     const sources = Object.fromEntries(
       sourceFiles().map((path) => [projectPath(path), readFileSync(path, "utf8")]),
