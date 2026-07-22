@@ -50,8 +50,8 @@ export const ClientPayloadDetectionCode = Object.freeze({
   KNOWN_SECRET: "KNOWN_SECRET",
 });
 
-export function scanClientPayload(bytes, options = {}) {
-  for (const view of createBoundedTextViews(bytes, options)) {
+export function scanClientPayload(bytes) {
+  for (const view of createBoundedTextViews(bytes)) {
     const code = detectDirectNonJwtSecret(view);
     if (code) return { detected: true, code };
     const policyCode = detectJavaScriptPolicy(view);
@@ -70,7 +70,7 @@ export function containsSpecificSecretBytes(bytes) {
   return scanClientPayload(bytes).detected;
 }
 
-function* createBoundedTextViews(bytes, _options) {
+function* createBoundedTextViews(bytes) {
   const source = asUint8Array(bytes);
   let utf8 = null;
 
